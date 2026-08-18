@@ -1,0 +1,21 @@
+## The Python REPL
+
+Opens a Python prompt that runs *inside* the database:
+
+```
+>>> import gemstone
+>>> gemstone["answer"] = 42
+>>> gemstone.system.commit()
+>>> gemstone["answer"]
+42
+```
+
+Anything you commit is still there in the next session — that is the point of
+running Python in a database rather than beside one.
+
+Type `exit()` to leave.
+
+GemDB starts the database for you, so it's normally already running by the
+time you get here. If you stop it yourself, it stays stopped until you start it
+again or run some Python — GemDB won't quietly restart something you turned
+off.

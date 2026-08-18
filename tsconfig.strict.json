@@ -1,0 +1,18 @@
+{
+  // Extra checks the first-party code is held to.
+  //
+  // Unused-variable checking is deliberately NOT here. `exclude` only prunes
+  // the entry globs, not files reached through an import, so src/gci — vendored
+  // from Jasper byte-for-byte, and carrying one dead private field — is
+  // type-checked either way. ESLint can scope by path, so unused variables are
+  // its job (see eslint.config.mjs, which ignores src/gci); this file keeps the
+  // checks that the vendored code passes as-is.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": false
+  },
+  "include": ["src/**/*.ts"]
+}

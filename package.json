@@ -1,0 +1,304 @@
+{
+  "name": "gemdb",
+  "displayName": "GemDB",
+  "description": "Python with builtin transactional persistence (using true ACID semantics). When you have critical, complex data that must be consistent, use GemDB.",
+  "version": "1.0.0",
+  "publisher": "GemTalk",
+  "license": "MIT",
+  "icon": "resources/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GemTalk/GemDB"
+  },
+  "bugs": {
+    "url": "https://github.com/GemTalk/GemDB/issues"
+  },
+  "homepage": "https://github.com/GemTalk/GemDB#readme",
+  "engines": {
+    "vscode": "^1.101.0",
+    "node": ">=22.15.1"
+  },
+  "categories": [
+    "Programming Languages",
+    "Notebooks",
+    "Data Science"
+  ],
+  "keywords": [
+    "gemdb",
+    "gemstone",
+    "python",
+    "database"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "configuration": {
+      "title": "GemDB",
+      "properties": {
+        "gemdb.rootPath": {
+          "type": "string",
+          "default": "~/GemDB",
+          "markdownDescription": "Directory that holds the GemDB database engine and your database. Deliberately **not** under `~/Documents`, which is often synced to iCloud — syncing a live database extent will corrupt it."
+        },
+        "gemdb.engineVersion": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Advanced: override the pinned database engine version (e.g. `4.0.0`). Leave empty to use the version this release of GemDB was built and tested against. A version that is not published in the public catalog cannot be downloaded — it must already be present under the root path."
+        },
+        "gemdb.reinstallPythonOnUpdate": {
+          "type": "boolean",
+          "default": true,
+          "description": "When a GemDB update ships a newer Python execution engine, reinstall it into your database automatically the next time GemDB starts."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "gemdb",
+          "title": "GemDB",
+          "icon": "resources/gemdb-sidebar.svg"
+        }
+      ]
+    },
+    "views": {
+      "gemdb": [
+        {
+          "id": "gemdbStatus",
+          "name": "GemDB",
+          "type": "tree"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "gemdbStatus",
+        "contents": "GemDB isn't set up yet.\n\nSetup downloads the database engine and creates your database. It picks up where it left off, so a cancelled download costs you nothing.\n[Set Up GemDB](command:gemdb.install)\n\nAbout 210 MB to download, 820 MB on disk.",
+        "when": "gemdb.state == notInstalled"
+      },
+      {
+        "view": "gemdbStatus",
+        "contents": "GemDB is not supported on Windows yet.\n\nThe database engine needs a Unix environment. Windows support is planned.\n[Learn more](https://github.com/GemTalk/GemDB#platform-support)",
+        "when": "gemdb.state == unsupportedPlatform"
+      }
+    ],
+    "commands": [
+      {
+        "command": "gemdb.install",
+        "title": "Set Up GemDB",
+        "category": "GemDB",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "gemdb.start",
+        "title": "Start GemDB",
+        "category": "GemDB",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "gemdb.stop",
+        "title": "Stop GemDB",
+        "category": "GemDB",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "gemdb.refresh",
+        "title": "Refresh",
+        "category": "GemDB",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "gemdb.openRepl",
+        "title": "Open Python REPL",
+        "category": "GemDB",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "gemdb.runFile",
+        "title": "Run Python File in GemDB",
+        "category": "GemDB",
+        "icon": "$(play)"
+      },
+      {
+        "command": "gemdb.newNotebook",
+        "title": "New GemDB Notebook",
+        "category": "GemDB",
+        "icon": "$(notebook)"
+      },
+      {
+        "command": "gemdb.resetNotebook",
+        "title": "Clear Notebook Variables",
+        "category": "GemDB",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "gemdb.reinstallPython",
+        "title": "Reinstall the Python Execution Engine",
+        "category": "GemDB"
+      },
+      {
+        "command": "gemdb.showLog",
+        "title": "Show Log",
+        "category": "GemDB",
+        "icon": "$(output)"
+      },
+      {
+        "command": "gemdb.uninstall",
+        "title": "Uninstall GemDB",
+        "category": "GemDB"
+      },
+      {
+        "command": "gemdb.configureSharedMemory",
+        "title": "Configure Shared Memory",
+        "category": "GemDB"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "gemdb.start",
+          "when": "view == gemdbStatus && gemdb.state == stopped",
+          "group": "navigation@1"
+        },
+        {
+          "command": "gemdb.stop",
+          "when": "view == gemdbStatus && gemdb.state == running",
+          "group": "navigation@1"
+        },
+        {
+          "command": "gemdb.openRepl",
+          "when": "view == gemdbStatus && gemdb.installed",
+          "group": "navigation@2"
+        },
+        {
+          "command": "gemdb.newNotebook",
+          "when": "view == gemdbStatus && gemdb.installed",
+          "group": "navigation@3"
+        },
+        {
+          "command": "gemdb.refresh",
+          "when": "view == gemdbStatus",
+          "group": "navigation@4"
+        },
+        {
+          "command": "gemdb.showLog",
+          "when": "view == gemdbStatus",
+          "group": "1_gemdb@1"
+        },
+        {
+          "command": "gemdb.reinstallPython",
+          "when": "view == gemdbStatus && gemdb.installed",
+          "group": "1_gemdb@2"
+        },
+        {
+          "command": "gemdb.uninstall",
+          "when": "view == gemdbStatus && gemdb.installed",
+          "group": "9_danger@1"
+        }
+      ],
+      "editor/title/run": [
+        {
+          "command": "gemdb.runFile",
+          "when": "resourceLangId == python",
+          "group": "navigation@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "gemdb.runFile",
+          "when": "resourceLangId == python"
+        }
+      ]
+    },
+    "walkthroughs": [
+      {
+        "id": "gemdbGettingStarted",
+        "title": "Get Started with GemDB",
+        "description": "Install the database, start it, and run your first Python in it.",
+        "steps": [
+          {
+            "id": "install",
+            "title": "Setup happens on its own",
+            "description": "GemDB downloads the database engine, creates your database, and asks once for the one operating-system change it needs. If you cancelled that, pick it up here — it resumes rather than starting over.\n[Set Up GemDB](command:gemdb.install)",
+            "media": {
+              "markdown": "resources/walkthrough/install.md"
+            },
+            "completionEvents": [
+              "onContext:gemdb.installed"
+            ]
+          },
+          {
+            "id": "repl",
+            "title": "Run your first Python",
+            "description": "Open a Python prompt that runs inside the database. GemDB starts the database for you — there's nothing to press first.\n[Open Python REPL](command:gemdb.openRepl)",
+            "media": {
+              "markdown": "resources/walkthrough/repl.md"
+            },
+            "completionEvents": [
+              "onCommand:gemdb.openRepl"
+            ]
+          },
+          {
+            "id": "notebook",
+            "title": "Open a notebook",
+            "description": "Notebooks are the easiest way to explore data that lives in the database.\n[New GemDB Notebook](command:gemdb.newNotebook)",
+            "media": {
+              "markdown": "resources/walkthrough/notebook.md"
+            },
+            "completionEvents": [
+              "onCommand:gemdb.newNotebook"
+            ]
+          },
+          {
+            "id": "stopping",
+            "title": "Stopping the database",
+            "description": "The database keeps running after you close the editor, so your data stays available. The status bar shows when it's up; click it to stop.\n[Stop GemDB](command:gemdb.stop)",
+            "media": {
+              "markdown": "resources/walkthrough/stopping.md"
+            },
+            "completionEvents": [
+              "onCommand:gemdb.stop"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run bundle",
+    "compile": "tsc -p ./",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:strict": "tsc --noEmit -p tsconfig.strict.json",
+    "bundle": "node esbuild.mjs --production",
+    "watch": "node esbuild.mjs --watch",
+    "lint": "eslint src",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\"",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.mts",
+    "bundle:grail": "./scripts/bundle-grail.sh",
+    "bundle:extent": "./scripts/bundle-extent.sh",
+    "package": "vsce package",
+    "publish": "npm run publish:vsce && npm run publish:ovsx",
+    "publish:vsce": "vsce publish",
+    "publish:ovsx": "ovsx publish"
+  },
+  "dependencies": {
+    "koffi": "^2.15.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.19.0",
+    "@types/node": "^22.15",
+    "@types/vscode": "^1.101.0",
+    "@vscode/vsce": "^3.7.1",
+    "esbuild": "^0.28.1",
+    "eslint": "^10.0.0",
+    "ovsx": "^0.10.5",
+    "prettier": "^3.9.5",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.20.0",
+    "vitest": "^4.0.18"
+  }
+}

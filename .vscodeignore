@@ -1,0 +1,28 @@
+# Build inputs and tooling — the .vsix ships out/extension.js, not the sources.
+src/**
+scripts/**
+esbuild.mjs
+tsconfig*.json
+vitest*.mts
+.vscode/**
+.github/**
+.gitignore
+.prettierrc.json
+.prettierignore
+eslint.config.mjs
+CLAUDE.md
+# The full lockup is source art and a README banner, not something the running
+# extension ever loads — resources/icon.png is a crop of it. Shipping it would
+# put 25 KB of unreferenced image in every install.
+resources/GemDB.png
+**/*.map
+**/*.ts
+!out/**/*.js
+
+# The Grail payload ships as-is: scripts/bundle-grail.sh already assembles only
+# what the installer files into the database. These are belt-and-braces against
+# a stale grail/ left behind by an older bundle.
+grail/**/__pycache__/**
+grail/**/*.o
+grail/**/*.out
+grail/.git/**

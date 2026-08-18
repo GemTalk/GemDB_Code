@@ -1,0 +1,38 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "npm",
+      "script": "watch",
+      "isBackground": true,
+      "group": { "kind": "build", "isDefault": true },
+      // "silent" keeps the watch terminal out of the way but still surfaces it
+      // if the task writes an error — so a failure to start is visible rather
+      // than a launch that mysteriously does nothing.
+      "presentation": { "reveal": "silent", "panel": "dedicated" },
+      // Defined inline rather than referencing `$esbuild-watch`, which comes
+      // from a separate extension. A named matcher VS Code cannot resolve is
+      // silently treated as no matcher at all, and a background task with no
+      // matcher blocks the debug launch with "the task has not exited".
+      // esbuild.mjs prints the lines this matches.
+      "problemMatcher": {
+        "owner": "esbuild",
+        "source": "esbuild",
+        "fileLocation": ["relative", "${workspaceFolder}"],
+        "pattern": {
+          "regexp": "^(.+):(\\d+):(\\d+): (error|warning): (.+)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^\\[watch\\] build started",
+          "endsPattern": "^\\[watch\\] build finished"
+        }
+      }
+    }
+  ]
+}

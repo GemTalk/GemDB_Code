@@ -1,0 +1,13 @@
+node_modules/
+out/
+*.vsix
+*.tsbuildinfo
+.DS_Store
+
+# The bundled Grail payload is a build artifact of scripts/bundle-grail.sh, not
+# source. It carries a compiled native library, so it is rebuilt per release
+# rather than committed.
+grail/
+
+# The preloaded extent is a build artifact of scripts/bundle-extent.sh.
+extent/

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Activity-bar icon: the GemDB mark reduced to what survives at 24 px.
+
+  VS Code treats an activity-bar icon as a mask and recolours it to match the
+  theme, so this is deliberately a single flat shape with no colour of its own —
+  the isometric shell of the mark, with the gem at its centre.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <path fill="currentColor" fill-rule="evenodd"
+        d="M12 1 22 6.75 22 17.25 12 23 2 17.25 2 6.75 Z
+           M12 4.6 5.1 8.6 5.1 15.4 12 19.4 18.9 15.4 18.9 8.6 Z"/>
+  <path fill="currentColor"
+        d="M12 8.4 15.6 12 12 15.6 8.4 12 Z"/>
+</svg>

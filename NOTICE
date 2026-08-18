@@ -1,0 +1,30 @@
+GemDB (gemdb)
+Copyright (c) 2026 GemDB
+Licensed under the MIT License (see LICENSE).
+
+This extension includes and builds on third-party software:
+
+- Jasper (gemstone-ide), by GemTalk Systems. MIT License.
+  Copyright (c) 2026 GemTalk Systems.
+  Upstream: https://github.com/GemTalk/Jasper
+  GemDB reuses Jasper's GCI bindings essentially verbatim
+  (src/gci/gciLibrary.ts, src/gci/gciConstants.ts, src/gci/gciLibraryError.ts),
+  and its approach to installing the database engine, configuring shared
+  memory, and running Python through Grail informs src/engine.ts,
+  src/osConfig.ts, src/processes.ts, and src/pythonQueries.ts.
+
+- Grail, by GemTalk Systems. MIT License.
+  Copyright (c) 2026 GemTalk Systems.
+  Upstream: https://github.com/GemTalk/Grail
+  Grail is the Python implementation that runs inside the database. A build of
+  it is bundled under grail/ and installed into the user's database; see
+  grail/LICENSE and grail/GRAIL_VERSION for the exact build shipped.
+
+- koffi, by Niels Martignène. MIT License.
+  Upstream: https://github.com/Koromix/koffi
+  Used to call the database engine's C client library.
+
+The GemStone/S 64 Bit database engine is downloaded from GemTalk Systems at
+install time under its own license terms, which are presented by the engine's
+own installation and are not granted by this extension. GemDB installs the
+community starter key that ships with the engine.

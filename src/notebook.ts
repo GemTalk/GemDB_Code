@@ -1,0 +1,161 @@
+import * as vscode from 'vscode';
+import { ensureRunning } from './lifecycle';
+import { errorMessage, log } from './log';
+import { isErrorResult, resetScope, runPython } from './pythonQueries';
+import { interrupt } from './session';
+
+/**
+ * A Jupyter kernel whose Python runs inside the database.
+ *
+ * VS Code ships the `jupyter-notebook` notebook type and its `.ipynb`
+ * serializer as a built-in, so registering a controller against it is enough
+ * to make GemDB appear in the kernel picker of any notebook the user opens —
+ * no other extension required.
+ *
+ * Cells share globals the way a notebook user expects: `x = 1` in one cell is
+ * visible in the next. That state lives in the database session, keyed by the
+ * notebook's URI, so two open notebooks do not see each other's variables.
+ */
+export const NOTEBOOK_TYPE = 'jupyter-notebook';
+export const CONTROLLER_ID = 'gemdb-python';
+
+export class GemDbNotebookController {
+  private readonly controller: vscode.NotebookController;
+  private executionOrder = 0;
+
+  constructor(private readonly extensionPath: string) {
+    this.controller = vscode.notebooks.createNotebookController(
+      CONTROLLER_ID,
+      NOTEBOOK_TYPE,
+      'GemDB (Python in the database)',
+    );
+    this.controller.supportedLanguages = ['python'];
+    this.controller.supportsExecutionOrder = true;
+    this.controller.description = 'Runs Python inside your GemDB database';
+    this.controller.executeHandler = (cells) => this.executeCells(cells);
+    this.controller.interruptHandler = async () => interrupt();
+  }
+
+  dispose(): void {
+    this.controller.dispose();
+  }
+
+  /**
+   * Cells run one at a time. They share a single database session and the
+   * call into it is synchronous, so there is no concurrency to be had — and
+   * running them in order is what makes a notebook reproducible anyway.
+   */
+  private async executeCells(cells: vscode.NotebookCell[]): Promise<void> {
+    // Running a cell is a request to run Python, and Python only runs inside
+    // the database — so start it rather than asking. Done once for the whole
+    // batch, before any cell reports a spurious failure.
+    if (!(await ensureRunning(this.extensionPath))) {
+      for (const cell of cells)
+        this.failCell(cell, 'GemDB is not running, so the cell was not run.');
+      return;
+    }
+    for (const cell of cells) {
+      await this.executeCell(cell);
+    }
+  }
+
+  /** Mark a cell failed without having attempted it. */
+  private failCell(cell: vscode.NotebookCell, message: string): void {
+    const execution = this.controller.createNotebookCellExecution(cell);
+    execution.start(Date.now());
+    this.endWithError(execution, message);
+  }
+
+  private async executeCell(cell: vscode.NotebookCell): Promise<void> {
+    const execution = this.controller.createNotebookCellExecution(cell);
+    execution.executionOrder = ++this.executionOrder;
+    execution.start(Date.now());
+
+    const source = cell.document.getText();
+    if (!source.trim()) {
+      execution.replaceOutput([]);
+      execution.end(true, Date.now());
+      return;
+    }
+
+    let result: string;
+    try {
+      result = runPython(source, cell.notebook.uri.toString());
+    } catch (e) {
+      // Everything that is not the Python code's own fault arrives here: the
+      // database is stopped, the session dropped, Grail is missing. Those are
+      // about the environment, not the cell, so they are worth logging too.
+      const message = errorMessage(e);
+      log(`Notebook cell failed: ${message}`);
+      this.endWithError(execution, message);
+      return;
+    }
+
+    if (isErrorResult(result)) {
+      this.endWithError(execution, result);
+      return;
+    }
+
+    execution.replaceOutput([
+      new vscode.NotebookCellOutput([vscode.NotebookCellOutputItem.text(result, 'text/plain')]),
+    ]);
+    execution.end(true, Date.now());
+  }
+
+  private endWithError(execution: vscode.NotebookCellExecution, message: string): void {
+    const error = new Error(message);
+    error.name = 'GemDBError';
+    execution.replaceOutput([
+      new vscode.NotebookCellOutput([vscode.NotebookCellOutputItem.error(error)]),
+    ]);
+    execution.end(false, Date.now());
+  }
+}
+
+/** Forget the active notebook's globals — the "restart kernel" of this kernel. */
+export async function resetActiveNotebook(): Promise<void> {
+  const editor = vscode.window.activeNotebookEditor;
+  if (!editor) {
+    void vscode.window.showErrorMessage('Open a notebook to reset it.');
+    return;
+  }
+  try {
+    resetScope(editor.notebook.uri.toString());
+    void vscode.window.showInformationMessage('Notebook variables cleared.');
+  } catch (e) {
+    void vscode.window.showErrorMessage(`Could not clear the notebook: ${errorMessage(e)}`);
+  }
+}
+
+/**
+ * Open a new notebook with one Python cell, ready to run.
+ *
+ * The starter cell is not decoration: `import gemstone` is the one thing that
+ * makes this different from any other Python notebook, and showing it here is
+ * cheaper than explaining it.
+ */
+export async function newNotebook(): Promise<void> {
+  const starter = [
+    '# Python here runs inside your GemDB database.',
+    '# The gemstone module reaches the data stored in it.',
+    'import gemstone',
+    '',
+    'gemstone["greeting"] = "Hello from GemDB!"',
+    'gemstone.system.commit()',
+    'gemstone["greeting"]',
+  ].join('\n');
+
+  const cell = new vscode.NotebookCellData(vscode.NotebookCellKind.Code, starter, 'python');
+  const data = new vscode.NotebookData([cell]);
+  data.metadata = {
+    // Tells the .ipynb serializer this notebook is Python, so the cell
+    // language and syntax highlighting are right from the first open.
+    metadata: {
+      kernelspec: { display_name: 'GemDB', language: 'python', name: 'gemdb' },
+      language_info: { name: 'python' },
+    },
+  };
+
+  const document = await vscode.workspace.openNotebookDocument(NOTEBOOK_TYPE, data);
+  await vscode.window.showNotebookDocument(document);
+}

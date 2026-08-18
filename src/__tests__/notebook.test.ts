@@ -1,0 +1,145 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { FakeController, __controllers, __resetSettings } from '../__mocks__/vscode';
+
+// The database and the Python are both somebody else's tests: what the
+// controller decides is when to call them, with what, and what to do with the
+// answer. Grail's own behaviour is covered against a real database in
+// src/__integration__/grail.test.ts.
+const ensureRunning = vi.fn<(extensionPath: string) => Promise<boolean>>();
+const runPython = vi.fn<(source: string, scopeId: string) => string>();
+const isErrorResult = vi.fn<(result: string) => boolean>();
+
+vi.mock('../lifecycle', () => ({ ensureRunning: (p: string) => ensureRunning(p) }));
+vi.mock('../pythonQueries', () => ({
+  runPython: (source: string, scope: string) => runPython(source, scope),
+  isErrorResult: (result: string) => isErrorResult(result),
+  resetScope: () => {},
+}));
+
+const { GemDbNotebookController } = await import('../notebook');
+
+/** A notebook cell, reduced to the two things the controller reads. */
+function cell(source: string, notebook = 'file:///a.ipynb'): unknown {
+  return {
+    document: { getText: () => source },
+    notebook: { uri: { toString: () => notebook } },
+  };
+}
+
+function newController(): FakeController {
+  new GemDbNotebookController('/ext');
+  return __controllers[__controllers.length - 1];
+}
+
+/** Run cells the way VS Code does — through the handler the controller published. */
+async function run(controller: FakeController, cells: unknown[]): Promise<void> {
+  await controller.executeHandler?.(cells);
+}
+
+beforeEach(() => {
+  __resetSettings();
+  vi.clearAllMocks();
+  ensureRunning.mockResolvedValue(true);
+  isErrorResult.mockReturnValue(false);
+  runPython.mockReturnValue('ok');
+});
+
+describe('the notebook kernel', () => {
+  it('registers against the built-in notebook type, so no Jupyter extension is needed', () => {
+    const controller = newController();
+    expect(controller.notebookType).toBe('jupyter-notebook');
+    expect(controller.supportedLanguages).toEqual(['python']);
+  });
+
+  it('starts the database once for the batch, not once per cell', async () => {
+    const controller = newController();
+    await run(controller, [cell('1'), cell('2'), cell('3')]);
+
+    expect(ensureRunning).toHaveBeenCalledTimes(1);
+    expect(runPython).toHaveBeenCalledTimes(3);
+    expect(controller.executions.every((e) => e.success)).toBe(true);
+  });
+
+  it('numbers executions in order', async () => {
+    const controller = newController();
+    await run(controller, [cell('1'), cell('2')]);
+    expect(controller.executions.map((e) => e.executionOrder)).toEqual([1, 2]);
+  });
+
+  it('fails every cell without running any Python when the database will not start', async () => {
+    ensureRunning.mockResolvedValue(false);
+    const controller = newController();
+    await run(controller, [cell('1'), cell('2')]);
+
+    // The point of doing this before the loop: no cell reports a failure of its
+    // own for what is really one environment problem.
+    expect(runPython).not.toHaveBeenCalled();
+    expect(controller.executions).toHaveLength(2);
+    expect(controller.executions.every((e) => e.started && e.success === false)).toBe(true);
+  });
+
+  it('keys the scope on the notebook, so two notebooks keep their own globals', async () => {
+    const controller = newController();
+    await run(controller, [cell('x', 'file:///one.ipynb'), cell('x', 'file:///two.ipynb')]);
+
+    expect(runPython.mock.calls.map(([, scope]) => scope)).toEqual([
+      'file:///one.ipynb',
+      'file:///two.ipynb',
+    ]);
+  });
+
+  it('does not touch the database for an empty cell', async () => {
+    const controller = newController();
+    await run(controller, [cell('   \n  ')]);
+
+    expect(runPython).not.toHaveBeenCalled();
+    expect(controller.executions[0].success).toBe(true);
+    expect(controller.executions[0].output).toEqual([]);
+  });
+
+  it('renders a result as text output', async () => {
+    runPython.mockReturnValue('42');
+    const controller = newController();
+    await run(controller, [cell('6 * 7')]);
+
+    const [output] = controller.executions[0].output;
+    expect(output.items[0].mime).toBe('text/plain');
+    expect(output.items[0].data).toBe('42');
+    expect(controller.executions[0].success).toBe(true);
+  });
+
+  it('renders Python’s own error as a failed cell rather than a result', async () => {
+    runPython.mockReturnValue('ZeroDivisionError: division by zero');
+    isErrorResult.mockReturnValue(true);
+    const controller = newController();
+    await run(controller, [cell('1 / 0')]);
+
+    const [output] = controller.executions[0].output;
+    expect(output.items[0].mime).toBe('application/vnd.code.notebook.error');
+    expect(controller.executions[0].success).toBe(false);
+  });
+
+  it('reports a dropped session as a failed cell instead of throwing', async () => {
+    // A thrown error is the environment failing — the database stopped, the
+    // session died — not the cell's code. It still has to land in the cell,
+    // because that is where the user is looking.
+    runPython.mockImplementation(() => {
+      throw new Error('GemDB is not running');
+    });
+    const controller = newController();
+    await expect(run(controller, [cell('1')])).resolves.toBeUndefined();
+
+    const [output] = controller.executions[0].output;
+    expect(output.items[0].data).toContain('GemDB is not running');
+    expect(controller.executions[0].success).toBe(false);
+  });
+
+  it('keeps going after a failed cell', async () => {
+    isErrorResult.mockImplementation((result) => result === 'bad');
+    runPython.mockImplementationOnce(() => 'bad').mockImplementationOnce(() => 'good');
+    const controller = newController();
+    await run(controller, [cell('1'), cell('2')]);
+
+    expect(controller.executions.map((e) => e.success)).toEqual([false, true]);
+  });
+});

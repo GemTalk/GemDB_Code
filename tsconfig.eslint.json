@@ -1,0 +1,10 @@
+{
+  // The project ESLint type-checks against.
+  //
+  // tsconfig.json deliberately excludes src/__tests__ — vitest transpiles the
+  // tests itself and they are never bundled — but type-aware lint rules need
+  // every file they lint to belong to some project. This one covers the lot.
+  "extends": "./tsconfig.json",
+  "include": ["src/**/*.ts", "*.mjs"],
+  "exclude": ["node_modules", "out", "grail"]
+}

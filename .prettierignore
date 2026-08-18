@@ -1,0 +1,8 @@
+out
+grail
+*.vsix
+
+# Vendored from Jasper byte-for-byte so upstream fixes are a plain copy.
+# It happens to match our Prettier settings today; ignoring it means a future
+# settings change can't quietly rewrite it and break that guarantee.
+src/gci
