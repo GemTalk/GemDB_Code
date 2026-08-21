@@ -6,7 +6,10 @@ import { FakeController, __controllers, __resetSettings } from '../__mocks__/vsc
 // answer. Grail's own behaviour is covered against a real database in
 // src/__integration__/grail.test.ts.
 const ensureRunning = vi.fn<(extensionPath: string) => Promise<boolean>>();
-const runPython = vi.fn<(source: string, scopeId: string) => Promise<PyResult>>();
+const runPython =
+  vi.fn<
+    (source: string, scopeId: string, onOutput?: (text: string) => void) => Promise<PyResult>
+  >();
 const isErrorResult = vi.fn<(result: string) => boolean>();
 
 interface PyResult {
@@ -18,7 +21,8 @@ const py = (value: string, output = ''): PyResult => ({ output, value });
 
 vi.mock('../lifecycle', () => ({ ensureRunning: (p: string) => ensureRunning(p) }));
 vi.mock('../pythonQueries', () => ({
-  runPython: (source: string, scope: string) => runPython(source, scope),
+  runPython: (source: string, scope: string, onOutput?: (text: string) => void) =>
+    runPython(source, scope, onOutput),
   isErrorResult: (result: string) => isErrorResult(result),
   resetScope: () => {},
 }));
@@ -137,6 +141,25 @@ describe('the notebook kernel', () => {
     const [output] = controller.executions[0].output;
     expect(output.items[0].data).toContain('GemDB is not running');
     expect(controller.executions[0].success).toBe(false);
+  });
+
+  it('streams print() chunks into the cell while it runs, then appends the value', async () => {
+    // The kernel passes an output sink; each chunk repaints the cell's text
+    // output. A streamed result comes back with `output` empty — the chunks
+    // are everything — and must not be shown twice.
+    runPython.mockImplementation((_source, _scope, onOutput) => {
+      onOutput?.('tick 1\n');
+      onOutput?.('tick 2\n');
+      return Promise.resolve(py('42'));
+    });
+    const controller = newController();
+    await run(controller, [cell('loop()')]);
+
+    const outputs = controller.executions[0].output;
+    expect(outputs).toHaveLength(2);
+    expect(outputs[0].items[0].data).toBe('tick 1\ntick 2\n');
+    expect(outputs[1].items[0].data).toBe('42');
+    expect(controller.executions[0].success).toBe(true);
   });
 
   it('shows printed output before the result, as the code produced them', async () => {

@@ -282,7 +282,7 @@ export async function ensureRunning(extensionPath: string): Promise<boolean> {
   // that needs a database goes through.
   if (!fs.existsSync(cliPath())) {
     try {
-      writeCliScripts();
+      writeCliScripts(extensionPath);
     } catch (e) {
       log(`Could not write the gemdb command: ${errorMessage(e)}`);
     }

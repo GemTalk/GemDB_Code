@@ -1,4 +1,4 @@
-import { GciSession, execute, executeAsync } from './session';
+import { ExecutionInterrupted, GciSession, OutputSink, execute, executeAsync } from './session';
 
 /**
  * Running Python inside the database.
@@ -25,7 +25,11 @@ const GRAIL_MISSING =
 
 /** What one evaluation produced: what it printed, and what it evaluated to. */
 export interface PyResult {
-  /** Everything `print()` wrote, `\n`-terminated lines. Empty when it printed nothing. */
+  /**
+   * Everything `print()` wrote, `\n`-terminated lines. Empty when it printed
+   * nothing — and empty when the caller passed `onOutput`, because everything
+   * printed was already delivered through it, as it printed.
+   */
   output: string;
   /** The result's `__repr__`, empty for `None`, or an `Error: …` line. */
   value: string;
@@ -40,6 +44,23 @@ export interface PyResult {
  * it to the output side of the split; nothing worse.
  */
 const FRAME = '\u001f';
+
+/**
+ * The result of one framed evaluation, or — when `interrupt()` had to end it
+ * at a forwarder stop, where nothing gem-side gets to compose a message — the
+ * same `Error:` line Grail itself produces for a KeyboardInterrupt, so every
+ * display path treats the two identically.
+ */
+async function framed(evaluation: Promise<string>): Promise<PyResult> {
+  try {
+    return splitFramed(await evaluation);
+  } catch (e) {
+    if (e instanceof ExecutionInterrupted) {
+      return { output: '', value: 'Error: KeyboardInterrupt - ' };
+    }
+    throw e;
+  }
+}
 
 function splitFramed(raw: string): PyResult {
   const at = raw.indexOf(FRAME);
@@ -82,14 +103,20 @@ ${scopePreamble(scope)}
  * call would freeze the whole extension host for their duration — including
  * the interrupt button that is supposed to end them.
  */
-export async function runPython(source: string, scopeId: string): Promise<PyResult> {
-  return splitFramed(await executeAsync(buildQuery(evaluateInScope(scopeId), source)));
+export async function runPython(
+  source: string,
+  scopeId: string,
+  onOutput?: OutputSink,
+): Promise<PyResult> {
+  return framed(
+    executeAsync(buildQuery(evaluateInScope(scopeId), source, onOutput !== undefined), onOutput),
+  );
 }
 
 /** Run Python with no persistent globals — a one-shot evaluation. */
-export async function runPythonOnce(source: string): Promise<PyResult> {
-  return splitFramed(
-    await executeAsync(
+export async function runPythonOnce(source: string, onOutput?: OutputSink): Promise<PyResult> {
+  return framed(
+    executeAsync(
       buildQuery(
         `| r |
        r := dispatcher evaluateSource: src.
@@ -97,7 +124,9 @@ export async function runPythonOnce(source: string): Promise<PyResult> {
          ifTrue: ['']
          ifFalse: [r @env1:__repr__]`,
         source,
+        onOutput !== undefined,
       ),
+      onOutput,
     ),
   );
 }
@@ -114,8 +143,14 @@ export async function runPythonInSession(
   session: GciSession,
   source: string,
   scopeId: string,
+  onOutput?: OutputSink,
 ): Promise<PyResult> {
-  return splitFramed(await session.executeAsync(buildQuery(evaluateInScope(scopeId), source)));
+  return framed(
+    session.executeAsync(
+      buildQuery(evaluateInScope(scopeId), source, onOutput !== undefined),
+      onOutput,
+    ),
+  );
 }
 
 /**
@@ -157,11 +192,19 @@ export function isGrailInstalled(): boolean {
  *   `Transcript` (its own topaz REPL points that at stdout, which is why print
  *   works there). Over an RPC session the gem's stdout is a log file, so
  *   without this redirect every `print()` silently vanishes — measured, not
- *   supposed. Each evaluation points `Transcript` at a session-local stream
+ *   supposed. Each evaluation points `Transcript` at a session-local target
  *   and restores it in an `ensure:`, so output is captured per evaluation and
  *   attributed to the cell or prompt that caused it, and nothing is left
  *   behind for the next evaluation to trip over. Never committed, so the
  *   global in the repository is untouched.
+ *
+ *   The target has two shapes. Without `onOutput` it is a WriteStream, and
+ *   what it collected comes back with the result, after the frame separator.
+ *   With `onOutput` it is a ClientForwarder: every write suspends the gem and
+ *   surfaces client-side (session.ts services it), so print() streams while
+ *   the code runs. The streaming `ensure:` only restores the prior Transcript
+ *   — it must send *nothing* to the forwarder, because a send from an unwind
+ *   block would suspend the gem all over again on its way out of an error.
  *
  *   Two layers of exception handling. `AlmostOutOfStack` is signalled with
  *   only a little stack left, so its handler has to be cheap — it returns a
@@ -176,16 +219,25 @@ export function isGrailInstalled(): boolean {
  *   directly in a UTF-8 class fails on buffer growth; returning a Unicode16
  *   without transcoding hands back raw UTF-16 bytes.
  */
-function buildQuery(grailExpression: string, pythonSource: string): string {
+function buildQuery(grailExpression: string, pythonSource: string, streaming = false): string {
   const source = escapeString(pythonSource);
   // The temp is called `dispatcher`, not `grail`: Grail registers a global of
   // its own named `grail` (its Python-facing module), and shadowing it here
   // would be quietly confusing to anyone reading the generated source.
+  const redirect = streaming
+    ? 'Transcript := ClientForwarder new.'
+    : 'Transcript := WriteStream on: Unicode7 new.';
+  const restore = streaming
+    ? // Nothing may be sent to the forwarder here; only the assignment is safe.
+      'Transcript := priorTranscript'
+    : `captured := Transcript contents.
+    Transcript := priorTranscript`;
   return `| dispatcher src result priorTranscript captured out |
 dispatcher := System myUserProfile symbolList objectNamed: #'ModuleAst'.
 src := '${source}'.
+captured := ''.
 priorTranscript := Transcript.
-Transcript := WriteStream on: Unicode7 new.
+${redirect}
 [result := dispatcher isNil
   ifTrue: ['${escapeString(GRAIL_MISSING)}']
   ifFalse: [
@@ -200,8 +252,7 @@ Transcript := WriteStream on: Unicode7 new.
         ws nextPutAll: e messageText asString.
         ws contents]]]
   ensure: [
-    captured := Transcript contents.
-    Transcript := priorTranscript].
+    ${restore}].
 out := WriteStream on: Unicode7 new.
 out nextPutAll: captured.
 out nextPut: (Character codePoint: 31).

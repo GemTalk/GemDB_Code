@@ -78,9 +78,19 @@ export class GemDbNotebookController {
       return;
     }
 
+    // print() streams: each chunk repaints the cell's text output, so a
+    // long-running cell shows its progress while it runs instead of one block
+    // at the end. The final result (or error) is appended after it, below.
+    let printed = '';
+    const textOutput = (text: string): vscode.NotebookCellOutput =>
+      new vscode.NotebookCellOutput([vscode.NotebookCellOutputItem.text(text, 'text/plain')]);
+
     let result: PyResult;
     try {
-      result = await runPython(source, cell.notebook.uri.toString());
+      result = await runPython(source, cell.notebook.uri.toString(), (chunk) => {
+        printed += chunk;
+        execution.replaceOutput([textOutput(printed)]);
+      });
     } catch (e) {
       // Everything that is not the Python code's own fault arrives here: the
       // database is stopped, the session dropped, Grail is missing. Those are
@@ -93,14 +103,12 @@ export class GemDbNotebookController {
 
     // What the cell printed and what it evaluated to are different outputs,
     // shown in that order — print() first, the way the code produced them.
+    // `result.output` is the buffered spelling of the same text (a session
+    // that could not stream); with streaming it is empty and `printed` has
+    // already accumulated everything.
+    if (result.output) printed += result.output;
     const outputs: vscode.NotebookCellOutput[] = [];
-    if (result.output) {
-      outputs.push(
-        new vscode.NotebookCellOutput([
-          vscode.NotebookCellOutputItem.text(result.output, 'text/plain'),
-        ]),
-      );
-    }
+    if (printed) outputs.push(textOutput(printed));
 
     if (isErrorResult(result.value)) {
       execution.replaceOutput(outputs);
@@ -108,13 +116,7 @@ export class GemDbNotebookController {
       return;
     }
 
-    if (result.value) {
-      outputs.push(
-        new vscode.NotebookCellOutput([
-          vscode.NotebookCellOutputItem.text(result.value, 'text/plain'),
-        ]),
-      );
-    }
+    if (result.value) outputs.push(textOutput(result.value));
     execution.replaceOutput(outputs);
     execution.end(true, Date.now());
   }

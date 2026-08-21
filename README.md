@@ -68,23 +68,27 @@ export PATH="$HOME/GemDB/bin:$PATH"   # once, in your shell profile
 gemdb hello.py          # like python3 hello.py
 gemdb -m some.module    # like python3 -m
 gemdb -c 'print(1+1)'   # like python3 -c
-gemdb                   # an interactive prompt
+gemdb                   # the GemDB Shell
 ```
 
 It needs no environment set up — the wrapper carries its own — and if the
 database is not running it starts it, the same judgement the editor makes.
 Exit codes work the way scripts expect: 0 on success, 1 on an uncaught
-exception (with the error on stderr), 2 for a missing file.
+exception (with the error on stderr), 2 for a missing file, and `sys.exit(n)`
+exits with `n`, exactly as CPython would.
 
-Two gaps against CPython, both upstream and both known: `sys.exit(n)` exits 1
-rather than `n`, and `input()` is not yet supported.
+`input()` works everywhere — a script reads stdin, the GemDB Shell reads its
+own prompt line (Ctrl+C answers `KeyboardInterrupt`, Ctrl+D `EOFError`), and a
+notebook cell opens an input box. And `print()` streams: output reaches the
+terminal or the notebook cell while the code is still running, not in one
+block when it finishes.
 
-One more thing worth knowing: `gemdb` with no arguments is **not** the GemDB
-Shell. It hands off to the Python implementation's own topaz prompt, which
-answers Ctrl+C, Ctrl+D, and an uncaught Python error the same way — by printing
-a Smalltalk stack and leaving you at a `topaz 1>` prompt rather than back at
-`>>>`. It does have history and line editing. For an interactive prompt that
-behaves like Python's, use the **GemDB Shell** inside the editor.
+`gemdb` with no arguments opens the **GemDB Shell** — the very same prompt the
+editor's "Open GemDB Shell" opens, because that button simply runs this command
+in a terminal. History, line editing, a Ctrl+C that interrupts the running code
+(and reports it as `KeyboardInterrupt`), errors that return you to `>>>`, and
+`exit()` or Ctrl+D to leave: identical in both places, because it is one
+program.
 
 ## What GemDB is not
 

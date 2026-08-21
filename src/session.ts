@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { DB_PASSWORD, DB_USER, STONE_NAME, engineVersion } from './config';
-import { GciLibrary } from './gci/gciLibrary';
+import { OOP_ILLEGAL } from './gci/gciConstants';
+import { GciError, GciLibrary } from './gci/gciLibrary';
 import { log } from './log';
 import { enginePath } from './paths';
 import { sharedLibraryExtension } from './platform';
@@ -20,6 +21,94 @@ import { findNetldi, findStone } from './processes';
 
 /** Thrown for anything the user could plausibly act on. */
 export class SessionError extends Error {}
+
+/**
+ * The evaluation was ended by `interrupt()` while it sat suspended in a
+ * forwarder send. Distinct from `SessionError` so the query layer can report
+ * it as Python would — KeyboardInterrupt — rather than as a failure of the
+ * environment.
+ */
+export class ExecutionInterrupted extends SessionError {}
+
+// ---------------------------------------------------------------------------
+// input() and print(): the gem asks, the client answers.
+//
+// Grail's input() consults a per-session "stdin provider" — a ClientForwarder
+// this module installs at first use. Sending it `nextLinePrompt:` suspends the
+// gem and surfaces here as GCI error 2336 (RT_ERR_CLIENT_FWD_SEND), carrying
+// the selector and arguments; the client reads a line from wherever the user
+// actually is and resumes the gem with it via GciTsContinueWith. The host
+// decides what "reads a line" means: the CLI shell reads its tty through the
+// line editor, the editor shows an input box over the notebook.
+//
+// print() streams the same way, in the other direction. When a caller passes
+// `onOutput`, the query layer points `Transcript` at a ClientForwarder for
+// that one evaluation, so each print() surfaces here mid-execution as a
+// `nextPutAll:` send — one send per print(), because Grail builds the whole
+// line first — and the text reaches the user while the code is still running,
+// instead of buffering until the evaluation ends. The reply is the forwarder
+// itself (a stream returns self), so cascaded writes keep working.
+// ---------------------------------------------------------------------------
+
+/** GCI error signalled when Smalltalk sends a message to a ClientForwarder. */
+const CLIENT_FORWARDER_SEND = 2336;
+
+/** What one input() request produced, decided by wherever the user is. */
+export type InputAnswer = { line: string } | { eof: true } | { interrupt: true };
+
+/** One pending input() request, as the host's handler sees it. */
+export interface InputRequest {
+  /** The prompt input() was given; often empty. Display is the handler's job. */
+  prompt: string;
+  /** Runs if the evaluation is interrupted while the read is pending, so the
+   * handler can tear down whatever UI it put up (the read itself is already
+   * answered as an interrupt — do not resolve again). */
+  onCancel(callback: () => void): void;
+}
+
+export type InputHandler = (request: InputRequest) => Promise<InputAnswer>;
+
+/** Receives what the running Python printed, chunk by chunk, as it prints. */
+export type OutputSink = (text: string) => void;
+
+/**
+ * What a Transcript write-selector means as client-side text: the argument
+ * itself for the writes, a literal for the argumentless movements. Selectors
+ * outside this map (and outside the stdin protocol) are answered with nil.
+ */
+const OUTPUT_SELECTORS: Record<string, 'argument' | string> = {
+  'nextPutAll:': 'argument',
+  'show:': 'argument',
+  'nextPut:': 'argument',
+  cr: '\n',
+  lf: '\n',
+  crlf: '\n',
+  tab: '\t',
+  space: ' ',
+  flush: '',
+};
+
+let inputHandler: InputHandler | undefined;
+
+/**
+ * Install this process's answer to input(). One per process, deliberately:
+ * the CLI has one tty and the extension host has one user, so per-session
+ * handlers would only be extra wiring. Sessions with no handler installed
+ * never install a provider, and Grail then answers input() with EOFError.
+ */
+export function setInputHandler(handler: InputHandler): void {
+  inputHandler = handler;
+}
+
+/**
+ * Registers this session's ClientForwarder as Grail's stdin provider.
+ * Resolved by name so a database without Grail answers 'absent' instead of
+ * failing to parse; harmless then — input() does not exist there either.
+ */
+const INSTALL_STDIN_PROVIDER = `| b |
+b := System myUserProfile symbolList objectNamed: #'builtins'.
+b ifNotNil: [b stdinProvider: ClientForwarder new].
+(b isNil ifTrue: ['absent'] ifFalse: ['installed']) encodeAsUTF8`;
 
 let library: GciLibrary | undefined;
 
@@ -97,6 +186,16 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  */
 export class GciSession {
   private busy = false;
+  /** Whether this session's stdin provider has been offered to Grail. */
+  private stdinProviderInstalled = false;
+  /** Resolves the pending input() request as an interrupt, when one is pending. */
+  private pendingInputCancel: (() => void) | undefined;
+  /**
+   * An interrupt arrived while the evaluation might be idle inside a forwarder
+   * send, where a break is discarded on resume (measured). The flag makes the
+   * loop end the evaluation at its next forwarder stop with GciTsClearStack.
+   */
+  private breakPending = false;
 
   private constructor(
     private readonly gci: GciLibrary,
@@ -157,20 +256,22 @@ export class GciSession {
    * result. One call at a time per session — Python is single-threaded within
    * a session, and pretending otherwise here would only queue confusion.
    */
-  async executeAsync(code: string): Promise<string> {
+  async executeAsync(code: string, onOutput?: OutputSink): Promise<string> {
     const handle = this.requireHandle();
     if (this.busy) {
       throw new SessionError('This session is busy running something else.');
     }
     this.busy = true;
     try {
+      this.ensureStdinProvider(handle);
+
       const started = this.gci.GciTsNbExecute(
         handle,
         code,
         // The source is UTF-8; saying so is what keeps non-ASCII string
         // literals in user code intact. Same values the sync path passes.
         this.gci.utf8ClassOop(handle),
-        1n, // OOP_ILLEGAL — no context receiver
+        OOP_ILLEGAL, // no context receiver
         this.gci.nilOop(),
         0,
         0,
@@ -193,8 +294,37 @@ export class GciSession {
         wait = Math.min(wait * 2, POLL_CAP_MS);
       }
 
-      const { result: oop, err } = this.gci.GciTsNbResult(handle);
-      if (oop === 1n /* OOP_ILLEGAL */) {
+      // The execution may pause any number of times to ask the user for a
+      // line (Grail's input(), via the stdin provider — see the top of this
+      // file) or to hand over a chunk of output (print(), via the Transcript
+      // forwarder); each pause is answered and resumed until a real result
+      // (or a real error) comes back. GciTsContinueWith runs on a koffi
+      // worker thread, so the event loop — and with it GciTsBreak — stays
+      // available while the rest of the Python runs.
+      let { result: oop, err } = this.gci.GciTsNbResult(handle);
+      while (oop === OOP_ILLEGAL && err.number === CLIENT_FORWARDER_SEND) {
+        // An interrupt cannot reach a gem that is idle inside a forwarder
+        // send: a queued break is discarded on resume, and continuing the
+        // send with an error only re-signals the SAME send (both measured).
+        // A print loop is idle in a send most of the time, so this stop is
+        // where an interrupt is made to land: clear the suspended process's
+        // stack — which runs its unwind blocks, restoring Transcript — and
+        // the evaluation is over.
+        if (this.breakPending) {
+          this.breakPending = false;
+          this.gci.GciTsClearStack(handle, err.context);
+          throw new ExecutionInterrupted('The execution was interrupted.');
+        }
+        const reply = await this.answerForwarderSend(handle, err, onOutput);
+        ({ result: oop, err } = await this.gci.GciTsContinueWithAsync(
+          handle,
+          err.context,
+          reply,
+          null,
+          0,
+        ));
+      }
+      if (oop === OOP_ILLEGAL) {
         throw new SessionError(err.message || 'The execution failed.');
       }
       try {
@@ -208,12 +338,139 @@ export class GciSession {
       throw this.asSessionError(e);
     } finally {
       this.busy = false;
+      this.breakPending = false;
     }
+  }
+
+  /**
+   * Offer this session as Grail's stdin provider, once, and only when this
+   * process can actually answer (a handler is installed). A failure is logged
+   * rather than raised: an older Grail without the hook still runs Python,
+   * its input() just keeps failing the way it always did.
+   */
+  private ensureStdinProvider(handle: unknown): void {
+    if (this.stdinProviderInstalled || !inputHandler) return;
+    this.stdinProviderInstalled = true;
+    try {
+      const outcome = this.gci.executeAndFetchString(handle, INSTALL_STDIN_PROVIDER);
+      if (outcome === 'installed') log(`Answering input() for this session (${this.label})`);
+    } catch (e) {
+      log(`Could not install the stdin provider (${this.label}): ${String(e)}`);
+    }
+  }
+
+  /**
+   * Answer one suspended ClientForwarder send and return the OOP to resume
+   * with. Two protocols are known: `nextLinePrompt:` (the stdin provider —
+   * input()) and the Transcript write selectors (streamed print()). Anything
+   * else is answered with nil rather than left to hang the gem forever.
+   */
+  private async answerForwarderSend(
+    handle: unknown,
+    send: GciError,
+    onOutput?: OutputSink,
+  ): Promise<bigint> {
+    const selector = this.fetchSelector(handle, send.args[2]);
+
+    const meaning = OUTPUT_SELECTORS[selector];
+    if (meaning !== undefined && onOutput) {
+      const text =
+        meaning === 'argument' ? this.fetchStringArgument(handle, send.args[3]) : meaning;
+      // The gem writes line ends as it pleases (print() uses lf, `Transcript
+      // cr` is a carriage return); the terminal and the notebook both want \n.
+      if (text) onOutput(text.replace(/\r\n?/g, '\n'));
+      // A stream returns self, so cascaded writes keep working.
+      return send.args[0];
+    }
+
+    if (selector !== 'nextLinePrompt:' || !inputHandler) {
+      log(`Unanswerable forwarder send ${selector || '(unreadable)'} (${this.label})`);
+      return this.gci.nilOop();
+    }
+    const prompt = this.fetchStringArgument(handle, send.args[3]);
+    log(`input() asked (${this.label})`);
+    const answer = await this.awaitAnswer(inputHandler, prompt);
+    log(`input() answered: ${Object.keys(answer).join(',')} (${this.label})`);
+    if ('line' in answer) {
+      // convertToUnicode — a raw Utf8 is byte-immutable and breaks ordinary
+      // string operations in the resumed code (measured: shouldNotImplement
+      // on replaceFrom:to:with:startingAt:).
+      const reply = this.gci.GciTsNewUtf8String(handle, answer.line, true);
+      if (reply.result !== OOP_ILLEGAL) return reply.result;
+      log(`Could not build the input() reply (${this.label}): ${reply.err.message}`);
+      return this.gci.nilOop();
+    }
+    if ('interrupt' in answer) {
+      // The one non-line answer with semantics: Grail raises KeyboardInterrupt
+      // at the input() call, where the user's own try/except can see it.
+      const sym = this.gci.GciTsNewSymbol(handle, 'interrupt');
+      if (sym.result !== OOP_ILLEGAL) return sym.result;
+    }
+    return this.gci.nilOop(); // end of input -> EOFError
+  }
+
+  /**
+   * Run the handler with an interrupt path wired in: `interrupt()` during the
+   * wait resolves the request as an interrupt (the gem is idle inside the
+   * forwarder send, so a break would be discarded — measured) and tells the
+   * handler to take down whatever it was showing.
+   */
+  private awaitAnswer(handler: InputHandler, prompt: string): Promise<InputAnswer> {
+    return new Promise((resolve) => {
+      const cancels: Array<() => void> = [];
+      let settled = false;
+      const finish = (answer: InputAnswer): void => {
+        if (settled) return;
+        settled = true;
+        this.pendingInputCancel = undefined;
+        resolve(answer);
+      };
+      this.pendingInputCancel = () => {
+        finish({ interrupt: true });
+        for (const callback of cancels) callback();
+      };
+      handler({ prompt, onCancel: (callback) => cancels.push(callback) }).then(
+        (answer) => finish(answer),
+        // A handler that throws must not leave the gem suspended forever.
+        () => finish({ eof: true }),
+      );
+    });
+  }
+
+  /** The selector of a suspended forwarder send — Symbols are byte objects. */
+  private fetchSelector(handle: unknown, selectorOop: bigint): string {
+    const fetched = this.gci.GciTsFetchChars(handle, selectorOop, 1n, 256);
+    return fetched.bytesReturned >= 0n ? fetched.data : '';
+  }
+
+  /** The first element of the send's argument Array, as UTF-8 text. */
+  private fetchStringArgument(handle: unknown, argsOop: bigint): string {
+    const args = this.gci.GciTsFetchOops(handle, argsOop, 1n, 1);
+    if (args.result < 1) return '';
+    let fetched = this.gci.GciTsFetchUtf8(handle, args.oops[0], 8192);
+    if (fetched.bytesReturned < 0n && fetched.requiredSize > 8192n) {
+      fetched = this.gci.GciTsFetchUtf8(handle, args.oops[0], Number(fetched.requiredSize));
+    }
+    return fetched.bytesReturned >= 0n ? fetched.data : '';
   }
 
   /** Interrupt whatever the session is running. Safe when it is running nothing. */
   interrupt(): void {
     if (this.handle === undefined) return;
+    // While input() waits, a break cannot reach the gem — it is idle inside
+    // the forwarder send, and a queued break is discarded on resume
+    // (measured). Resolving the pending request as an interrupt does what the
+    // user meant: the provider answers #interrupt and the gem raises
+    // KeyboardInterrupt at the input() call.
+    if (this.pendingInputCancel) {
+      this.pendingInputCancel();
+      return;
+    }
+    // The break below lands only if the gem is executing. If it is instead
+    // idle in a Transcript forwarder send (streamed print()), it is discarded
+    // on resume — the flag has the loop end the evaluation at its next
+    // forwarder stop instead, with GciTsClearStack.
+    if (this.busy) this.breakPending = true;
     this.gci.GciTsBreak(this.handle, false);
   }
 
@@ -271,6 +528,7 @@ export class GciSession {
 
   /** A dropped connection must not leave a dead handle to fail the same way forever. */
   private asSessionError(e: unknown): SessionError {
+    if (e instanceof ExecutionInterrupted) return e; // deliberate, not a failure
     const message = e instanceof Error ? e.message : String(e);
     if (isDeadSession(message)) {
       this.handle = undefined;
@@ -299,8 +557,8 @@ export function execute(code: string): string {
 }
 
 /** Run Smalltalk in the shared session without blocking the extension host. */
-export function executeAsync(code: string): Promise<string> {
-  return resolveSession().executeAsync(code);
+export function executeAsync(code: string, onOutput?: OutputSink): Promise<string> {
+  return resolveSession().executeAsync(code, onOutput);
 }
 
 /** Commit the current transaction, so work survives the session. */

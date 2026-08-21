@@ -33,9 +33,9 @@ interface Ran {
 }
 
 /** Run the generated wrapper as a user would, never throwing on exit codes. */
-function gemdb(...args: string[]): Promise<Ran> {
+function run(args: string[], stdin?: string): Promise<Ran> {
   return new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       'bash',
       [cliPath(), ...args],
       { cwd: workDir, timeout: 120_000 },
@@ -49,7 +49,14 @@ function gemdb(...args: string[]): Promise<Ran> {
         resolve({ code, stdout, stderr });
       },
     );
+    // Closed either way: a linked gem's input() reads this pipe, and an open
+    // empty pipe would park the run forever rather than raising EOFError.
+    child.stdin?.end(stdin ?? '');
   });
+}
+
+function gemdb(...args: string[]): Promise<Ran> {
+  return run(args);
 }
 
 beforeAll(async () => {
@@ -91,11 +98,29 @@ describe.skipIf(!ready || !canMakeFixture())('the gemdb command', () => {
     expect(ran.code).toBe(1);
   });
 
-  it('exits nonzero on sys.exit', async () => {
-    // CPython would exit 3; Grail does not surface SystemExit's status yet,
-    // so this pins "nonzero", not the number. Tighten when upstream does.
+  it('carries sys.exit(n) out as the real exit code', async () => {
+    // The driver decodes Grail's SystemExit itself — the status survives only
+    // in the exception's Python args tuple. See the note in cli.ts.
     const ran = await gemdb('leaves.py');
-    expect(ran.code).not.toBe(0);
+    expect(ran.stderr.trim()).toBe(''); // CPython is silent about an int status
+    expect(ran.code).toBe(3);
+  });
+
+  it('treats sys.exit() and sys.exit(None) as success, silently', async () => {
+    const ran = await gemdb('-c', 'import sys\nsys.exit()');
+    expect(ran.stderr.trim()).toBe('');
+    expect(ran.code).toBe(0);
+  });
+
+  it('prints a non-integer sys.exit argument to stderr and exits 1', async () => {
+    const ran = await gemdb('-c', 'import sys\nsys.exit("boom")');
+    expect(ran.stderr).toContain('boom');
+    expect(ran.code).toBe(1);
+  });
+
+  it('truncates an out-of-range sys.exit status the way CPython does', async () => {
+    const ran = await gemdb('-c', 'import sys\nsys.exit(-1)');
+    expect(ran.code).toBe(255);
   });
 
   it('fails a missing file the way CPython words it', async () => {
@@ -109,6 +134,34 @@ describe.skipIf(!ready || !canMakeFixture())('the gemdb command', () => {
     expect(ran.stdout).toContain('45');
     expect(ran.code).toBe(0);
   });
+
+  it('feeds input() from stdin, like python3 does', async () => {
+    // The linked gem's GsFile stdin IS this pipe, so no forwarders are
+    // involved: the prompt goes where print() goes, the line comes straight
+    // from the pipe with its newline stripped.
+    const ran = await run(['-c', 'print("Hello, " + input("NAME? "))'], 'World\n');
+    expect(ran.stdout).toContain('NAME? ');
+    expect(ran.stdout).toContain('Hello, World');
+    expect(ran.code).toBe(0);
+  });
+
+  it('raises EOFError when stdin runs dry', async () => {
+    const ran = await run(['-c', 'input()'], '');
+    expect(ran.stderr).toContain('EOF');
+    expect(ran.code).toBe(1);
+  });
+
+  // The shell proper needs a tty, which execFile cannot grant — so what is
+  // pinned here is the seam: the wrapper finds its Node runtime, the staged
+  // bundle loads, and the refusal a pipe gets is the shell's own message.
+  it.skipIf(!fs.existsSync(path.join(ext, 'out', 'gemdb-shell.js')))(
+    'refuses the shell without a terminal, and says so',
+    async () => {
+      const ran = await gemdb();
+      expect(ran.stderr).toContain('needs a terminal');
+      expect(ran.code).toBe(1);
+    },
+  );
 
   it('answers --version without needing the database', async () => {
     const ran = await gemdb('--version');

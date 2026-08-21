@@ -1,6 +1,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { DB_PASSWORD, DB_USER, PINNED_ENGINE_VERSION, STONE_NAME, rootPath } from './config';
+import {
+  DB_PASSWORD,
+  DB_USER,
+  PINNED_ENGINE_VERSION,
+  STONE_NAME,
+  engineVersion,
+  rootPath,
+} from './config';
 import { log } from './log';
 import { enginePath, grailPath } from './paths';
 import { sharedLibraryExtension } from './platform';
@@ -11,19 +18,26 @@ import { sharedLibraryExtension } from './platform';
  *   gemdb hello.py        like python3 hello.py
  *   gemdb -m some.module  like python3 -m some.module
  *   gemdb -c 'print(1)'   like python3 -c
- *   gemdb                 a REPL (Grail's own topaz REPL)
+ *   gemdb                 the GemDB Shell — the same REPL the editor opens
  *
- * Three generated files under `<rootPath>/bin`, rewritten on every staging so
- * they always match the installed engine and the staged Grail:
+ * Generated files under `<rootPath>/bin`, rewritten on every staging so they
+ * always match the installed engine and the staged Grail:
  *
  *   `gemdb`            the wrapper. Sets the whole engine environment itself,
  *                      so it works from any shell with no setup beyond PATH.
  *   `gemdb-run.tpz`    the topaz driver for running a file or module.
- *   `gemdb-repl.tpz`   credentials + a handoff to Grail's interactive REPL.
+ *   `gemdb-shell.js`   the GemDB Shell, staged out of the extension's build
+ *                      together with `node_modules/koffi` beside it.
  *
- * It drives *linked* topaz — the right login for a CLI: its own process, one
- * session, crash isolation by construction, and real stdin/stdout. (The REPL
- * and notebooks inside the editor stay RPC for exactly the opposite reasons.)
+ * File mode drives *linked* topaz — the right login for a batch run: its own
+ * process, one session, crash isolation by construction, and real stdin/stdout
+ * so output streams as the program prints it. The shell is the extension's own
+ * REPL (`pyRepl.ts` hosted by `cliMain.ts`), logged in through the listener
+ * like the notebooks; it is staged here rather than run from the extension
+ * directory because that directory moves on every update — the same reason
+ * Grail is staged. It runs under the editor's own Node runtime, recorded at
+ * generation time and started with ELECTRON_RUN_AS_NODE, falling back to a
+ * `node` on PATH when the editor has moved since this file was written.
  *
  * Exit codes are the part that took working out, so it is recorded here:
  * topaz does not translate a gem-side `ExitClientError status:` into a process
@@ -34,10 +48,11 @@ import { sharedLibraryExtension } from './platform';
  * passed by environment variable, not argument, so the user's argv reaches
  * their program untouched.
  *
- * Known gaps against CPython, all measured: an uncaught `sys.exit(n)` exits 1
- * rather than n (Grail surfaces SystemExit without the status), and `input()`
- * fails in the current Grail build (`System stdin` is not understood). Both
- * are upstream; the wrapper is where they will start working when fixed.
+ * `sys.exit(n)` carries its real status: the driver decodes Grail's
+ * SystemExit itself (see the note above the driver below). `input()` works in
+ * both modes since Grail's stdin hook: a linked run reads the process's real
+ * stdin (GsFile stdin IS the pipe or terminal), and the shell answers through
+ * its session's stdin provider — see session.ts.
  */
 
 export function cliDirPath(): string {
@@ -50,7 +65,45 @@ export function cliPath(): string {
 
 const TOPAZ_TUNING = `-T 400000 -C 'GEM_TEMPOBJ_CODE_SIZE=300000;'`;
 
-export function writeCliScripts(): void {
+/**
+ * Copy the shell bundle and its one native dependency beside the wrapper.
+ *
+ * koffi is copied whole except its per-platform binaries, of which only this
+ * machine's is kept — the same pruning .vscodeignore applies to the copy the
+ * extension itself ships. A build without the bundle (a fresh checkout that
+ * has not run `npm run bundle`) stages nothing and says so; the wrapper then
+ * reports the missing shell at run time rather than failing here, because the
+ * file and module modes still work without it.
+ */
+function stageShell(extensionPath: string): void {
+  const bundle = path.join(extensionPath, 'out', 'gemdb-shell.js');
+  if (!fs.existsSync(bundle)) {
+    log(
+      'This build has no shell bundle (out/gemdb-shell.js); `gemdb` without arguments will report it.',
+    );
+    return;
+  }
+  fs.copyFileSync(bundle, path.join(cliDirPath(), 'gemdb-shell.js'));
+
+  const koffiSource = path.join(extensionPath, 'node_modules', 'koffi');
+  const koffiDest = path.join(cliDirPath(), 'node_modules', 'koffi');
+  const machine = `${process.platform}_${process.arch}`;
+  fs.rmSync(koffiDest, { recursive: true, force: true });
+  fs.cpSync(koffiSource, koffiDest, {
+    recursive: true,
+    dereference: true,
+    filter: (source) => {
+      const parts = path.relative(koffiSource, source).split(path.sep);
+      if (parts[0] === 'doc') return false;
+      if (parts[0] === 'build' && parts[1] === 'koffi' && parts.length >= 3) {
+        return parts[2] === machine;
+      }
+      return true;
+    },
+  });
+}
+
+export function writeCliScripts(extensionPath: string): void {
   const engine = enginePath();
   if (!engine) throw new Error('The database engine is not installed.');
   const root = rootPath();
@@ -63,6 +116,15 @@ export function writeCliScripts(): void {
   // hijack the login. Errors are caught as AbstractException, not Error —
   // Grail's Python exceptions live outside the Error branch, which is why
   // grail.tpz's own file mode exits 0 on a Python error.
+  //
+  // sys.exit(n) is decoded here, not upstream: Grail raises its own SystemExit
+  // (never ExitClientError — input()'s except SystemExit and finally blocks
+  // must keep working), and the exit argument survives only in the exception's
+  // Python `args` tuple (the CPython `code` attribute is absent, and the
+  // `code` instVar is never assigned — measured on 4.0). The branch below is
+  // CPython's contract, each case measured: None or no argument exits 0
+  // silently, an int exits `n % 256` silently (-1 → 255, 256 → 0), and
+  // anything else prints str(code) to stderr and exits 1.
   fs.writeFileSync(
     path.join(cliDirPath(), 'gemdb-run.tpz'),
     `! Generated by GemDB. Regenerated on every update — do not edit.
@@ -84,14 +146,33 @@ prior := Transcript.
             ifTrue: [importlib runModule: (args at: ofs + 2)]
             ifFalse: [importlib runPath: target].
     ] on: AbstractException do: [:ex |
+        | sysExit |
+        sysExit := System myUserProfile symbolList objectNamed: #'SystemExit'.
         (ex isKindOf: ExitClientError)
             ifTrue: [status := ex status ifNil: [1]]
-            ifFalse: [
-                | msg |
-                msg := ex messageText ifNil: [ex description].
-                GsFile stdout flush.
-                GsFile stderr nextPutAll: msg; lf; flush.
-                status := 1].
+            ifFalse: [(sysExit notNil and: [ex isKindOf: sysExit])
+                ifTrue: [
+                    | code noneObj |
+                    noneObj := System myUserProfile symbolList objectNamed: #'None'.
+                    code := [(ex @env1:___pyAttrLoad___: #'args') @env0:at: 1]
+                        on: AbstractException do: [:x | x return: noneObj].
+                    (code == noneObj or: [code == nil])
+                        ifTrue: [status := 0]
+                        ifFalse: [(code isKindOf: Integer)
+                            ifTrue: [status := code \\\\ 256]
+                            ifFalse: [
+                                | msg |
+                                msg := [code @env1:__str__ @env0:asString]
+                                    on: AbstractException do: [:x | x return: code printString].
+                                GsFile stdout flush.
+                                GsFile stderr nextPutAll: msg; lf; flush.
+                                status := 1]]]
+                ifFalse: [
+                    | msg |
+                    msg := ex messageText ifNil: [ex description].
+                    GsFile stdout flush.
+                    GsFile stderr nextPutAll: msg; lf; flush.
+                    status := 1]].
     ].
 ] ensure: [
     Transcript := prior.
@@ -105,22 +186,18 @@ exit 0
 `,
   );
 
-  // Interactive mode: credentials, then Grail's own REPL, verbatim.
-  fs.writeFileSync(
-    path.join(cliDirPath(), 'gemdb-repl.tpz'),
-    `! Generated by GemDB. Regenerated on every update — do not edit.
-set user ${DB_USER} pass ${DB_PASSWORD}
-set gemstone ${STONE_NAME}
-input ${path.join(grail, 'scripts', 'grail.tpz')}
-`,
-  );
+  // An earlier release handed the no-argument mode to Grail's topaz REPL
+  // through this file; the shell replaced it, so a stale copy is only a trap.
+  fs.rmSync(path.join(cliDirPath(), 'gemdb-repl.tpz'), { force: true });
+
+  stageShell(extensionPath);
 
   const script = `#!/bin/bash
 # gemdb — run Python inside the GemDB database, from any shell.
 # Generated by the GemDB extension; regenerated on every update. Do not edit.
 #
 #   gemdb file.py [args]     run a file            gemdb -m pkg.mod   run a module
-#   gemdb -c 'code'          run a string          gemdb              open a REPL
+#   gemdb -c 'code'          run a string          gemdb              the GemDB Shell
 #
 # Put this on your PATH:   export PATH="\${HOME}/GemDB/bin:$PATH"
 
@@ -151,6 +228,28 @@ case "\${1:-}" in
     exit 0 ;;
 esac
 
+# No arguments: the GemDB Shell — the same Python prompt the editor opens,
+# on this terminal. It brings the database up itself (a shell session needs
+# the listener too), so it runs before the stone check below. The editor's
+# own Node runtime is recorded here; PATH is the fallback for when the editor
+# has moved since this file was written.
+if [ "$#" -eq 0 ]; then
+  SHELL_JS="$ROOT/bin/gemdb-shell.js"
+  if [ ! -f "$SHELL_JS" ]; then
+    echo "gemdb: this installation has no shell program. Open VS Code so GemDB can finish setting up, then retry." >&2
+    exit 1
+  fi
+  NODE="${process.execPath}"
+  if [ ! -x "$NODE" ]; then NODE="$(command -v node || true)"; fi
+  if [ -z "$NODE" ]; then
+    echo "gemdb: no Node runtime found to run the shell. Open VS Code so GemDB can regenerate this command, or install node." >&2
+    exit 1
+  fi
+  export GEMDB_ENGINE_VERSION="${engineVersion()}"
+  export ELECTRON_RUN_AS_NODE=1
+  exec "$NODE" "$SHELL_JS"
+fi
+
 # The database must be up — a linked gem still needs the stone. Starting it
 # here is the same judgement the editor makes: running Python is the request.
 if ! "$GEMSTONE/bin/gslist" 2>/dev/null | awk -v s="$STONE" '$(NF-1) == "Stone" && $NF == s { found = 1 } END { exit !found }'; then
@@ -159,11 +258,6 @@ if ! "$GEMSTONE/bin/gslist" 2>/dev/null | awk -v s="$STONE" '$(NF-1) == "Stone" 
     echo "gemdb: the database at $ROOT could not be started. See $ROOT/db/log/$STONE.log" >&2
     exit 1
   fi
-fi
-
-# No arguments: the interactive REPL, on the user's own terminal.
-if [ "$#" -eq 0 ]; then
-  exec topaz -L -q -S "$ROOT/bin/gemdb-repl.tpz" ${TOPAZ_TUNING} --
 fi
 
 # -c 'code': materialise the code as a file, like CPython's -c but visibly so.

@@ -102,7 +102,7 @@ export function stageGrail(extensionPath: string): void {
 
   // The shell command is regenerated with every staging, so its baked-in
   // paths always match the engine and Grail that are actually on disk.
-  writeCliScripts();
+  writeCliScripts(extensionPath);
 
   // Deliberately NOT stamped here. The stamp means "this Grail is installed in
   // the database", and copying files is only half of that — see recordGrailInstalled.
