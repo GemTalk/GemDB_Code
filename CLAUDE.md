@@ -19,6 +19,8 @@ npm run bundle             # esbuild -> out/extension.js
 npm run bundle:grail       # assemble the Grail payload (needs a C toolchain)
 npm run bundle:extent      # build the preloaded extent (needs an engine + shared memory)
 npm run package            # .vsix
+scripts/install-engine.sh  # download + extract the pinned engine, no editor involved
+scripts/check-vsix.sh      # assert a packaged .vsix carries what an install needs
 ```
 
 Before calling something done: `npm run lint && npm run format:check && npm run typecheck && npm run typecheck:strict`.
@@ -87,6 +89,40 @@ lock files, the test stone and a real one can both be called `gemdb` and stay
 invisible to each other. It skips itself when no engine is installed.
 
 Download and extraction stay out of both: 210 MB to test an HTTP range request.
+
+## CI
+
+`.github/workflows/ci.yml`, two jobs split on what they need. `checks` runs
+lint, both typechecks, the unit suite and the packaging path on Linux in a
+couple of minutes — the unit suite is host-free by design, and running it
+somewhere that cannot possibly host a database is what keeps it that way.
+`integration` is a darwin-arm64 runner doing the whole thing for real:
+`install-engine.sh`, `setSharedMemoryDarwin.sh` under `sudo` (a throwaway
+machine is the one place raising shared memory unattended is uncontroversial),
+`bundle:grail`, `bundle:extent`, `test:integration`, then `package` and
+`check-vsix.sh`. Require `ci-complete` in branch protection, not the job names.
+
+Two things about it are load-bearing:
+
+**A green integration run has to mean the suite ran.** Every integration file
+skips itself when the engine, the payload or the extent is missing — right
+locally, where a fresh checkout should still have a green suite, and dangerous
+in CI, where an artifact that failed to build would report success for a suite
+that executed nothing. The `Confirm the suite has something to run against`
+step asserts those paths instead of trusting the exit code — the engine, the
+payload, the shim, the extent, and `out/gemdb-shell.js`, which `repl.test.ts`
+needs because it drives the shell as a real process. Anything new that skips on
+a missing artifact belongs in that list.
+
+**`bundle:grail` clones Grail's default branch**, so the integration job is
+also the early warning that a Grail change broke GemDB's installer — and it
+means a GemDB branch that depends on unmerged Grail work is red until that
+Grail PR lands. Prove it in the meantime with `workflow_dispatch` and its
+`grail-ref` input, which becomes `GRAIL_REF` for `bundle-grail.sh`.
+
+Releases are deliberately not automated: publishing stays a developer's act
+from a Mac, per CONTRIBUTING.md. CI packages a `.vsix` and inspects it, but
+never publishes one.
 
 ## The things that are easy to get wrong
 

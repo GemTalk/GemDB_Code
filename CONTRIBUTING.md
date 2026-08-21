@@ -3,9 +3,26 @@
 ## First-time setup
 
 ```sh
-nvm use          # Node 22.15+ (see engines in package.json)
+nvm use          # the version in .nvmrc, which is what CI uses
 npm install
 ```
+
+`.nvmrc` pins the Node that CI and this repo develop on; `engines.node` in
+`package.json` is the older floor the extension still supports, because the
+Node that actually runs the extension is the editor's, not this one.
+
+That is everything the unit suite and the typechecks need. The rest — the
+integration suite and the two build artifacts — needs a database engine on the
+machine, which you get either by running the extension once (it downloads one)
+or, with no editor in the loop, by:
+
+```sh
+scripts/install-engine.sh   # -> ~/GemDB/GemStone64Bit<pinned>-<platform>
+```
+
+It installs to the one path `bundle:grail`, `bundle:extent` and the integration
+fixture all look for, reuses an archive it has already downloaded, and leaves an
+engine that is already there alone.
 
 ## Build and test
 
@@ -28,6 +45,29 @@ npm run lint && npm run format:check && npm run typecheck && npm run typecheck:s
 `npm test` is mocked and fast and covers decisions; `npm run test:integration`
 starts a real database, so it is a separate command. It skips itself when no
 engine is installed. See [CLAUDE.md](CLAUDE.md) for what belongs in which.
+
+## Continuous integration
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every pull
+request, on pushes to `main`, and on demand. Two jobs:
+
+| Job | Where | What it covers |
+| --- | --- | --- |
+| `checks` | Linux, ~2 min | lint, format, both typechecks, the unit suite, and that `vsce` can still package |
+| `integration` | macOS on Apple Silicon, ~15 min | installs the pinned engine, raises shared memory, builds the Grail payload and the shipped extent, runs the integration suite, then packages a `.vsix` and checks what is inside it |
+
+Require the `ci-complete` check in branch protection rather than the two job
+names — it exists so the names above can change without reconfiguring the
+branch.
+
+The integration job builds the Grail payload from **Grail's default branch**, so
+a change here that depends on unmerged Grail work will be red until that Grail
+pull request lands. To prove it before then, run the workflow manually
+(Actions → CI → Run workflow) and give the `grail-ref` input the Grail branch;
+it becomes `GRAIL_REF` for `bundle-grail.sh`.
+
+Neither job publishes anything. Releases stay a deliberate act from a
+developer's Mac, for the reason in the release steps below.
 
 ## The two build artifacts
 
@@ -97,15 +137,21 @@ under the same `gemtalksystems` publisher as Jasper.
    root (the target is in the filename because it is a platform-specific
    build). Delete the previous version's `.vsix`; they are gitignored but stay
    on disk.
-7. **Install that `.vsix` and run it once** before publishing. The artifacts
-   above mean a broken release is a broken database, not a broken button, and
-   nothing in CI catches a missing `prebuilt/` directory.
-8. `npm run publish` — runs `vsce publish` then `ovsx publish`. If `vsce publish`
+7. `scripts/check-vsix.sh` — asserts the packaged `.vsix` actually carries the
+   payload table below: both bundles, the extent, the shim for this platform,
+   koffi's binary and only this platform's, and the installer scripts. CI runs
+   the same check on every pull request, so a missing `prebuilt/` directory or
+   a stale artifact is caught before it reaches here.
+8. **Install that `.vsix` and run it once** before publishing. The check above
+   proves the payload is present, not that it works: the artifacts mean a
+   broken release is a broken database rather than a broken button, and only
+   running it exercises the shim against the engine.
+9. `npm run publish` — runs `vsce publish` then `ovsx publish`. If `vsce publish`
    times out on the Azure DevOps Gallery API (it happens), re-run
    `npx @vscode/vsce publish` directly — don't re-run `npm run publish`, since
    the `ovsx` step will then double-publish and fail with "already exists."
-9. `git push origin main && git push origin vX.Y.Z` — the tag does not
-   piggyback on the branch push.
+10. `git push origin main && git push origin vX.Y.Z` — the tag does not
+    piggyback on the branch push.
 
 ### Credentials
 
@@ -122,12 +168,14 @@ issued from the organization that owns the publisher.
 
 ### What ships in the `.vsix`
 
-`.vscodeignore` decides. Check with `npx vsce ls` before publishing. The
-payload is dominated by three things that **must** be there:
+`.vscodeignore` decides. `scripts/check-vsix.sh` asserts the table below against
+a packaged `.vsix`, and `npx vsce ls` shows the full list. The payload is
+dominated by a few things that **must** be there:
 
 | Path | Why |
 | --- | --- |
-| `out/extension.js` | the bundle |
+| `out/extension.js` | the extension bundle |
+| `out/gemdb-shell.js` | the GemDB Shell, staged to `<rootPath>/bin` at run time |
 | `grail/` | the Python runtime and per-platform compiled shim |
 | `extent/gemdb.dbf` | the preloaded database |
 | `node_modules/koffi/` | the native FFI addon; it is a runtime `dependency`, not bundled, because it loads its own platform binary at run time |
