@@ -3,7 +3,7 @@
   "displayName": "GemDB Code",
   "description": "Python with builtin transactional persistence (using true ACID semantics). When you have critical, complex data that must be consistent, use GemDB.",
   "version": "1.0.0",
-  "publisher": "GemTalk",
+  "publisher": "gemtalksystems",
   "license": "MIT",
   "icon": "resources/icon.png",
   "repository": {
@@ -14,6 +14,11 @@
     "url": "https://github.com/GemTalk/GemDB_Code/issues"
   },
   "homepage": "https://github.com/GemTalk/GemDB_Code#readme",
+  "qna": "https://github.com/GemTalk/GemDB_Code/issues",
+  "galleryBanner": {
+    "color": "#1E2A38",
+    "theme": "dark"
+  },
   "engines": {
     "vscode": "^1.101.0",
     "node": ">=22.15.1"
@@ -80,7 +85,7 @@
       },
       {
         "view": "gemdbStatus",
-        "contents": "GemDB is not supported on Windows yet.\n\nThe database engine needs a Unix environment. Windows support is planned.\n[Learn more](https://github.com/GemTalk/GemDB_Code#platform-support)",
+        "contents": "GemDB needs macOS on Apple Silicon.\n\nThis release ships the Python runtime compiled for Apple Silicon only. Intel Macs, Linux, and Windows are planned.\n[Learn more](https://github.com/GemTalk/GemDB_Code#platform-support)",
         "when": "gemdb.state == unsupportedPlatform"
       }
     ],
@@ -111,7 +116,7 @@
       },
       {
         "command": "gemdb.openRepl",
-        "title": "Open Python REPL",
+        "title": "Open GemDB Shell",
         "category": "GemDB",
         "icon": "$(terminal)"
       },
@@ -232,7 +237,7 @@
           {
             "id": "repl",
             "title": "Run your first Python",
-            "description": "Open a Python prompt that runs inside the database. GemDB Code starts the database for you — there's nothing to press first.\n[Open Python REPL](command:gemdb.openRepl)",
+            "description": "Open a Python prompt that runs inside the database. GemDB Code starts the database for you — there's nothing to press first.\n[Open GemDB Shell](command:gemdb.openRepl)",
             "media": {
               "markdown": "resources/walkthrough/repl.md"
             },
@@ -280,10 +285,11 @@
     "test:integration": "vitest run --config vitest.integration.config.mts",
     "bundle:grail": "./scripts/bundle-grail.sh",
     "bundle:extent": "./scripts/bundle-extent.sh",
-    "package": "vsce package",
+    "//package": "Platform-specific build: this release ships Grail's CPython shim compiled for Apple Silicon only, so the .vsix is targeted and the Marketplace offers it to no one else.",
+    "package": "vsce package --target darwin-arm64",
     "publish": "npm run publish:vsce && npm run publish:ovsx",
-    "publish:vsce": "vsce publish",
-    "publish:ovsx": "ovsx publish"
+    "publish:vsce": "vsce publish --target darwin-arm64",
+    "publish:ovsx": "ovsx publish --target darwin-arm64"
   },
   "dependencies": {
     "koffi": "^2.15.1"

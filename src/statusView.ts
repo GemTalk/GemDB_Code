@@ -102,7 +102,7 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
               ? 'Python runs inside the database'
               : 'Running, but not accepting new sessions',
             icon: listening ? ok('pass-filled') : warn('warning'),
-            command: { command: 'gemdb.openRepl', title: 'Open Python REPL' },
+            command: { command: 'gemdb.openRepl', title: 'Open GemDB Shell' },
           }
         : {
             label: 'Stopped',
@@ -145,7 +145,7 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
           : grailLabel(installed),
       tooltip: neverInstalled
         ? `Python support ${grailLabel(bundled)} is ready to be added to the database. That happens ` +
-          'automatically the first time you open the REPL or run a notebook cell.'
+          'automatically the first time you open the GemDB Shell or run a notebook cell.'
         : outdated
           ? `This GemDB update ships Python support ${grailLabel(bundled)}. It will be installed the next time GemDB starts.`
           : 'The Python implementation installed in your database.',

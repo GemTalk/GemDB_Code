@@ -34,7 +34,7 @@ reversible; ask about what is persistent or global.**
   survives reboots. **Always prompts.** Do not automate this, whatever else
   changes. Asked *at the start of first-run setup, concurrently with the
   download* — not at first use, and not after the download finishes. Two earlier
-  placements were worse: attached to "Open Python REPL" it arrived with no
+  placements were worse: attached to "Open GemDB Shell" it arrived with no
   visible connection to what was clicked; at the end of the download it arrived
   two minutes after the user last thought about GemDB, by which point they have
   moved on and it sits unanswered. Running it alongside the download spends
@@ -114,6 +114,22 @@ the bash wrapper becomes the exit code. Errors there are caught as
 `Error` branch, which is why grail.tpz's own file mode exits 0 on a Python
 error.
 
+**`gemdb` with no arguments is not the GemDB Shell, and does not behave like
+it.** It `input`s Grail's `scripts/grail.tpz`, whose REPL loop wraps evaluation
+in `on: Error do:` — but Grail's Python exceptions descend from
+`AbstractException`, not `Error`, so that handler never fires. Measured on
+3.7.5, through a real pty: a `ZeroDivisionError` prints a Smalltalk stack and
+drops the user at a `topaz 1>` prompt, where the next line typed is answered
+with `unknown command: print(...)`. Ctrl+C does the same by a different route
+(`Break`, error 6003), and Ctrl+D raises `EOF from stdin!` rather than exiting.
+Only `exit()` leaves cleanly. Line editing *is* there and is decent — topaz's
+readline gives history, backspace and Ctrl+U — it is simply not `lineEditor.ts`.
+This is exactly the topaz behaviour `pyRepl.ts` was written to escape; the
+in-editor shell catches all of it because `pythonQueries.ts` catches
+`AbstractException`. Fixing the CLI means fixing the handler in `grail.tpz`
+upstream, or generating our own REPL driver next to `gemdb-run.tpz` instead of
+handing off to Grail's.
+
 **`print()` reaches the user only because the query layer captures it.** Grail
 routes `print()` through the Smalltalk global `Transcript`; over an RPC session
 the gem's stdout is a log file, so uncaptured output silently vanishes — that
@@ -127,6 +143,19 @@ own directory *inside the database*, and every session resolves modules relative
 to it. The extension directory is versioned (`gemdb.gemdb-<version>/`), so it
 moves on every update; that is why `stageGrail` copies the payload to
 `<rootPath>/grail` first and points `GRAIL_DIR` there.
+
+## What the shell is called
+
+The interactive Python prompt is **GemDB Shell** everywhere a user can see it:
+the command title, the terminal tab, the walkthrough, the README. The internal
+names are unchanged and deliberately so — `gemdb.openRepl`, `repl.ts`,
+`pyRepl.ts`, `PyReplTerminal` — because the command id is the one part a user
+can bind a key to, and renaming it would break those bindings for no gain. When
+adding a user-visible string, write "GemDB Shell"; when naming code, `repl` is
+still the house term.
+
+The `gemdb` CLI's no-argument mode is *not* the GemDB Shell. It hands off to
+Grail's own topaz REPL, which behaves differently — see the note below.
 
 ## Layout
 
@@ -146,8 +175,8 @@ moves on every update; that is why `stageGrail` copies the payload to
 | `session.ts` | the single GCI session |
 | `pythonQueries.ts` | the Smalltalk that runs Python and reports its errors |
 | `notebook.ts` | the notebook kernel — cells through the shared session |
-| `pyRepl.ts`, `lineEditor.ts` | the REPL: a pseudoterminal per terminal-session, and its line editing |
-| `repl.ts` | opening REPL terminals; running a `.py` file via the CLI |
+| `pyRepl.ts`, `lineEditor.ts` | the GemDB Shell: a pseudoterminal per terminal-session, and its line editing |
+| `repl.ts` | opening GemDB Shell terminals; running a `.py` file via the CLI |
 | `cli.ts` | generates `<rootPath>/bin/gemdb` — the CPython-like shell command |
 | `statusView.ts` | the one tree view |
 | `gci/` | **vendored from Jasper — do not edit** |
@@ -171,6 +200,22 @@ the directories nor the process names collide with Jasper's defaults.
 
 ## Platform support
 
-macOS and Linux. Windows is out of scope for now — reaching it means routing
-every command through WSL, as Jasper does. Do not add partial Windows paths;
-`isSupportedPlatform()` is the single gate.
+**macOS on Apple Silicon, and nothing else in 1.x.** `isSupportedPlatform()` in
+`platform.ts` is the single gate, and it is narrow on purpose: the release ships
+exactly one compiled Grail shim (`grail/prebuilt/arm64.Darwin/`), and a build
+without a matching shim installs cleanly and then fails at the first `import`.
+
+Everything else in `platform.ts` — `platformKey`, `archiveExtension`,
+`sharedLibraryExtension`, `libraryPathVariable` — still spells Linux and Intel
+macOS correctly. That is deliberate: those platforms are a *build* away, not a
+port, so do not strip their branches to match the gate.
+
+Adding a platform is two steps in this order: run `bundle:grail` there so its
+shim is staged, then widen the gate and add a `--target` to the publish scripts.
+The reverse order is the bug the gate exists to prevent.
+
+The `.vsix` is published as a platform-specific extension
+(`vsce package --target darwin-arm64`), so the Marketplace never offers it to a
+machine that cannot run it. Windows stays out of scope regardless — reaching it
+means routing every command through WSL, as Jasper does. Do not add partial
+Windows paths.

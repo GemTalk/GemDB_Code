@@ -2,6 +2,11 @@
 
 Write Python. Run it inside the database.
 
+Install from either marketplace:
+
+- **VS Code Marketplace:** https://marketplace.visualstudio.com/items?itemName=gemtalksystems.gemdb
+- **Open VSX** (VSCodium, Gitpod, code-server, etc.): https://open-vsx.org/extension/gemtalksystems/gemdb
+
 GemDB is a VS Code extension that installs a database which executes Python
 natively — not Python that talks to a database over a connection, but Python
 whose objects *are* the database's objects. Assign to a variable, commit, and
@@ -26,7 +31,7 @@ While that downloads, it asks for your password once, to raise the machine's
 shared-memory limit. That is the only prompt, and the only change GemDB makes
 outside `~/GemDB`.
 
-Then open the **Python REPL**, or a notebook with **GemDB** as the kernel. The
+Then open the **GemDB Shell**, or a notebook with **GemDB** as the kernel. The
 database is already running — GemDB starts it for you.
 
 ### What GemDB asks for, and what it doesn't
@@ -74,6 +79,13 @@ exception (with the error on stderr), 2 for a missing file.
 Two gaps against CPython, both upstream and both known: `sys.exit(n)` exits 1
 rather than `n`, and `input()` is not yet supported.
 
+One more thing worth knowing: `gemdb` with no arguments is **not** the GemDB
+Shell. It hands off to the Python implementation's own topaz prompt, which
+answers Ctrl+C, Ctrl+D, and an uncaught Python error the same way — by printing
+a Smalltalk stack and leaving you at a `topaz 1>` prompt rather than back at
+`>>>`. It does have history and line editing. For an interactive prompt that
+behaves like Python's, use the **GemDB Shell** inside the editor.
+
 ## What GemDB is not
 
 GemDB is deliberately small. It manages exactly one database, with a fixed
@@ -89,12 +101,29 @@ do not collide.
 
 ## Platform support
 
-macOS and Linux, on x86-64 and ARM.
+**This release runs on macOS with Apple Silicon (M1 and later).** Use the
+Apple Silicon build of VS Code; an Intel build running under Rosetta is refused,
+because its extension host is an x86_64 process.
 
-Windows is not supported yet. The database engine and GemDB's native components
-both need a Unix environment, and reaching Windows means routing everything
-through WSL — which is a meaningful amount of machinery for an extension whose
-whole point is a short first run. It is a planned step, not an oversight.
+| Platform | Status |
+| --- | --- |
+| macOS, Apple Silicon | Supported |
+| macOS, Intel | Planned |
+| Linux, x86-64 and ARM | Planned |
+| Windows | Further out — see below |
+
+The limit is one specific thing, not a general lack of portability: GemDB ships
+the Python runtime with a native library compiled against a specific database
+engine version *on* the platform it targets. A build missing the right one would
+install perfectly and then fail at your first `import`, so the extension is
+published per-platform and simply is not offered where it cannot work. Each
+additional platform is a build, not a port — the code already handles them.
+
+Windows is the exception that is genuinely further out. The engine and GemDB's
+native components both need a Unix environment, so reaching Windows means
+routing everything through WSL, as [Jasper](https://github.com/GemTalk/Jasper)
+does — a meaningful amount of machinery for an extension whose whole point is a
+short first run. It is a planned step, not an oversight.
 
 ## Where things live
 

@@ -119,7 +119,10 @@ export function activate(context: vscode.ExtensionContext): void {
 
   if (!isSupportedPlatform()) {
     setContext('gemdb.state', 'unsupportedPlatform');
-    log(`GemDB does not support ${process.platform} yet — macOS and Linux only.`);
+    log(
+      `GemDB does not support ${process.platform}/${process.arch} yet — ` +
+        'macOS on Apple Silicon only.',
+    );
     return;
   }
 
@@ -224,11 +227,11 @@ async function prepareOnFirstRun(
         ? 'GemDB is ready. The database starts by itself the first time you run Python.'
         : 'GemDB is set up, but still needs a shared-memory change before the database can run. ' +
             'It will ask again when you run Python.',
-      'Open Python REPL',
+      'Open GemDB Shell',
       'New Notebook',
     )
     .then((choice) => {
-      if (choice === 'Open Python REPL') void vscode.commands.executeCommand('gemdb.openRepl');
+      if (choice === 'Open GemDB Shell') void vscode.commands.executeCommand('gemdb.openRepl');
       else if (choice === 'New Notebook') void vscode.commands.executeCommand('gemdb.newNotebook');
     });
 }

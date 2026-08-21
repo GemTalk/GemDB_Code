@@ -1,17 +1,35 @@
 import * as vscode from 'vscode';
 
 /**
- * GemDB supports macOS and Linux.
+ * GemDB 1.x supports macOS on Apple Silicon, and nothing else yet.
  *
- * Windows is not supported yet, and the reason is not just the engine: Grail's
- * CPython shim is a native library built against the engine's headers, and its
- * install runs a Unix shell pipeline. Jasper reaches Windows by routing every
- * command through WSL, which is a large amount of machinery for an extension
- * whose whole point is a short first-run path. Adding it is a deliberate
- * future step, not an oversight.
+ * The narrowness is about what a release can honestly carry, not about what the
+ * code can do: everything below this line already handles Linux and Intel Macs,
+ * and `platformKey` still spells all four. What cannot be faked is Grail's
+ * CPython shim — a native library compiled against a specific engine version on
+ * a specific platform, staged into `grail/prebuilt/<platform>/` by a build that
+ * has to *run* on that platform. A `.vsix` missing the right one installs
+ * perfectly and then fails at the first `import`, which is a far worse first run
+ * than being told the platform is not supported yet. So the release ships one
+ * prebuilt shim and this gate agrees with it.
+ *
+ * Widening it is therefore two coordinated steps, in this order: run
+ * `bundle:grail` on the new platform so `grail/prebuilt/` carries its shim, then
+ * widen this predicate. Doing the second without the first is the bug this
+ * function exists to prevent.
+ *
+ * Windows stays further out, and not only for the shim: its install runs a Unix
+ * shell pipeline, and reaching it means routing every command through WSL as
+ * Jasper does — a large amount of machinery for an extension whose whole point
+ * is a short first run.
+ *
+ * Note on Rosetta: an Intel build of VS Code on an Apple Silicon Mac reports
+ * `x64` here and is correctly refused. Its extension host is an x86_64 process,
+ * so it would load an x86_64 GCI library, which is exactly the shim we do not
+ * ship. The arm64 build of VS Code is the supported one.
  */
 export function isSupportedPlatform(): boolean {
-  return process.platform === 'darwin' || process.platform === 'linux';
+  return process.platform === 'darwin' && process.arch === 'arm64';
 }
 
 /**

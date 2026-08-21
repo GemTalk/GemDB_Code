@@ -141,7 +141,7 @@ export async function startNetldi(): Promise<void> {
  * before the stone name — after it, it is read as the account.
  *
  * Without `-i`, stopstone refuses while any session holds a login, and that is
- * the ordinary case rather than the exception: an open Python REPL terminal is
+ * the ordinary case rather than the exception: an open GemDB Shell terminal is
  * a logged-in session, and so is a notebook that has run a cell.
  */
 export function stopStoneArgs(force: boolean): string[] {

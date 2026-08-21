@@ -1,4 +1,4 @@
-## The Python REPL
+## The GemDB Shell
 
 Opens a Python prompt that runs *inside* the database:
 
@@ -17,7 +17,7 @@ running Python in a database rather than beside one.
   Python. It never lands you anywhere strange.
 - **`exit()`** or **Ctrl+D** leaves.
 - **Open it again** and you get a *second* terminal, not the first one back.
-  Each REPL is its own database session: two terminals hold separate
+  Each shell is its own database session: two terminals hold separate
   uncommitted work, and see each other's exactly at `commit()`.
 
 GemDB starts the database for you, so it's normally already running by the

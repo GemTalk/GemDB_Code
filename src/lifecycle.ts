@@ -42,7 +42,8 @@ import { allowAutoStart } from './autoStart';
 function requireSupportedPlatform(): boolean {
   if (isSupportedPlatform()) return true;
   void vscode.window.showErrorMessage(
-    'GemDB runs on macOS and Linux. Windows support is planned but not available yet.',
+    'GemDB runs on macOS with Apple Silicon. Intel Macs, Linux, and Windows are planned ' +
+      'but not available yet.',
   );
   return false;
 }
@@ -147,11 +148,11 @@ export async function install(extensionPath: string): Promise<void> {
   void vscode.window
     .showInformationMessage(
       'GemDB is ready. Python now runs inside your database.',
-      'Open Python REPL',
+      'Open GemDB Shell',
       'New Notebook',
     )
     .then((choice) => {
-      if (choice === 'Open Python REPL') void vscode.commands.executeCommand('gemdb.openRepl');
+      if (choice === 'Open GemDB Shell') void vscode.commands.executeCommand('gemdb.openRepl');
       else if (choice === 'New Notebook') void vscode.commands.executeCommand('gemdb.newNotebook');
     });
 }
@@ -447,7 +448,7 @@ export async function stop(): Promise<void> {
 async function confirmForce(reason: string): Promise<boolean> {
   const choice = await vscode.window.showWarningMessage(
     `GemDB did not stop:\n\n${reason}\n\n` +
-      'This is usually a session that is still logged in — an open Python REPL terminal ' +
+      'This is usually a session that is still logged in — an open GemDB Shell terminal ' +
       'counts as one, and so does a notebook in another window.\n\n' +
       'Stopping anyway disconnects every session. Work that has not been committed is lost.',
     { modal: true },

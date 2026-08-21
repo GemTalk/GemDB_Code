@@ -6,7 +6,10 @@ import { PyResult, isErrorResult, runPythonInSession } from './pythonQueries';
 import { GciSession, SessionError } from './session';
 
 /**
- * The Python REPL, as a pseudoterminal.
+ * The GemDB Shell, as a pseudoterminal.
+ *
+ * Named `pyRepl`/`PyReplTerminal` internally; "GemDB Shell" is what the user
+ * sees, and the only name that appears in commands, terminals, and docs.
  *
  * The previous REPL drove Grail's topaz script in an ordinary terminal, which
  * meant living with topaz: Ctrl+C dropped the user into a Smalltalk debugger,
@@ -24,7 +27,7 @@ import { GciSession, SessionError } from './session';
  */
 
 const BANNER =
-  'Python in GemDB — this terminal is its own database session.\r\n' +
+  'GemDB Shell — Python inside the database. This terminal is its own session.\r\n' +
   'Ctrl+C interrupts · exit() or Ctrl+D leaves\r\n';
 
 export class PyReplTerminal implements vscode.Pseudoterminal {

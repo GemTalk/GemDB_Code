@@ -32,7 +32,7 @@ export async function openRepl(extensionPath: string): Promise<void> {
   if (!(await requireRunning(extensionPath))) return;
 
   replCounter += 1;
-  const name = replCounter === 1 ? 'GemDB Python' : `GemDB Python ${replCounter}`;
+  const name = replCounter === 1 ? 'GemDB Shell' : `GemDB Shell ${replCounter}`;
   const terminal = vscode.window.createTerminal({
     name,
     pty: new PyReplTerminal(extensionPath, name),

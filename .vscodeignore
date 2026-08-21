@@ -11,6 +11,7 @@ vitest*.mts
 .prettierignore
 eslint.config.mjs
 CLAUDE.md
+CONTRIBUTING.md
 # The full lockup is source art and a README banner, not something the running
 # extension ever loads — resources/icon.png is a crop of it. Shipping it would
 # put 25 KB of unreferenced image in every install.
@@ -26,3 +27,26 @@ grail/**/__pycache__/**
 grail/**/*.o
 grail/**/*.out
 grail/.git/**
+
+# A build-time leftover from bundle-extent.sh: it names the scratch `gemdbbuild`
+# stone, which does not exist on a user's machine. Our .tpz files set their own
+# user/stone *after* any .topazini runs, so it cannot hijack a login — but a
+# stray credentials file has no business in a published artifact.
+grail/.topazini
+
+# koffi's own documentation and changelog — 100+ markdown files nothing reads.
+node_modules/koffi/doc/**
+node_modules/koffi/CHANGELOG.md
+node_modules/koffi/README.md
+
+# koffi ships a prebuilt binary for all 18 platforms it supports, ~26 MB of
+# which this build can never load. Its index.js is a `switch` over the detected
+# `${platform}_${arch}` triplet with a static require per case, so only the
+# matching file is ever touched and the absent ones cost nothing.
+#
+# This is tied to `--target darwin-arm64` in package.json and to
+# `isSupportedPlatform()`. Adding a platform means adding its koffi binary back
+# here too, or the extension will load on that platform and then fail to find
+# its FFI module.
+node_modules/koffi/build/koffi/**
+!node_modules/koffi/build/koffi/darwin_arm64/**
