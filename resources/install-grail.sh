@@ -119,4 +119,22 @@ echo "== Installing Grail as $GEMDB_USER"
 rm -f "$GRAIL_DIR"/*.out
 run_topaz src/smalltalk/install.gs
 
+# ---------------------------------------------------------------------------
+# Step 4: deploy the gemdb module.
+# ---------------------------------------------------------------------------
+# One cold import, committed. This is what makes a fresh session's
+# `import gemdb` leave nothing to commit — the module and its warmed
+# function caches become committed state — which gemdb's transaction()
+# entry check depends on (Grail docs/GemDB_Module.md, session hygiene).
+# The other half of the contract is per-session: every session must enable
+# canonical modules to warm-bind what this deploys (session.ts and
+# gemdb-run.tpz both do). Guarded: a Grail payload from before the gemdb
+# module simply has no script, and the install is still complete.
+if [ -f scripts/deployGemdb.gs ]; then
+    echo "== Deploying gemdb"
+    run_topaz scripts/deployGemdb.gs
+else
+    echo "NOTE: this Grail payload predates gemdb (no scripts/deployGemdb.gs); skipping its deploy."
+fi
+
 echo "== Grail installed"

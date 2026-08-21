@@ -132,14 +132,28 @@ set user ${DB_USER} pass ${DB_PASSWORD}
 set gemstone ${STONE_NAME}
 login
 run
-| args ofs target prior status statusFile |
+| args ofs target status statusFile |
+"Canonical modules, session-local and default off: with it on, the modules
+the extent ships deployed (gemdb above all) warm-bind instead of
+cold-importing, so running a script leaves no uncommitted plumbing behind
+and gemdb.transaction() works as its first statement. Mirrors the same
+setting in the extension's session.ts."
+importlib ___canonicalClassesEnabled___: true.
 args := System commandLineArguments.
 1 to: args size do: [:j | (args at: j) = '--' ifTrue: [ofs := j]].
 statusFile := System gemEnvironmentVariable: 'GEMDB_STATUS_FILE'.
 status := 0.
-prior := Transcript.
+"The console override, not Transcript := GsFile stdout: the Transcript
+global is a committed association, and reassigning it dirties the
+transaction -- gemdb.transaction() in the very script being run would
+then refuse to start. Grail's console writes (print, input's prompt,
+warnings) consult SessionTemps #GrailConsole first; that write is
+transient and leaves System needsCommit untouched. Boxed in an Array
+because that is the #GrailConsole protocol (see builtins.gs
+___console___: SessionTemps at:put: sends to what it stores, which a
+ClientForwarder cannot survive; a GsFile could, but one protocol)."
+SessionTemps current at: #'GrailConsole' put: (Array with: GsFile stdout).
 [
-    Transcript := GsFile stdout.
     [
         target := args at: ofs + 1.
         target = '-m'
@@ -175,7 +189,7 @@ prior := Transcript.
                     status := 1]].
     ].
 ] ensure: [
-    Transcript := prior.
+    SessionTemps current removeKey: #'GrailConsole' ifAbsent: [].
     statusFile ifNotNil: [
         | f |
         f := GsFile openWrite: statusFile.

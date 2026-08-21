@@ -100,6 +100,15 @@ describe.skipIf(!havePayload || !canMakeFixture())('Grail in a real database', (
     expect(result.value).toBe('2');
   });
 
+  it('deploys gemdb during the file-in: importing it leaves nothing to commit', async () => {
+    // install-grail.sh's final step (scripts/deployGemdb.gs) plus the
+    // canonical flag session.ts sets at login. Without either half, this
+    // import would dirty the session and gemdb's transaction() entry check
+    // would blame the user for it.
+    const result = await runPython('import gemdb\ngemdb.needs_commit()', 'notebook-gemdb');
+    expect(result.value).toBe('False');
+  });
+
   it('keeps globals within a scope, and apart between scopes', async () => {
     // What a notebook depends on: one cell's assignment visible to the next,
     // and two notebooks not seeing each other's variables.

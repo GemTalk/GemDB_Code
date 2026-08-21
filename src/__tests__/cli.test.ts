@@ -71,6 +71,10 @@ describe('writeCliScripts', () => {
     // SystemExit's Python args tuple, and CPython truncates an int to n % 256.
     expect(run).toContain("objectNamed: #'SystemExit'");
     expect(run).toContain('\\\\ 256');
+    // Deployed modules (gemdb above all) warm-bind only when the session
+    // enables canonical modules — without this line every CLI run
+    // cold-imports and gemdb's clean-session contract is void.
+    expect(run).toContain('___canonicalClassesEnabled___: true');
   });
 
   it('makes no arguments the GemDB Shell, run by the recorded Node runtime', () => {

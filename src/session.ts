@@ -229,6 +229,22 @@ export class GciSession {
     }
     const session = new GciSession(gci, result.session, label);
     liveSessions.add(session);
+    // Canonical modules are a session-local Grail flag, default off. The
+    // shipped extent deploys gemdb (committed, caches warmed) precisely so
+    // that a session's `import gemdb` leaves nothing to commit — but the
+    // import only consults that deployed state when this flag is on. Without
+    // it every session cold-imports, and gemdb's transaction() entry check
+    // reports the import's own writes as the user's pending changes. Guarded
+    // send, best-effort: a database this extension did not install may
+    // predate the flag, and a session without it still works — just colder.
+    try {
+      session.execute(
+        '(System myUserProfile symbolList objectNamed: #importlib) ' +
+          'ifNotNil: [:imp | imp ___canonicalClassesEnabled___: true]. true',
+      );
+    } catch (e) {
+      log(`Could not enable canonical modules (${label}): ${e instanceof Error ? e.message : e}`);
+    }
     log(`Connected to GemDB as ${DB_USER} (${label})`);
     return session;
   }
