@@ -39,9 +39,14 @@ VERSION="$(sed -nE "s/^export const PINNED_ENGINE_VERSION = '(.+)';$/\1/p" "$REP
 # ships arm64.Darwin only, but the other keys are spelled correctly here for
 # the same reason platform.ts spells them: those platforms are a build away,
 # not a port.
+#
+# Intel macOS is `i386.Darwin` -- the vendor's historical spelling for a 64-bit
+# x86 build, not a typo. The catalog has no `x86_64.Darwin` at all (that URL
+# 404s), so getting this wrong looks like "no such version" rather than a
+# naming mistake.
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)  PLATFORM="arm64.Darwin"  ; ARCHIVE_EXT="dmg" ;;
-  Darwin-x86_64) PLATFORM="x86_64.Darwin" ; ARCHIVE_EXT="dmg" ;;
+  Darwin-x86_64) PLATFORM="i386.Darwin"   ; ARCHIVE_EXT="dmg" ;;
   Linux-aarch64) PLATFORM="arm64.Linux"   ; ARCHIVE_EXT="zip" ;;
   Linux-x86_64)  PLATFORM="x86_64.Linux"  ; ARCHIVE_EXT="zip" ;;
   *) echo "ERROR: unsupported platform $(uname -s)-$(uname -m)" >&2; exit 1 ;;

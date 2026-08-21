@@ -23,7 +23,10 @@ VERSION="$(sed -nE "s/^export const PINNED_ENGINE_VERSION = '(.+)';$/\1/p" "$REP
 
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) PLATFORM="arm64.Darwin" ;;
-  Darwin-x86_64) PLATFORM="x86_64.Darwin" ;;
+  # `i386.Darwin` is the vendor's spelling for the 64-bit Intel build, and it
+  # is what platformKey() and bundle-grail.sh use. There is no
+  # `x86_64.Darwin` engine directory to find.
+  Darwin-x86_64) PLATFORM="i386.Darwin" ;;
   Linux-aarch64) PLATFORM="arm64.Linux" ;;
   Linux-x86_64) PLATFORM="x86_64.Linux" ;;
   *) echo "ERROR: unsupported platform $(uname -s)-$(uname -m)" >&2; exit 1 ;;
