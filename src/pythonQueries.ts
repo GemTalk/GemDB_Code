@@ -188,22 +188,29 @@ export function isGrailInstalled(): boolean {
  *   runtime exception to catch. Looking it up in the symbol list turns "Grail
  *   is missing" into a nil check we can report properly.
  *
- *   `print()` is captured, not lost. Grail routes `print()` through the global
- *   `Transcript` (its own topaz REPL points that at stdout, which is why print
- *   works there). Over an RPC session the gem's stdout is a log file, so
- *   without this redirect every `print()` silently vanishes — measured, not
- *   supposed. Each evaluation points `Transcript` at a session-local target
- *   and restores it in an `ensure:`, so output is captured per evaluation and
- *   attributed to the cell or prompt that caused it, and nothing is left
- *   behind for the next evaluation to trip over. Never committed, so the
- *   global in the repository is untouched.
+ *   `print()` is captured, not lost. Grail's console writes (`print()`,
+ *   `input()`'s prompt, warnings) resolve through the session-local
+ *   `#GrailConsole` entry in SessionTemps, falling back to the global
+ *   `Transcript` (Grail's `builtins ___console___`). Over an RPC session the
+ *   gem's stdout is a log file, so without a capture target every `print()`
+ *   silently vanishes — measured, not supposed. Each evaluation installs the
+ *   target under `#GrailConsole` and removes it in an `ensure:`, so output is
+ *   captured per evaluation and attributed to the cell or prompt that caused
+ *   it, and nothing is left behind for the next evaluation to trip over.
+ *
+ *   SessionTemps, and NOT `Transcript := target` (what this did first):
+ *   `Transcript` is a committed SymbolAssociation, and reassigning it marked
+ *   the session as needing a commit on every single evaluation — which
+ *   `gemdb.transaction()`'s entry check then reported as the user's own
+ *   pending changes. A SessionTemps write is transient; capture leaves
+ *   `System needsCommit` exactly as it found it.
  *
  *   The target has two shapes. Without `onOutput` it is a WriteStream, and
  *   what it collected comes back with the result, after the frame separator.
  *   With `onOutput` it is a ClientForwarder: every write suspends the gem and
  *   surfaces client-side (session.ts services it), so print() streams while
- *   the code runs. The streaming `ensure:` only restores the prior Transcript
- *   — it must send *nothing* to the forwarder, because a send from an unwind
+ *   the code runs. The streaming `ensure:` only removes the override — it
+ *   must send *nothing* to the forwarder, because a send from an unwind
  *   block would suspend the gem all over again on its way out of an error.
  *
  *   Two layers of exception handling. `AlmostOutOfStack` is signalled with
@@ -224,19 +231,26 @@ function buildQuery(grailExpression: string, pythonSource: string, streaming = f
   // The temp is called `dispatcher`, not `grail`: Grail registers a global of
   // its own named `grail` (its Python-facing module), and shadowing it here
   // would be quietly confusing to anyone reading the generated source.
+  // The target is stored BOXED in an Array, exactly like Grail's stdin
+  // provider (builtins.gs stdinProvider:, where this was first measured):
+  // SessionTemps>>at:put: sends to the value it stores, and ClientForwarder
+  // is a root class that forwards even those internal sends to the client —
+  // which is in no position to answer them. Array construction and at: are
+  // primitives, so the box crosses SessionTemps without a send. Grail's
+  // ___console___ unboxes.
   const redirect = streaming
-    ? 'Transcript := ClientForwarder new.'
-    : 'Transcript := WriteStream on: Unicode7 new.';
+    ? "SessionTemps current at: #'GrailConsole' put: (Array with: ClientForwarder new)."
+    : "SessionTemps current at: #'GrailConsole' put: (Array with: (WriteStream on: Unicode7 new)).";
   const restore = streaming
-    ? // Nothing may be sent to the forwarder here; only the assignment is safe.
-      'Transcript := priorTranscript'
-    : `captured := Transcript contents.
-    Transcript := priorTranscript`;
-  return `| dispatcher src result priorTranscript captured out |
+    ? // Nothing may be sent to the forwarder here; only the removal is safe.
+      "SessionTemps current removeKey: #'GrailConsole' ifAbsent: []"
+    : `captured := (SessionTemps current at: #'GrailConsole' otherwise: nil)
+      ifNil: [''] ifNotNil: [:box | (box at: 1) contents].
+    SessionTemps current removeKey: #'GrailConsole' ifAbsent: []`;
+  return `| dispatcher src result captured out |
 dispatcher := System myUserProfile symbolList objectNamed: #'ModuleAst'.
 src := '${source}'.
 captured := ''.
-priorTranscript := Transcript.
 ${redirect}
 [result := dispatcher isNil
   ifTrue: ['${escapeString(GRAIL_MISSING)}']

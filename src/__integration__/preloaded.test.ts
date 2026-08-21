@@ -56,6 +56,43 @@ describe.skipIf(!havePreloaded || !canMakeFixture())('a database from the shippe
     expect((await runPython('x + 1', 'nb-a')).value).toBe('42');
     expect(isErrorResult((await runPython('x', 'nb-b')).value)).toBe(true);
   });
+
+  // The extent ships gemdb deployed and the session enables canonical
+  // modules at login (session.ts), so importing gemdb must leave nothing
+  // to commit — the property its transaction() entry check stands on.
+  it('ships gemdb deployed: importing it leaves nothing to commit', async () => {
+    const result = await runPython('import gemdb\ngemdb.needs_commit()', 'nb-gemdb');
+    expect(result.value).toBe('False');
+  });
+
+  it('runs a transaction block as the first statement of a program', async () => {
+    const result = await runPython(
+      [
+        'import gemdb',
+        'with gemdb.transaction():',
+        '    gemdb.root["it_preloaded"] = 7',
+        'v = gemdb.root.pop("it_preloaded")',
+        'gemdb.commit()',
+        'v',
+      ].join('\n'),
+      'nb-gemdb',
+    );
+    expect(isErrorResult(result.value)).toBe(false);
+    expect(result.value).toBe('7');
+  });
+
+  it('answers administration through gemdb.admin and gemdb.sessions', async () => {
+    const result = await runPython(
+      [
+        'import gemdb',
+        'z = gemdb.admin.size()',
+        's = gemdb.sessions.current()',
+        'z["bytes"] > 0 and s["user"] == "DataCurator" and s["current"]',
+      ].join('\n'),
+      'nb-gemdb',
+    );
+    expect(result.value).toBe('True');
+  });
 });
 
 /** See database.test.ts — skipIf is evaluated during collection. */
