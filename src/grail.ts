@@ -8,6 +8,7 @@ import { log, logStep } from './log';
 import { engineEnvironment, shimLibraryPath } from './processes';
 import { grailPath, grailStampPath, installedGrailStamp } from './paths';
 import { logout } from './session';
+import { writeCliScripts } from './cli';
 
 /**
  * Grail — the Python implementation that runs inside the database — is shipped
@@ -98,6 +99,10 @@ export function stageGrail(extensionPath: string): void {
       /* best effort */
     }
   }
+
+  // The shell command is regenerated with every staging, so its baked-in
+  // paths always match the engine and Grail that are actually on disk.
+  writeCliScripts();
 
   // Deliberately NOT stamped here. The stamp means "this Grail is installed in
   // the database", and copying files is only half of that — see recordGrailInstalled.

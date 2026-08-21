@@ -19,7 +19,7 @@ import { configureSharedMemory, ensureOsConfigured, isSharedMemoryConfigured } f
 import { isSupportedPlatform, setContext } from './platform';
 import { isRunning } from './processes';
 import { openRepl, runFile } from './repl';
-import { logout } from './session';
+import { logout, logoutAll } from './session';
 import { GemDbStatusBar } from './statusBar';
 import { StatusViewProvider } from './statusView';
 
@@ -234,7 +234,7 @@ async function prepareOnFirstRun(
 }
 
 export function deactivate(): void {
-  logout();
+  logoutAll();
 }
 
 /**

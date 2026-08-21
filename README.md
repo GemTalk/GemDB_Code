@@ -52,6 +52,28 @@ things are not like that, and they are treated differently from each other:
   the status bar says so, and clicking that stops it. GemDB will not silently
   restart something you turned off.
 
+## The `gemdb` command
+
+Setup also writes a shell command to `~/GemDB/bin/gemdb` that behaves like
+CPython's command line, backed by the database:
+
+```sh
+export PATH="$HOME/GemDB/bin:$PATH"   # once, in your shell profile
+
+gemdb hello.py          # like python3 hello.py
+gemdb -m some.module    # like python3 -m
+gemdb -c 'print(1+1)'   # like python3 -c
+gemdb                   # an interactive prompt
+```
+
+It needs no environment set up — the wrapper carries its own — and if the
+database is not running it starts it, the same judgement the editor makes.
+Exit codes work the way scripts expect: 0 on success, 1 on an uncaught
+exception (with the error on stderr), 2 for a missing file.
+
+Two gaps against CPython, both upstream and both known: `sys.exit(n)` exits 1
+rather than `n`, and `input()` is not yet supported.
+
 ## What GemDB is not
 
 GemDB is deliberately small. It manages exactly one database, with a fixed

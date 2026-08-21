@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { ensureRunning } from './lifecycle';
 import { errorMessage, log } from './log';
-import { isErrorResult, resetScope, runPython } from './pythonQueries';
+import { PyResult, isErrorResult, resetScope, runPython } from './pythonQueries';
 import { interrupt } from './session';
 
 /**
@@ -78,9 +78,9 @@ export class GemDbNotebookController {
       return;
     }
 
-    let result: string;
+    let result: PyResult;
     try {
-      result = runPython(source, cell.notebook.uri.toString());
+      result = await runPython(source, cell.notebook.uri.toString());
     } catch (e) {
       // Everything that is not the Python code's own fault arrives here: the
       // database is stopped, the session dropped, Grail is missing. Those are
@@ -91,24 +91,49 @@ export class GemDbNotebookController {
       return;
     }
 
-    if (isErrorResult(result)) {
-      this.endWithError(execution, result);
+    // What the cell printed and what it evaluated to are different outputs,
+    // shown in that order — print() first, the way the code produced them.
+    const outputs: vscode.NotebookCellOutput[] = [];
+    if (result.output) {
+      outputs.push(
+        new vscode.NotebookCellOutput([
+          vscode.NotebookCellOutputItem.text(result.output, 'text/plain'),
+        ]),
+      );
+    }
+
+    if (isErrorResult(result.value)) {
+      execution.replaceOutput(outputs);
+      this.appendError(execution, result.value);
       return;
     }
 
-    execution.replaceOutput([
-      new vscode.NotebookCellOutput([vscode.NotebookCellOutputItem.text(result, 'text/plain')]),
-    ]);
+    if (result.value) {
+      outputs.push(
+        new vscode.NotebookCellOutput([
+          vscode.NotebookCellOutputItem.text(result.value, 'text/plain'),
+        ]),
+      );
+    }
+    execution.replaceOutput(outputs);
     execution.end(true, Date.now());
   }
 
   private endWithError(execution: vscode.NotebookCellExecution, message: string): void {
+    execution.replaceOutput([this.errorOutput(message)]);
+    execution.end(false, Date.now());
+  }
+
+  /** Fail the cell while keeping what it already printed on screen. */
+  private appendError(execution: vscode.NotebookCellExecution, message: string): void {
+    execution.appendOutput([this.errorOutput(message)]);
+    execution.end(false, Date.now());
+  }
+
+  private errorOutput(message: string): vscode.NotebookCellOutput {
     const error = new Error(message);
     error.name = 'GemDBError';
-    execution.replaceOutput([
-      new vscode.NotebookCellOutput([vscode.NotebookCellOutputItem.error(error)]),
-    ]);
-    execution.end(false, Date.now());
+    return new vscode.NotebookCellOutput([vscode.NotebookCellOutputItem.error(error)]);
   }
 }
 

@@ -1,34 +1,10 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { shellQuote } from './osConfig';
-import { grailPath } from './paths';
-import { engineEnvironment, findNetldi, findStone } from './processes';
+import { findNetldi, findStone } from './processes';
 import { ensureRunning } from './lifecycle';
-
-const REPL_TERMINAL = 'GemDB Python';
-
-/**
- * Run Python through Grail's own topaz driver.
- *
- * Grail ships `scripts/grail.tpz`, which is both its REPL and its script
- * runner — the same entry point its `./grail` command uses. Driving that
- * directly means the terminal experience here is exactly the one Grail's own
- * documentation describes, rather than a second implementation of it that can
- * disagree.
- *
- * The two configuration flags match Grail's `./grail`: a larger temporary
- * object space and a larger code cache than the stock session, both of which
- * Python needs well before Smalltalk does.
- */
-const TOPAZ_ARGS = [
-  '-lq',
-  '-S',
-  'scripts/grail.tpz',
-  '-T',
-  '400000',
-  '-C',
-  'GEM_TEMPOBJ_CODE_SIZE=300000;',
-];
+import { PyReplTerminal } from './pyRepl';
+import { cliPath } from './cli';
 
 /**
  * Make sure the database is up, starting it if it is not.
@@ -43,24 +19,26 @@ async function requireRunning(extensionPath: string): Promise<boolean> {
   return ensureRunning(extensionPath);
 }
 
-/** Open (or reveal) a Python prompt running inside the database. */
+/**
+ * Open a Python prompt running inside the database — a new one every time.
+ *
+ * Deliberately not "reveal the existing terminal": each press is a fresh
+ * database session, so opening two is the two-connection demonstration —
+ * separate uncommitted state, one database. The counter names them the way a
+ * user will refer to them.
+ */
+let replCounter = 0;
 export async function openRepl(extensionPath: string): Promise<void> {
   if (!(await requireRunning(extensionPath))) return;
 
-  const existing = vscode.window.terminals.find((t) => t.name === REPL_TERMINAL);
-  if (existing) {
-    existing.show();
-    return;
-  }
-
+  replCounter += 1;
+  const name = replCounter === 1 ? 'GemDB Python' : `GemDB Python ${replCounter}`;
   const terminal = vscode.window.createTerminal({
-    name: REPL_TERMINAL,
-    cwd: grailPath(),
-    env: engineEnvironment(),
+    name,
+    pty: new PyReplTerminal(extensionPath, name),
     iconPath: new vscode.ThemeIcon('symbol-namespace'),
   });
   terminal.show();
-  terminal.sendText(`topaz ${TOPAZ_ARGS.map(shellQuote).join(' ')} --`);
 }
 
 /**
@@ -89,14 +67,13 @@ export async function runFile(extensionPath: string, uri?: vscode.Uri): Promise<
   );
   if (document?.isDirty) await document.save();
 
+  // The same command a user could type themselves: the generated gemdb
+  // wrapper sets its own environment, so the terminal needs none from us —
+  // and what scrolls past is exactly what the CLI section of the README says.
   const terminal = vscode.window.createTerminal({
     name: `GemDB: ${path.basename(target.fsPath)}`,
-    cwd: grailPath(),
-    env: engineEnvironment(),
     iconPath: new vscode.ThemeIcon('play'),
   });
   terminal.show();
-  terminal.sendText(
-    `topaz ${TOPAZ_ARGS.map(shellQuote).join(' ')} -- ${shellQuote(target.fsPath)}`,
-  );
+  terminal.sendText(`${shellQuote(cliPath())} ${shellQuote(target.fsPath)}`);
 }

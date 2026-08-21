@@ -6,8 +6,15 @@ import { FakeController, __controllers, __resetSettings } from '../__mocks__/vsc
 // answer. Grail's own behaviour is covered against a real database in
 // src/__integration__/grail.test.ts.
 const ensureRunning = vi.fn<(extensionPath: string) => Promise<boolean>>();
-const runPython = vi.fn<(source: string, scopeId: string) => string>();
+const runPython = vi.fn<(source: string, scopeId: string) => Promise<PyResult>>();
 const isErrorResult = vi.fn<(result: string) => boolean>();
+
+interface PyResult {
+  output: string;
+  value: string;
+}
+
+const py = (value: string, output = ''): PyResult => ({ output, value });
 
 vi.mock('../lifecycle', () => ({ ensureRunning: (p: string) => ensureRunning(p) }));
 vi.mock('../pythonQueries', () => ({
@@ -41,7 +48,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   ensureRunning.mockResolvedValue(true);
   isErrorResult.mockReturnValue(false);
-  runPython.mockReturnValue('ok');
+  runPython.mockResolvedValue(py('ok'));
 });
 
 describe('the notebook kernel', () => {
@@ -98,7 +105,7 @@ describe('the notebook kernel', () => {
   });
 
   it('renders a result as text output', async () => {
-    runPython.mockReturnValue('42');
+    runPython.mockResolvedValue(py('42'));
     const controller = newController();
     await run(controller, [cell('6 * 7')]);
 
@@ -109,7 +116,7 @@ describe('the notebook kernel', () => {
   });
 
   it('renders Python’s own error as a failed cell rather than a result', async () => {
-    runPython.mockReturnValue('ZeroDivisionError: division by zero');
+    runPython.mockResolvedValue(py('Error: ZeroDivisionError - division by zero'));
     isErrorResult.mockReturnValue(true);
     const controller = newController();
     await run(controller, [cell('1 / 0')]);
@@ -123,9 +130,7 @@ describe('the notebook kernel', () => {
     // A thrown error is the environment failing — the database stopped, the
     // session died — not the cell's code. It still has to land in the cell,
     // because that is where the user is looking.
-    runPython.mockImplementation(() => {
-      throw new Error('GemDB is not running');
-    });
+    runPython.mockRejectedValue(new Error('GemDB is not running'));
     const controller = newController();
     await expect(run(controller, [cell('1')])).resolves.toBeUndefined();
 
@@ -134,9 +139,41 @@ describe('the notebook kernel', () => {
     expect(controller.executions[0].success).toBe(false);
   });
 
+  it('shows printed output before the result, as the code produced them', async () => {
+    runPython.mockResolvedValue(py('42', 'working...\n'));
+    const controller = newController();
+    await run(controller, [cell('print("working..."); 6 * 7')]);
+
+    const outputs = controller.executions[0].output;
+    expect(outputs).toHaveLength(2);
+    expect(outputs[0].items[0].data).toBe('working...\n');
+    expect(outputs[1].items[0].data).toBe('42');
+  });
+
+  it('keeps what a cell printed even when it then raised', async () => {
+    runPython.mockResolvedValue(py('Error: ZeroDivisionError - division by zero', 'partial\n'));
+    isErrorResult.mockReturnValue(true);
+    const controller = newController();
+    await run(controller, [cell('print("partial"); 1 / 0')]);
+
+    const outputs = controller.executions[0].output;
+    expect(outputs[0].items[0].data).toBe('partial\n');
+    expect(outputs[1].items[0].mime).toBe('application/vnd.code.notebook.error');
+    expect(controller.executions[0].success).toBe(false);
+  });
+
+  it('suppresses a None result rather than printing it', async () => {
+    runPython.mockResolvedValue(py('', ''));
+    const controller = newController();
+    await run(controller, [cell('x = 1')]);
+
+    expect(controller.executions[0].output).toEqual([]);
+    expect(controller.executions[0].success).toBe(true);
+  });
+
   it('keeps going after a failed cell', async () => {
     isErrorResult.mockImplementation((result) => result === 'bad');
-    runPython.mockImplementationOnce(() => 'bad').mockImplementationOnce(() => 'good');
+    runPython.mockResolvedValueOnce(py('bad')).mockResolvedValueOnce(py('good'));
     const controller = newController();
     await run(controller, [cell('1'), cell('2')]);
 

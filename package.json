@@ -1,6 +1,6 @@
 {
   "name": "gemdb",
-  "displayName": "GemDB",
+  "displayName": "GemDB Code",
   "description": "Python with builtin transactional persistence (using true ACID semantics). When you have critical, complex data that must be consistent, use GemDB.",
   "version": "1.0.0",
   "publisher": "GemTalk",
@@ -8,12 +8,12 @@
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/GemTalk/GemDB"
+    "url": "https://github.com/GemTalk/GemDB_Code"
   },
   "bugs": {
-    "url": "https://github.com/GemTalk/GemDB/issues"
+    "url": "https://github.com/GemTalk/GemDB_Code/issues"
   },
-  "homepage": "https://github.com/GemTalk/GemDB#readme",
+  "homepage": "https://github.com/GemTalk/GemDB_Code#readme",
   "engines": {
     "vscode": "^1.101.0",
     "node": ">=22.15.1"
@@ -25,7 +25,6 @@
   ],
   "keywords": [
     "gemdb",
-    "gemstone",
     "python",
     "database"
   ],
@@ -35,7 +34,7 @@
   ],
   "contributes": {
     "configuration": {
-      "title": "GemDB",
+      "title": "GemDB Code",
       "properties": {
         "gemdb.rootPath": {
           "type": "string",
@@ -45,12 +44,12 @@
         "gemdb.engineVersion": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Advanced: override the pinned database engine version (e.g. `4.0.0`). Leave empty to use the version this release of GemDB was built and tested against. A version that is not published in the public catalog cannot be downloaded — it must already be present under the root path."
+          "markdownDescription": "Advanced: override the pinned database engine version (e.g. `3.7.5`). Leave empty to use the version this release of GemDB Code was built and tested against. A version that is not published in the public catalog cannot be downloaded — it must already be present under the root path."
         },
         "gemdb.reinstallPythonOnUpdate": {
           "type": "boolean",
           "default": true,
-          "description": "When a GemDB update ships a newer Python execution engine, reinstall it into your database automatically the next time GemDB starts."
+          "description": "When a GemDB Code update ships a newer Python execution engine, reinstall it into your database automatically the next time GemDB Code starts."
         }
       }
     },
@@ -58,7 +57,7 @@
       "activitybar": [
         {
           "id": "gemdb",
-          "title": "GemDB",
+          "title": "GemDB Code",
           "icon": "resources/gemdb-sidebar.svg"
         }
       ]
@@ -67,6 +66,7 @@
       "gemdb": [
         {
           "id": "gemdbStatus",
+          "icon": "resources/icon.png",
           "name": "GemDB",
           "type": "tree"
         }
@@ -80,7 +80,7 @@
       },
       {
         "view": "gemdbStatus",
-        "contents": "GemDB is not supported on Windows yet.\n\nThe database engine needs a Unix environment. Windows support is planned.\n[Learn more](https://github.com/GemTalk/GemDB#platform-support)",
+        "contents": "GemDB is not supported on Windows yet.\n\nThe database engine needs a Unix environment. Windows support is planned.\n[Learn more](https://github.com/GemTalk/GemDB_Code#platform-support)",
         "when": "gemdb.state == unsupportedPlatform"
       }
     ],
@@ -215,13 +215,13 @@
     "walkthroughs": [
       {
         "id": "gemdbGettingStarted",
-        "title": "Get Started with GemDB",
+        "title": "Get Started with GemDB Code",
         "description": "Install the database, start it, and run your first Python in it.",
         "steps": [
           {
             "id": "install",
             "title": "Setup happens on its own",
-            "description": "GemDB downloads the database engine, creates your database, and asks once for the one operating-system change it needs. If you cancelled that, pick it up here — it resumes rather than starting over.\n[Set Up GemDB](command:gemdb.install)",
+            "description": "GemDB Code downloads the database engine, creates your database, and asks once for the one operating-system change it needs. If you cancelled that, pick it up here — it resumes rather than starting over.\n[Set Up GemDB](command:gemdb.install)",
             "media": {
               "markdown": "resources/walkthrough/install.md"
             },
@@ -232,7 +232,7 @@
           {
             "id": "repl",
             "title": "Run your first Python",
-            "description": "Open a Python prompt that runs inside the database. GemDB starts the database for you — there's nothing to press first.\n[Open Python REPL](command:gemdb.openRepl)",
+            "description": "Open a Python prompt that runs inside the database. GemDB Code starts the database for you — there's nothing to press first.\n[Open Python REPL](command:gemdb.openRepl)",
             "media": {
               "markdown": "resources/walkthrough/repl.md"
             },

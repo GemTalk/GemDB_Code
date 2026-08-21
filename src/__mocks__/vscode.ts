@@ -45,6 +45,25 @@ export const window = {
  */
 export const ProgressLocation = { Notification: 15 } as const;
 
+/** Minimal event plumbing, enough for a Pseudoterminal's emitters. */
+export class EventEmitter<T> {
+  private listeners: Array<(value: T) => void> = [];
+  readonly event = (listener: (value: T) => void): { dispose(): void } => {
+    this.listeners.push(listener);
+    return { dispose: () => this.listeners.splice(this.listeners.indexOf(listener), 1) };
+  };
+  fire(value: T): void {
+    for (const listener of [...this.listeners]) listener(value);
+  }
+  dispose(): void {
+    this.listeners = [];
+  }
+}
+
+export class ThemeIcon {
+  constructor(readonly id: string) {}
+}
+
 /**
  * Enough of the notebook API to drive the kernel without an editor.
  *
@@ -98,6 +117,7 @@ export interface FakeController {
     start(): void;
     end(success: boolean): void;
     replaceOutput(output: NotebookCellOutput[]): void;
+    appendOutput(output: NotebookCellOutput[]): void;
   };
   dispose(): void;
 }
@@ -129,6 +149,9 @@ export const notebooks = {
           },
           replaceOutput: (output: NotebookCellOutput[]) => {
             record.output = output;
+          },
+          appendOutput: (output: NotebookCellOutput[]) => {
+            record.output = [...record.output, ...output];
           },
         };
       },

@@ -45,16 +45,16 @@ describe.skipIf(!havePreloaded || !canMakeFixture())('a database from the shippe
     expect(isGrailInstalled()).toBe(true);
   });
 
-  it('runs Python immediately', () => {
-    const result = runPython('sum(range(10))', 'nb');
-    expect(isErrorResult(result)).toBe(false);
-    expect(result).toBe('45');
+  it('runs Python immediately', async () => {
+    const result = await runPython('sum(range(10))', 'nb');
+    expect(isErrorResult(result.value)).toBe(false);
+    expect(result.value).toBe('45');
   });
 
-  it('keeps notebook scopes apart, as a filed-in database does', () => {
-    runPython('x = 41', 'nb-a');
-    expect(runPython('x + 1', 'nb-a')).toBe('42');
-    expect(isErrorResult(runPython('x', 'nb-b'))).toBe(true);
+  it('keeps notebook scopes apart, as a filed-in database does', async () => {
+    await runPython('x = 41', 'nb-a');
+    expect((await runPython('x + 1', 'nb-a')).value).toBe('42');
+    expect(isErrorResult((await runPython('x', 'nb-b')).value)).toBe(true);
   });
 });
 

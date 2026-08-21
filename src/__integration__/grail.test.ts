@@ -5,8 +5,14 @@ import { bundledGrailStamp, installGrail, recordGrailInstalled, stageGrail } fro
 import { isSharedMemoryConfigured } from '../osConfig';
 import { grailInstalled, grailStagedOnDisk } from '../paths';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
-import { isErrorResult, isGrailInstalled, runPython, runPythonOnce } from '../pythonQueries';
-import { logout } from '../session';
+import {
+  isErrorResult,
+  isGrailInstalled,
+  runPython,
+  runPythonInSession,
+  runPythonOnce,
+} from '../pythonQueries';
+import { GciSession, logout } from '../session';
 import { Fixture, makeFixture } from './fixture';
 
 /**
@@ -85,27 +91,72 @@ describe.skipIf(!havePayload || !canMakeFixture())('Grail in a real database', (
     expect(grailInstalled()).toBe(true);
   }, 600_000);
 
-  it('runs Python through the shim', () => {
+  it('runs Python through the shim', async () => {
     // The assertion that matters is not the arithmetic. Evaluating any Python
     // at all means the CPython shim loaded and linked against this engine —
     // the failure mode a version bump without a payload rebuild produces.
-    const result = runPythonOnce('1 + 1');
-    expect(isErrorResult(result)).toBe(false);
-    expect(result).toBe('2');
+    const result = await runPythonOnce('1 + 1');
+    expect(isErrorResult(result.value)).toBe(false);
+    expect(result.value).toBe('2');
   });
 
-  it('keeps globals within a scope, and apart between scopes', () => {
+  it('keeps globals within a scope, and apart between scopes', async () => {
     // What a notebook depends on: one cell's assignment visible to the next,
     // and two notebooks not seeing each other's variables.
-    runPython('x = 41', 'notebook-a');
-    expect(runPython('x + 1', 'notebook-a')).toBe('42');
-    expect(isErrorResult(runPython('x', 'notebook-b'))).toBe(true);
+    await runPython('x = 41', 'notebook-a');
+    expect((await runPython('x + 1', 'notebook-a')).value).toBe('42');
+    expect(isErrorResult((await runPython('x', 'notebook-b')).value)).toBe(true);
   });
 
-  it('reports a Python error as an error rather than a result', () => {
-    const result = runPython('1 / 0', 'notebook-a');
-    expect(isErrorResult(result)).toBe(true);
+  it('reports a Python error as an error rather than a result', async () => {
+    const result = await runPython('1 / 0', 'notebook-a');
+    expect(isErrorResult(result.value)).toBe(true);
   });
+
+  it('returns what print() wrote — the output that vanished over RPC before', async () => {
+    // Grail routes print() through Transcript; over an RPC session that went to
+    // the gem's log until the query layer began capturing it per evaluation.
+    // (Grail's print writes a space after every argument, hence '7 '.)
+    const result = await runPythonOnce('print(7)');
+    expect(result.output).toBe('7 \n');
+    expect(result.value).toBe('');
+  });
+
+  it('delivers output printed before an error, alongside the error', async () => {
+    const result = await runPython('print("before")\n1 / 0', 'notebook-a');
+    expect(result.output).toContain('before');
+    expect(isErrorResult(result.value)).toBe(true);
+  });
+
+  it('suppresses None, the way a REPL and a notebook both should', async () => {
+    expect((await runPythonOnce('None')).value).toBe('');
+  });
+
+  it('runs two sessions concurrently, and an interrupt ends one of them', async () => {
+    // Two logins, like two REPL terminals. Session A grinds through a loop big
+    // enough to outlast this test; session B computes while A is still busy.
+    // Then a break — the Ctrl+C path — ends A early with an error, not a hang.
+    const a = GciSession.login('it-repl-a');
+    const b = GciSession.login('it-repl-b');
+    try {
+      const slow = runPythonInSession(a, 'i = 0\nwhile i < 10**9:\n    i = i + 1', 'ra');
+      let slowSettled = false;
+      void slow.finally(() => {
+        slowSettled = true;
+      });
+
+      const quick = await runPythonInSession(b, '6 * 7', 'rb');
+      expect(quick.value).toBe('42');
+      expect(slowSettled).toBe(false); // B finished while A was still running
+
+      a.interrupt();
+      const ended = await slow;
+      expect(isErrorResult(ended.value)).toBe(true);
+    } finally {
+      a.logout();
+      b.logout();
+    }
+  }, 120_000);
 });
 
 /** The last of what the installer printed, for a failure that needs explaining. */

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { engineVersion, reinstallPythonOnUpdate, rootPath } from './config';
+import { cliPath, writeCliScripts } from './cli';
 import { createDatabase, removeDatabase } from './database';
 import { Progress, installEngine, removeEngine } from './engine';
 import {
@@ -34,7 +35,7 @@ import {
   stopStone,
 } from './processes';
 import { isSupportedPlatform } from './platform';
-import { logout } from './session';
+import { logoutAll } from './session';
 import { allowAutoStart } from './autoStart';
 
 /** Guard every entry point with one clear message rather than a stack trace. */
@@ -274,6 +275,18 @@ export async function ensureRunning(extensionPath: string): Promise<boolean> {
     if (!prepared || !isInstalled()) return false;
   }
 
+  // The shell command is normally written when Grail is staged, but an
+  // install that predates it never runs that staging again — the payload on
+  // disk already matches. Backstop it here, on the single path everything
+  // that needs a database goes through.
+  if (!fs.existsSync(cliPath())) {
+    try {
+      writeCliScripts();
+    } catch (e) {
+      log(`Could not write the gemdb command: ${errorMessage(e)}`);
+    }
+  }
+
   if (!(await ensureOsConfigured(extensionPath))) return false;
 
   return vscode.window.withProgress(
@@ -401,7 +414,9 @@ export async function stop(): Promise<void> {
     async () => {
       try {
         await runStop({
-          logout,
+          // Every session this window holds: the notebooks' and each REPL's.
+          // All of them are logins stopstone would refuse over.
+          logout: logoutAll,
           stoneUp: () => isRunning(),
           listenerUp: () => isListening(),
           stopStone,

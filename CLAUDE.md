@@ -63,8 +63,9 @@ checking and asking.
 ## The two test suites
 
 `npm test` is mocked and fast, and covers decisions: the setup lock, the
-`gslist` parser, what `runStop` does when the stone refuses, and what the
-notebook kernel does with a batch of cells. Anything with a branch worth
+`gslist` parser, what `runStop` does when the stone refuses, what the notebook
+kernel does with a batch of cells, and every keystroke the REPL's line editor
+interprets (`lineEditor.ts` is pure for exactly that reason). Anything with a branch worth
 defending belongs here, which is why `runStop` takes its collaborators as a
 `StopWorld` argument rather than reaching for them.
 
@@ -85,7 +86,7 @@ invisible to each other. It skips itself when no engine is installed.
 
 Download and extraction stay out of both: 210 MB to test an HTTP range request.
 
-## The two things that are easy to get wrong
+## The things that are easy to get wrong
 
 **A release ships a database, not just the code to build one.**
 `scripts/bundle-extent.sh` creates a scratch database, files Grail into it, and
@@ -103,6 +104,23 @@ shim against the *pinned* engine version, and stages the result. The shim links
 engine version it was built against — a mismatch installs cleanly and then
 fails at `import`. Changing `PINNED_ENGINE_VERSION` in `src/config.ts` means
 re-running `bundle:grail` on every supported platform.
+
+**The CLI's exit codes go through a status file, not topaz.** topaz cannot
+carry an exit status out of a `run` block — `ExitClientError status:` is not
+translated, and an `iferr … exit 1` action exits 0 (all measured). So
+`gemdb-run.tpz` writes the status to the file named in `GEMDB_STATUS_FILE` and
+the bash wrapper becomes the exit code. Errors there are caught as
+`AbstractException`, not `Error`: Grail's Python exceptions live outside the
+`Error` branch, which is why grail.tpz's own file mode exits 0 on a Python
+error.
+
+**`print()` reaches the user only because the query layer captures it.** Grail
+routes `print()` through the Smalltalk global `Transcript`; over an RPC session
+the gem's stdout is a log file, so uncaptured output silently vanishes — that
+was a live notebook bug once. `buildQuery` in `pythonQueries.ts` redirects
+`Transcript` to a stream per evaluation, restores it in an `ensure:`, and ships
+output and result back framed by a unit separator. Anything new that evaluates
+Python should go through that layer, not `execute` directly.
 
 **Grail must be staged to a stable directory.** `installGrail` records Grail's
 own directory *inside the database*, and every session resolves modules relative
@@ -127,7 +145,10 @@ moves on every update; that is why `stageGrail` copies the payload to
 | `statusBar.ts` | the always-visible "a database is running" indicator |
 | `session.ts` | the single GCI session |
 | `pythonQueries.ts` | the Smalltalk that runs Python and reports its errors |
-| `notebook.ts`, `repl.ts` | the two ways to run Python |
+| `notebook.ts` | the notebook kernel — cells through the shared session |
+| `pyRepl.ts`, `lineEditor.ts` | the REPL: a pseudoterminal per terminal-session, and its line editing |
+| `repl.ts` | opening REPL terminals; running a `.py` file via the CLI |
+| `cli.ts` | generates `<rootPath>/bin/gemdb` — the CPython-like shell command |
 | `statusView.ts` | the one tree view |
 | `gci/` | **vendored from Jasper — do not edit** |
 
