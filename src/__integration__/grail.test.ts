@@ -116,9 +116,10 @@ describe.skipIf(!havePayload || !canMakeFixture())('Grail in a real database', (
   it('returns what print() wrote — the output that vanished over RPC before', async () => {
     // Grail routes print() through Transcript; over an RPC session that went to
     // the gem's log until the query layer began capturing it per evaluation.
-    // (Grail's print writes a space after every argument, hence '7 '.)
+    // (An earlier Grail wrote a space AFTER every argument — '7 \n' — which
+    // this test pinned until upstream fixed the separator to sit BETWEEN.)
     const result = await runPythonOnce('print(7)');
-    expect(result.output).toBe('7 \n');
+    expect(result.output).toBe('7\n');
     expect(result.value).toBe('');
   });
 
@@ -131,6 +132,51 @@ describe.skipIf(!havePayload || !canMakeFixture())('Grail in a real database', (
   it('suppresses None, the way a REPL and a notebook both should', async () => {
     expect((await runPythonOnce('None')).value).toBe('');
   });
+
+  it('streams print() through onOutput as the code runs, one chunk per print', async () => {
+    // With an output sink, each print() suspends the gem mid-execution and
+    // hands its text over (a Transcript ClientForwarder — see session.ts);
+    // nothing is buffered into the result, whose output side comes back empty.
+    const chunks: string[] = [];
+    const result = await runPythonOnce("print('a')\nprint('b', 'c')", (text) => chunks.push(text));
+    expect(chunks).toEqual(['a\n', 'b c\n']);
+    expect(result.output).toBe('');
+    expect(result.value).toBe('');
+  });
+
+  it('delivers streamed output printed before an error, alongside the error', async () => {
+    const chunks: string[] = [];
+    const result = await runPython("print('before')\n1 / 0", 'stream-err', (text) =>
+      chunks.push(text),
+    );
+    expect(chunks.join('')).toContain('before');
+    expect(isErrorResult(result.value)).toBe(true);
+  });
+
+  it('lands an interrupt even when the code spends its life printing', async () => {
+    // A print loop is mostly idle inside Transcript forwarder sends, where a
+    // single break is discarded on resume (measured) — this exercises the
+    // re-sent break in session.ts. The interrupt is asked for from inside the
+    // first chunk's delivery, the worst possible moment for it.
+    const session = GciSession.login('it-stream');
+    try {
+      let asked = false;
+      const result = await runPythonInSession(
+        session,
+        'while True:\n    print(1)',
+        'stream-int',
+        () => {
+          if (asked) return;
+          asked = true;
+          session.interrupt();
+        },
+      );
+      expect(asked).toBe(true);
+      expect(isErrorResult(result.value)).toBe(true);
+    } finally {
+      session.logout();
+    }
+  }, 60_000);
 
   it('runs two sessions concurrently, and an interrupt ends one of them', async () => {
     // Two logins, like two REPL terminals. Session A grinds through a loop big

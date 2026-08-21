@@ -40,16 +40,10 @@ const problemMatcherPlugin = {
   },
 };
 
-const options = {
-  entryPoints: ['src/extension.ts'],
+const common = {
   bundle: true,
-  outfile: 'out/extension.js',
   platform: 'node',
   format: 'cjs',
-  // `vscode` is provided by the host. `koffi` is a native addon that loads its
-  // own platform-specific binary at run time — bundling it would break that
-  // lookup, so it stays in node_modules and ships alongside the bundle.
-  external: ['vscode', 'koffi'],
   sourcemap: !production,
   minify: production,
   target: 'node22.15.1',
@@ -62,12 +56,38 @@ const options = {
   plugins: [problemMatcherPlugin],
 };
 
+const builds = [
+  {
+    ...common,
+    entryPoints: ['src/extension.ts'],
+    outfile: 'out/extension.js',
+    // `vscode` is provided by the host. `koffi` is a native addon that loads
+    // its own platform-specific binary at run time — bundling it would break
+    // that lookup, so it stays in node_modules and ships alongside the bundle.
+    external: ['vscode', 'koffi'],
+  },
+  {
+    // The GemDB Shell as a standalone program — what `gemdb` with no arguments
+    // runs, and what "Open GemDB Shell" opens a terminal on. Same sources, no
+    // editor: `vscode` is replaced by the environment-backed stand-in, exactly
+    // as vitest.config.mts replaces it for unit tests. `writeCliScripts`
+    // stages this bundle (and koffi) to `<rootPath>/bin`.
+    ...common,
+    entryPoints: ['src/cliMain.ts'],
+    outfile: 'out/gemdb-shell.js',
+    external: ['koffi'],
+    alias: { vscode: './src/cliVscode.ts' },
+  },
+];
+
 if (watch) {
-  const context = await esbuild.context(options);
-  await context.watch();
+  for (const options of builds) {
+    const context = await esbuild.context(options);
+    await context.watch();
+  }
 } else {
   try {
-    await esbuild.build(options);
+    await Promise.all(builds.map((options) => esbuild.build(options)));
   } catch {
     // esbuild has already printed the diagnostics; rethrowing would bury them
     // under a Node stack trace that says nothing extra.

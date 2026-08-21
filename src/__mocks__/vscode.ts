@@ -45,7 +45,7 @@ export const window = {
  */
 export const ProgressLocation = { Notification: 15 } as const;
 
-/** Minimal event plumbing, enough for a Pseudoterminal's emitters. */
+/** Minimal event plumbing, enough for a tree view's change emitter. */
 export class EventEmitter<T> {
   private listeners: Array<(value: T) => void> = [];
   readonly event = (listener: (value: T) => void): { dispose(): void } => {

@@ -3,7 +3,6 @@ import * as vscode from 'vscode';
 import { shellQuote } from './osConfig';
 import { findNetldi, findStone } from './processes';
 import { ensureRunning } from './lifecycle';
-import { PyReplTerminal } from './pyRepl';
 import { cliPath } from './cli';
 
 /**
@@ -33,9 +32,13 @@ export async function openRepl(extensionPath: string): Promise<void> {
 
   replCounter += 1;
   const name = replCounter === 1 ? 'GemDB Shell' : `GemDB Shell ${replCounter}`;
+  // The shell is the `gemdb` command itself, run as this terminal's "shell":
+  // one REPL implementation whether it is opened here or typed in a terminal
+  // by hand. The wrapper sets the whole engine environment, and the process
+  // owns its session — a crash there is a dead tab, not a dead extension host.
   const terminal = vscode.window.createTerminal({
     name,
-    pty: new PyReplTerminal(extensionPath, name),
+    shellPath: cliPath(),
     iconPath: new vscode.ThemeIcon('symbol-namespace'),
   });
   terminal.show();

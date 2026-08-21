@@ -32,8 +32,8 @@ reversible; ask about what is persistent or global.**
   all undone by deleting it. Runs unasked on first activation (`prepare`).
 - Raising shared memory — needs `sudo`, changes the machine for all software,
   survives reboots. **Always prompts.** Do not automate this, whatever else
-  changes. Asked *at the start of first-run setup, concurrently with the
-  download* — not at first use, and not after the download finishes. Two earlier
+  changes. Asked _at the start of first-run setup, concurrently with the
+  download_ — not at first use, and not after the download finishes. Two earlier
   placements were worse: attached to "Open GemDB Shell" it arrived with no
   visible connection to what was clicked; at the end of the download it arrived
   two minutes after the user last thought about GemDB, by which point they have
@@ -64,10 +64,12 @@ checking and asking.
 
 `npm test` is mocked and fast, and covers decisions: the setup lock, the
 `gslist` parser, what `runStop` does when the stone refuses, what the notebook
-kernel does with a batch of cells, and every keystroke the REPL's line editor
-interprets (`lineEditor.ts` is pure for exactly that reason). Anything with a branch worth
-defending belongs here, which is why `runStop` takes its collaborators as a
-`StopWorld` argument rather than reaching for them.
+kernel does with a batch of cells, every keystroke the REPL's line editor
+interprets, and the REPL loop around it — the continuation rule, exit(),
+type-ahead, KeyboardInterrupt (`lineEditor.ts` is pure and `pyRepl.ts` takes
+its collaborators as a `ReplWorld` argument for exactly that reason). Anything
+with a branch worth defending belongs here, which is why `runStop` takes its
+collaborators as a `StopWorld` argument rather than reaching for them.
 
 The kernel is tested through the `executeHandler` the controller publishes —
 the same entry point VS Code calls — by way of a fake controller in
@@ -99,7 +101,7 @@ is what an in-place Grail upgrade will need. Both are covered:
 
 **The Grail payload is a build artifact, not source.** `grail/` is gitignored and
 produced by `scripts/bundle-grail.sh`, which clones Grail, compiles its CPython
-shim against the *pinned* engine version, and stages the result. The shim links
+shim against the _pinned_ engine version, and stages the result. The shim links
 `$GEMSTONE/lib/gciualib.o`, so it is valid only for the platform **and** the
 engine version it was built against — a mismatch installs cleanly and then
 fails at `import`. Changing `PINNED_ENGINE_VERSION` in `src/config.ts` means
@@ -112,34 +114,79 @@ translated, and an `iferr … exit 1` action exits 0 (all measured). So
 the bash wrapper becomes the exit code. Errors there are caught as
 `AbstractException`, not `Error`: Grail's Python exceptions live outside the
 `Error` branch, which is why grail.tpz's own file mode exits 0 on a Python
-error.
+error. `sys.exit(n)` is decoded by that same handler: Grail raises its own
+`SystemExit` (never `ExitClientError` — `except SystemExit` and `finally`
+must keep working), whose argument survives only in the exception's Python
+`args` tuple (the CPython `code` attribute is absent and the `code` instVar
+is never assigned — measured). The driver reads it with
+`___pyAttrLoad___: #'args'` and applies CPython's contract: None → 0 silent,
+int → `n \\ 256` silent, anything else → str to stderr and 1.
 
-**`gemdb` with no arguments is not the GemDB Shell, and does not behave like
-it.** It `input`s Grail's `scripts/grail.tpz`, whose REPL loop wraps evaluation
-in `on: Error do:` — but Grail's Python exceptions descend from
-`AbstractException`, not `Error`, so that handler never fires. Measured on
-3.7.5, through a real pty: a `ZeroDivisionError` prints a Smalltalk stack and
-drops the user at a `topaz 1>` prompt, where the next line typed is answered
-with `unknown command: print(...)`. Ctrl+C does the same by a different route
-(`Break`, error 6003), and Ctrl+D raises `EOF from stdin!` rather than exiting.
-Only `exit()` leaves cleanly. Line editing *is* there and is decent — topaz's
-readline gives history, backspace and Ctrl+U — it is simply not `lineEditor.ts`.
-This is exactly the topaz behaviour `pyRepl.ts` was written to escape; the
-in-editor shell catches all of it because `pythonQueries.ts` catches
-`AbstractException`. Fixing the CLI means fixing the handler in `grail.tpz`
-upstream, or generating our own REPL driver next to `gemdb-run.tpz` instead of
-handing off to Grail's.
+**`gemdb` with no arguments IS the GemDB Shell — one REPL, bundled twice, run
+once.** `out/gemdb-shell.js` is esbuild's second bundle: `cliMain.ts` wrapping
+the same `pyRepl.ts`/`pythonQueries.ts`/`session.ts` the extension uses, with
+the `vscode` module replaced by the environment-backed `cliVscode.ts` (the
+same alias move vitest makes for unit tests). `writeCliScripts` stages the
+bundle and `node_modules/koffi` (this platform's binary only) to
+`<rootPath>/bin`, and the wrapper runs it under the editor's own Node —
+`process.execPath` recorded at generation time, `ELECTRON_RUN_AS_NODE=1`, a
+PATH `node` as fallback. "Open GemDB Shell" opens a terminal on that wrapper,
+so the shell is out of the extension host entirely: a wedged FFI call is a
+dead tab, not a dead window. The reason this exists is measured topaz history:
+Grail's own topaz REPL (`gemdb`'s old no-argument handoff) wraps evaluation in
+`on: Error do:`, and Grail's Python exceptions descend from
+`AbstractException`, not `Error` — so a `ZeroDivisionError` printed a
+Smalltalk stack and stranded the user at `topaz 1>`, Ctrl+C did the same via
+`Break` (6003), and Ctrl+D raised `EOF from stdin!`. Do not hand the
+no-argument mode back to `grail.tpz`. The shell is exercised end to end —
+through a real pty, `expect(1)` — in `src/__integration__/repl.test.ts`.
 
-**`print()` reaches the user only because the query layer captures it.** Grail
-routes `print()` through the Smalltalk global `Transcript`; over an RPC session
-the gem's stdout is a log file, so uncaptured output silently vanishes — that
-was a live notebook bug once. `buildQuery` in `pythonQueries.ts` redirects
-`Transcript` to a stream per evaluation, restores it in an `ensure:`, and ships
-output and result back framed by a unit separator. Anything new that evaluates
-Python should go through that layer, not `execute` directly.
+**`input()` is a round trip through a ClientForwarder, and the traps are
+measured.** Grail's input() consults a per-session stdin provider
+(`builtins class >> stdinProvider:`); `session.ts` installs a ClientForwarder
+there at first evaluation, catches its send as GCI error 2336, and resumes with
+`GciTsContinueWith` — a line (`GciTsNewUtf8String` with convertToUnicode; a raw
+Utf8 reply is byte-immutable and dies on `replaceFrom:to:with:startingAt:`),
+nil for EOF (→ EOFError), or the Symbol `#interrupt` (→ KeyboardInterrupt _at
+the call_, catchable by the user's try/except). The interrupt must travel
+in-band because both client-side routes fail: continuing with a GCI error
+restarts the signalling frame, which does not search for handlers, and a soft
+break queued while the gem waits in the forwarder is discarded on resume.
+Gem-side, ClientForwarder is a ROOT class — even `isNil` forwards — so Grail
+compares it with `==` and boxes it in an Array inside SessionTemps (whose
+`at:put:` itself sends to the value). `interrupt()` during a pending read
+resolves the read as `#interrupt` instead of sending a break the gem cannot
+receive. All of it is exercised end to end in `src/__integration__/repl.test.ts`
+(shell, via a pty) and `cli.test.ts` (file mode, which needs none of this —
+a linked gem's GsFile stdin IS the process's stdin).
+
+**`print()` reaches the user only because the query layer captures it — and it
+streams when the caller can take it.** Grail routes `print()` through the
+Smalltalk global `Transcript`; over an RPC session the gem's stdout is a log
+file, so uncaptured output silently vanishes — that was a live notebook bug
+once. `buildQuery` in `pythonQueries.ts` redirects `Transcript` per evaluation
+and restores it in an `ensure:`. Two shapes: without `onOutput` it is a
+WriteStream, shipped back with the result framed by a unit separator; with
+`onOutput` it is a `ClientForwarder`, so each print surfaces mid-execution as
+error 2336 (one `nextPutAll:` per print — Grail builds the whole line first)
+and `session.ts` hands the text to the sink and resumes with the forwarder
+itself (a stream returns self). The streaming `ensure:` must send _nothing_ to
+the forwarder. Interrupting a print loop needed its own mechanism, all of it
+measured: a break that arrives while the gem is idle in a forwarder send is
+discarded on resume, a print loop is idle in one most of the time, re-sent
+breaks almost never hit the microseconds of execution between sends, and
+continuing the send with an error does NOT terminate anything — it re-signals
+the SAME send. What works is `GciTsClearStack` on the suspended send's
+GsProcess: it ends the call, runs the unwind blocks (so the `ensure:` restores
+Transcript), and leaves the session usable. So `interrupt()` sends one
+immediate break (for a gem that is executing) and sets `breakPending`; the
+executeAsync loop clears the stack at the next forwarder stop and throws
+`ExecutionInterrupted`, which the query layer reports as
+`Error: KeyboardInterrupt - `. Anything new that evaluates Python should go
+through that layer, not `execute` directly.
 
 **Grail must be staged to a stable directory.** `installGrail` records Grail's
-own directory *inside the database*, and every session resolves modules relative
+own directory _inside the database_, and every session resolves modules relative
 to it. The extension directory is versioned (`gemdb.gemdb-<version>/`), so it
 moves on every update; that is why `stageGrail` copies the payload to
 `<rootPath>/grail` first and points `GRAIL_DIR` there.
@@ -149,37 +196,40 @@ moves on every update; that is why `stageGrail` copies the payload to
 The interactive Python prompt is **GemDB Shell** everywhere a user can see it:
 the command title, the terminal tab, the walkthrough, the README. The internal
 names are unchanged and deliberately so — `gemdb.openRepl`, `repl.ts`,
-`pyRepl.ts`, `PyReplTerminal` — because the command id is the one part a user
-can bind a key to, and renaming it would break those bindings for no gain. When
-adding a user-visible string, write "GemDB Shell"; when naming code, `repl` is
-still the house term.
+`pyRepl.ts` — because the command id is the one part a user can bind a key to,
+and renaming it would break those bindings for no gain. When adding a
+user-visible string, write "GemDB Shell"; when naming code, `repl` is still
+the house term.
 
-The `gemdb` CLI's no-argument mode is *not* the GemDB Shell. It hands off to
-Grail's own topaz REPL, which behaves differently — see the note below.
+The `gemdb` CLI's no-argument mode _is_ the GemDB Shell — the identical
+program, since "Open GemDB Shell" just runs the wrapper in a terminal. See the
+note below for how the bundle is built and staged.
 
 ## Layout
 
-| File | What it owns |
-| --- | --- |
-| `config.ts` | the pinned engine version, the fixed names, the root path |
-| `paths.ts` | where everything lives under the root path |
-| `engine.ts` | downloading and extracting the database engine |
-| `database.ts` | creating the one database |
-| `osConfig.ts` | shared memory and RemoveIPC — the `sudo` prompts |
-| `processes.ts` | `gslist` parsing, start/stop, and the environment sessions inherit |
-| `grail.ts` | staging and installing the Grail payload |
-| `autoStart.ts` | whether the database may start unasked, and the record of a deliberate stop |
-| `lifecycle.ts` | `prepare` (inert, unattended) and `ensureRunning` (prompts, starts) |
-| `lock.ts` | the cross-window setup lock — activation runs in every window |
-| `statusBar.ts` | the always-visible "a database is running" indicator |
-| `session.ts` | the single GCI session |
-| `pythonQueries.ts` | the Smalltalk that runs Python and reports its errors |
-| `notebook.ts` | the notebook kernel — cells through the shared session |
-| `pyRepl.ts`, `lineEditor.ts` | the GemDB Shell: a pseudoterminal per terminal-session, and its line editing |
-| `repl.ts` | opening GemDB Shell terminals; running a `.py` file via the CLI |
-| `cli.ts` | generates `<rootPath>/bin/gemdb` — the CPython-like shell command |
-| `statusView.ts` | the one tree view |
-| `gci/` | **vendored from Jasper — do not edit** |
+| File                         | What it owns                                                                             |
+| ---------------------------- | ---------------------------------------------------------------------------------------- |
+| `config.ts`                  | the pinned engine version, the fixed names, the root path                                |
+| `paths.ts`                   | where everything lives under the root path                                               |
+| `engine.ts`                  | downloading and extracting the database engine                                           |
+| `database.ts`                | creating the one database                                                                |
+| `osConfig.ts`                | shared memory and RemoveIPC — the `sudo` prompts                                         |
+| `processes.ts`               | `gslist` parsing, start/stop, and the environment sessions inherit                       |
+| `grail.ts`                   | staging and installing the Grail payload                                                 |
+| `autoStart.ts`               | whether the database may start unasked, and the record of a deliberate stop              |
+| `lifecycle.ts`               | `prepare` (inert, unattended) and `ensureRunning` (prompts, starts)                      |
+| `lock.ts`                    | the cross-window setup lock — activation runs in every window                            |
+| `statusBar.ts`               | the always-visible "a database is running" indicator                                     |
+| `session.ts`                 | the single GCI session                                                                   |
+| `pythonQueries.ts`           | the Smalltalk that runs Python and reports its errors                                    |
+| `notebook.ts`                | the notebook kernel — cells through the shared session                                   |
+| `pyRepl.ts`, `lineEditor.ts` | the GemDB Shell: the REPL loop and its line editing, both host-free                      |
+| `cliMain.ts`                 | the shell as a process — a raw tty wired to `pyRepl.ts`; bundled to `out/gemdb-shell.js` |
+| `cliVscode.ts`               | the environment-backed stand-in for `vscode` in that bundle                              |
+| `repl.ts`                    | opening GemDB Shell terminals (on the CLI); running a `.py` file via the CLI             |
+| `cli.ts`                     | generates `<rootPath>/bin/gemdb` and stages the shell bundle beside it                   |
+| `statusView.ts`              | the one tree view                                                                        |
+| `gci/`                       | **vendored from Jasper — do not edit**                                                   |
 
 `src/gci/` is copied byte-for-byte from Jasper's `client/src/gciLibrary.ts`,
 `gciConstants.ts`, and `gciLibraryError.ts` so upstream fixes can be pulled in
@@ -207,7 +257,7 @@ without a matching shim installs cleanly and then fails at the first `import`.
 
 Everything else in `platform.ts` — `platformKey`, `archiveExtension`,
 `sharedLibraryExtension`, `libraryPathVariable` — still spells Linux and Intel
-macOS correctly. That is deliberate: those platforms are a *build* away, not a
+macOS correctly. That is deliberate: those platforms are a _build_ away, not a
 port, so do not strip their branches to match the gate.
 
 Adding a platform is two steps in this order: run `bundle:grail` there so its

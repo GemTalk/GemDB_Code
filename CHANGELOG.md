@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`input()` works everywhere.** A script run with `gemdb file.py` (or `-c`,
+  or `-m`) reads the process's real standard input, exactly like `python3`. In
+  the GemDB Shell, `input()` reads its own prompt line with the same line
+  editing as the `>>>` prompt — Ctrl+C answers `KeyboardInterrupt` at the
+  call (your `try/except` sees it), Ctrl+D answers `EOFError`, and anything
+  typed ahead of the question becomes the answer. In a notebook, `input()`
+  opens an input box; Escape or the cell's interrupt button cancels the read
+  as `KeyboardInterrupt`. Built on a per-session stdin hook added to the
+  Python execution engine.
+- **`print()` streams.** Output reaches the GemDB Shell and the notebook cell
+  as the code prints it, instead of arriving in one block when the evaluation
+  ends — a long-running loop now shows its progress, and Ctrl+C still
+  interrupts it mid-flow. (Scripts run with `gemdb file.py` always streamed;
+  their output is the process's own stdout.)
+- **`sys.exit(n)` exits with `n`.** Previously any `sys.exit` exited 1. The
+  full CPython contract applies: `sys.exit()` and `sys.exit(None)` exit 0
+  silently, an integer exits with that status (truncated to 0–255, so `-1`
+  is 255), and anything else prints to stderr and exits 1.
+
+### Changed
+
+- **`gemdb` with no arguments now opens the GemDB Shell** — the same Python
+  prompt the editor opens, instead of handing off to the Python
+  implementation's own topaz prompt. Ctrl+C interrupts the running code and
+  reports `KeyboardInterrupt`, `exit()` and Ctrl+D leave cleanly, and an
+  uncaught Python error returns you to `>>>` instead of stranding you at
+  `topaz 1>`. If the database is not running, the shell starts it.
+- **"Open GemDB Shell" now runs that same command in a regular terminal.** One
+  REPL implementation everywhere, and every shell is its own process — a crash
+  or a stuck call in one can no longer affect the editor. One visible
+  consequence: stopping the database while a shell is open now reports the
+  shell's live session and offers to disconnect it, rather than logging it out
+  silently.
+
 ## [1.0.0] - 2026-08-20
 
 First public release. GemDB Code installs a database that runs Python, and then

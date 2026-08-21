@@ -19,7 +19,7 @@ import { configureSharedMemory, ensureOsConfigured, isSharedMemoryConfigured } f
 import { isSupportedPlatform, setContext } from './platform';
 import { isRunning } from './processes';
 import { openRepl, runFile } from './repl';
-import { logout, logoutAll } from './session';
+import { logout, logoutAll, setInputHandler } from './session';
 import { GemDbStatusBar } from './statusBar';
 import { StatusViewProvider } from './statusView';
 
@@ -41,6 +41,28 @@ export function activate(context: vscode.ExtensionContext): void {
   // kernel picker explains itself, rather than silently offering nothing.
   const notebooks = new GemDbNotebookController(extensionPath);
   context.subscriptions.push(notebooks);
+
+  // Python's input() in a notebook cell becomes an input box — the same move
+  // Jupyter makes for stdin requests. Escape cancels the read, and the cell's
+  // interrupt button closes the box; either way input() raises
+  // KeyboardInterrupt in the cell, which is what a cancelled read means.
+  setInputHandler(async (request) => {
+    const cancel = new vscode.CancellationTokenSource();
+    request.onCancel(() => cancel.cancel());
+    try {
+      const line = await vscode.window.showInputBox(
+        {
+          title: 'Python is waiting for input()',
+          prompt: request.prompt || undefined,
+          ignoreFocusOut: true,
+        },
+        cancel.token,
+      );
+      return line === undefined ? { interrupt: true } : { line };
+    } finally {
+      cancel.dispose();
+    }
+  });
 
   // Every command that changes state refreshes the view afterwards, so the
   // status readout can never disagree with what just happened.
