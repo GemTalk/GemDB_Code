@@ -151,32 +151,35 @@ under the same `gemtalksystems` publisher as Jasper.
 2. `npm run lint && npm run format:check && npm run typecheck && npm run typecheck:strict && npm test`
 3. Commit the version + changelog changes (e.g. `Release X.Y.Z: <summary>`).
 4. `git tag -a vX.Y.Z -m "Release X.Y.Z"` — annotated tag, on the release commit.
-5. Push the release commit and let CI build the three packages. Each
-   `integration` leg uploads a `vsix-<target>` artifact containing that
-   platform's `.vsix`, already checked by `check-vsix.sh`. This is the step that
-   replaced "rebuild the artifacts by hand": your Mac cannot compile the Linux
-   shims, so the Linux packages have to come from Linux machines, and CI is
-   where those are.
-6. **Install the `.vsix` for your own platform and run it once** before
+5. `git push origin main` and let CI build the three packages. Each
+   `integration` leg packages its own target, checks it, and uploads it as a
+   `vsix-<target>` artifact. **No machine can build all three itself** — a
+   shim only compiles on the platform it targets — so this is where the release
+   artifacts come from, not from a local rebuild.
+6. `npm run release:fetch` — downloads that run's three packages into `dist/`
+   and re-runs `check-vsix.sh` on each. With no argument it insists on a
+   successful run for **your HEAD commit** and refuses artifacts whose version
+   disagrees with `package.json`; publishing an older run's packages under a new
+   version number is the mistake it exists to catch. Pass a run id to override.
+7. **Install `dist/gemdb-darwin-arm64-X.Y.Z.vsix` and run it once** before
    publishing. The automated check proves the payload is present, not that it
-   works: a broken release here is a broken database rather than a broken
-   button, and only running it exercises the shim against the engine. (For the
-   platforms you cannot run, CI's integration suite did exactly that — started
-   a real database and imported Python through the shim it just built — which
-   is the closest thing to a first run that a machine you do not own can give
-   you.)
-7. Publish each target. Download the three artifacts, or rebuild locally with
-   `npm run package:all` if you have all three shims staged, and then:
+   works, and only running it exercises the shim against the engine. For the
+   platforms you cannot run, CI's integration suite did exactly that — started a
+   real database and imported Python through the shim it had just compiled —
+   which is the closest thing to a first run a machine you do not own can give
+   you.
+8. `npm run publish` — `vsce` then `ovsx`, both publishing the **downloaded**
+   packages (`--packagePath dist/*.vsix`), so what reaches the Marketplace is
+   byte-for-byte what CI tested. Both use `--skip-duplicate`, so if the Azure
+   DevOps Gallery API times out mid-way (it happens), simply re-run: the targets
+   that already landed are skipped instead of failing the command.
+9. `git push origin vX.Y.Z` — the tag does not piggyback on the branch push.
 
-   ```sh
-   npm run publish        # vsce for all three targets, then ovsx for all three
-   ```
-
-   If `vsce publish` times out on the Azure DevOps Gallery API (it happens),
-   re-run the individual target with `npx @vscode/vsce publish --target <target>`
-   — don't re-run `npm run publish`, since the targets that already went through
-   will fail with "already exists."
-8. `git push origin vX.Y.Z` — the tag does not piggyback on the branch push.
+> **Tokens.** `vsce` reads `VSCE_PAT` and `ovsx` reads `OVSX_PAT`. Prefer
+> supplying them for the one command that needs them rather than exporting them
+> from a shell profile: `vsce`'s own `--help` prints the value of `VSCE_PAT` as
+> the default for `--pat`, so an exported token ends up in help output, terminal
+> scrollback, and anything capturing it.
 
 ### Credentials
 
@@ -190,6 +193,18 @@ npx ovsx create-namespace gemtalksystems -p <token>  # Open VSX (one-time; alrea
 `ovsx publish` reads `OVSX_PAT` from the environment (or a stored token). The
 Marketplace token is an Azure DevOps PAT with **Marketplace → Manage** scope,
 issued from the organization that owns the publisher.
+
+Keep both out of your shell profile. `vsce login` stores the Marketplace token
+in the OS keychain, which is the safer place for it, and a token needed only for
+`ovsx` can be supplied for that one command:
+
+```sh
+OVSX_PAT="$(security find-generic-password -s ovsx-pat -w)" npm run publish:ovsx
+```
+
+An exported `VSCE_PAT` leaks in a way that is easy to miss: `vsce`'s `--help`
+renders it as the default value of `--pat`, so it appears in help output and
+terminal scrollback, and from there in anything that captures them.
 
 ### What ships in the `.vsix`
 

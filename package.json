@@ -288,9 +288,11 @@
     "//package": "Platform-specific builds: each .vsix carries the CPython shim for one platform, so the Marketplace offers each machine only the build that can work on it. `package` builds the target matching this machine; `package:all` needs every platform's shim staged in grail/prebuilt (see CONTRIBUTING.md).",
     "package": "scripts/package.sh",
     "package:all": "scripts/package.sh --all",
+    "//publish": "Publishes the packages CI built and tested, collected into dist/ by `npm run release:fetch`. Never repackages: no single machine can build all three shims, so a local rebuild would be a different artifact from the one that passed.",
+    "release:fetch": "scripts/fetch-vsix.sh",
     "publish": "npm run publish:vsce && npm run publish:ovsx",
-    "publish:vsce": "vsce publish --target darwin-arm64 && vsce publish --target linux-x64 && vsce publish --target linux-arm64",
-    "publish:ovsx": "ovsx publish --target darwin-arm64 && ovsx publish --target linux-x64 && ovsx publish --target linux-arm64"
+    "publish:vsce": "vsce publish --skip-duplicate --packagePath dist/*.vsix",
+    "publish:ovsx": "ovsx publish --skip-duplicate --packagePath dist/*.vsix"
   },
   "dependencies": {
     "koffi": "^2.15.1"

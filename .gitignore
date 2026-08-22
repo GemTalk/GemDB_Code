@@ -11,3 +11,7 @@ grail/
 
 # The preloaded extent is a build artifact of scripts/bundle-extent.sh.
 extent/
+
+# Release packages downloaded from CI by scripts/fetch-vsix.sh. Built
+# elsewhere, published from here, kept nowhere.
+dist/
