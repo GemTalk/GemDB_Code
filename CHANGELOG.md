@@ -7,8 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-21
+
+Linux joins macOS, and the Python you can write gets meaningfully bigger:
+`input()`, streaming `print()`, real exit codes, and one GemDB Shell everywhere.
+
 ### Added
 
+- **Linux, on x86-64 and ARM.** GemDB now ships three platform-specific
+  packages — `darwin-arm64`, `linux-x64`, `linux-arm64` — and the Marketplace
+  offers each machine only the one that can run there. Just one thing was ever
+  platform-specific (the Python runtime's compiled shim); everything else
+  already handled Linux. Each package is now built *and* tested on a runner of
+  its own architecture, against a real database, which is what makes the
+  support honest rather than assumed.
+- **`import gemdb` works in a fresh database.** The `gemdb` module is deployed
+  into the shipped extent, so it is there the moment the files are on disk
+  rather than being cold-imported by each session.
 - **`input()` works everywhere.** A script run with `gemdb file.py` (or `-c`,
   or `-m`) reads the process's real standard input, exactly like `python3`. In
   the GemDB Shell, `input()` reads its own prompt line with the same line
@@ -42,6 +57,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consequence: stopping the database while a shell is open now reports the
   shell's live session and offers to disconnect it, rather than logging it out
   silently.
+
+### Fixed
+
+- **`gemdb.transaction()` now reports only your own changes.** Capturing
+  `print()` used to reassign a Smalltalk global, which left every evaluation's
+  session with uncommitted writes of its own — so in a notebook,
+  `with gemdb.transaction():` could never have worked. Output capture is now
+  session-local and leaves nothing behind.
+
+### Known limitations
+
+- **Windows and Intel macOS are not supported.** Windows needs WSL and is
+  further out. Intel macOS is a build away rather than a port — the code
+  handles it, but a shim can only be compiled on the platform it targets, and
+  Apple Silicon hardware and CI runners cannot produce one nobody has run.
 
 ## [1.0.0] - 2026-08-20
 
@@ -104,5 +134,6 @@ gets out of the way.
 - **`sys.exit(n)` exits 1 rather than `n`**, and **`input()` is not yet
   supported**. Both are upstream in Grail.
 
-[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/GemTalk/GemDB_Code/releases/tag/v1.0.0

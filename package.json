@@ -2,7 +2,7 @@
   "name": "gemdb",
   "displayName": "GemDB Code",
   "description": "Python with builtin transactional persistence (using true ACID semantics). When you have critical, complex data that must be consistent, use GemDB.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publisher": "gemtalksystems",
   "license": "MIT",
   "icon": "resources/icon.png",
