@@ -105,23 +105,32 @@ do not collide.
 
 ## Platform support
 
-**This release runs on macOS with Apple Silicon (M1 and later).** Use the
-Apple Silicon build of VS Code; an Intel build running under Rosetta is refused,
-because its extension host is an x86_64 process.
+**This release runs on macOS with Apple Silicon (M1 and later) and on Linux,
+x86-64 or ARM.** On a Mac, use the Apple Silicon build of VS Code; an Intel
+build running under Rosetta is refused, because its extension host is an x86_64
+process.
 
 | Platform | Status |
 | --- | --- |
 | macOS, Apple Silicon | Supported |
-| macOS, Intel | Planned |
-| Linux, x86-64 and ARM | Planned |
+| Linux, x86-64 | Supported |
+| Linux, ARM64 | Supported |
+| macOS, Intel | Not planned — see below |
 | Windows | Further out — see below |
 
 The limit is one specific thing, not a general lack of portability: GemDB ships
 the Python runtime with a native library compiled against a specific database
 engine version *on* the platform it targets. A build missing the right one would
 install perfectly and then fail at your first `import`, so the extension is
-published per-platform and simply is not offered where it cannot work. Each
-additional platform is a build, not a port — the code already handles them.
+published per-platform and simply is not offered where it cannot work. Every
+supported platform above is built and tested on a machine of that architecture
+on each change.
+
+Intel Macs are the gap, and an honest one: the database engine is published for
+them, and the code handles them, but nobody here has an Intel Mac to build and
+test that library on. If you want one, say so in an
+[issue](https://github.com/GemTalk/GemDB_Code/issues) — it is a build we do not
+currently have a machine for, not a port.
 
 Windows is the exception that is genuinely further out. The engine and GemDB's
 native components both need a Unix environment, so reaching Windows means

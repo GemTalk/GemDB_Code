@@ -1,0 +1,330 @@
+name: CI
+
+# Two jobs, split on what they need rather than on what they test.
+#
+# `checks` is the half that needs nothing: lint, types, and the mocked unit
+# suite, which is host-free by design (CLAUDE.md, "The two test suites") and so
+# runs on Linux in a couple of minutes. Running it there is not a claim that
+# GemDB supports Linux — 1.x is Apple Silicon only — it is what keeps the fast
+# gate fast, and it holds the unit suite to being genuinely host-free.
+#
+# `integration` is the real thing, and the only place the product is actually
+# exercised. It runs once per shipped target — darwin-arm64, linux-x64 and
+# linux-arm64 — on a runner of that architecture, because the CPython shim it
+# compiles is valid only for the platform it was built on. Each leg downloads
+# the pinned engine, raises shared memory, compiles the shim, builds the
+# shipped extent, runs the suite that starts a real database, then packages
+# that target's .vsix and checks what is inside it. That last step is the one
+# release risk nothing else catches — a .vsix packages cleanly from a tree
+# whose build artifacts are missing, stale, or built for another platform, and
+# then installs fine and fails at the first `import`.
+#
+# The three legs together are also how a release gets built: each uploads its
+# .vsix, so publishing does not need three developer machines.
+#
+# What is deliberately NOT here: no @vscode/test-electron leg (see CLAUDE.md),
+# and no publish. Releases stay a deliberate act from a developer's machine,
+# per CONTRIBUTING.md.
+
+# Triggers. `pull_request` is the primary gate and the only trigger that gives
+# fork PRs any checks at all. `push` is narrowed to main so a commit that lands
+# without a PR — which this repo's history has — is still tested, without
+# double-running every PR branch (a push and a pull_request for the same commit
+# arrive on different refs, so no concurrency key can dedupe them).
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      grail-ref:
+        description: 'Grail ref to bundle (blank = its default branch)'
+        required: false
+        type: string
+
+concurrency:
+  # Per-ref: a new commit on the same PR cancels the older in-flight run. Merge
+  # queue entries each get their own ref, so they never cancel one another.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# An explicit block instead of the default GITHUB_TOKEN scope. Nothing here
+# needs more, and nothing here needs a secret at all.
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Lint, types, unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Actions are pinned to a commit SHA rather than a mutable tag, so a
+      # compromised or retagged release cannot change what runs here.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The token has no business outliving the checkout step.
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+      - run: npm ci
+
+      # The same four commands CLAUDE.md and CONTRIBUTING.md name as the gate
+      # before calling something done, in the same order, so a failure here
+      # reads the same as a failure locally.
+      - name: Format check
+        run: npm run format:check
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Typecheck (strict)
+        run: npm run typecheck:strict
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Bundle
+        run: npm run bundle
+
+      # Packaging has its own failure mode that lint, types and tests cannot
+      # see: vsce walks the production dependency tree, and an unresolvable
+      # edge aborts the package with everything else still green. This calls
+      # vsce directly rather than `npm run package`, which now also verifies
+      # the .vsix contents — a check that cannot pass here, since this runner
+      # has none of the gitignored artifacts. What each package CONTAINS is
+      # checked in the integration job, on the platform that can build them.
+      - name: Verify the packaging path
+        run: npx --no-install vsce package --target darwin-arm64 --out "$RUNNER_TEMP/packaging-smoke.vsix"
+
+  integration:
+    name: Integration (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      # One platform's failure must not cancel the others: when a Grail or
+      # engine change breaks a build, which platforms it breaks is the
+      # interesting part.
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            runner: macos-15
+            platform-key: arm64.Darwin
+            archive-ext: dmg
+            lib-ext: dylib
+            uname-m: arm64
+          - target: linux-x64
+            runner: ubuntu-latest
+            platform-key: x86_64.Linux
+            archive-ext: zip
+            lib-ext: so
+            uname-m: x86_64
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            platform-key: arm64.Linux
+            archive-ext: zip
+            lib-ext: so
+            uname-m: aarch64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+
+      # Each leg compiles the shim it ships, so the runner's architecture
+      # decides what the payload is valid for. A runner image that quietly
+      # changed architecture would produce a green run and a broken artifact
+      # for everyone on that target.
+      - name: Confirm the runner matches the target
+        env:
+          EXPECTED: ${{ matrix.uname-m }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          arch="$(uname -m)"
+          if [ "$arch" != "$EXPECTED" ]; then
+            echo "This leg builds the $TARGET payload and expects $EXPECTED, but the runner is $arch." >&2
+            exit 1
+          fi
+          echo "$TARGET on $(uname -s) $arch"
+
+      # `expect(1)` drives the GemDB Shell through a real pty in
+      # repl.test.ts. macOS ships it; Ubuntu images do not.
+      - name: Install expect
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends expect
+
+      - name: Read the pinned engine version
+        id: engine
+        run: |
+          version="$(sed -nE "s/^export const PINNED_ENGINE_VERSION = '(.+)';\$/\1/p" src/config.ts)"
+          if [ -z "$version" ]; then
+            echo "Could not read PINNED_ENGINE_VERSION from src/config.ts" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Pinned engine version: $version"
+
+      # Cache the downloaded archive, not the extracted engine: a few hundred
+      # MB rather than the best part of a gigabyte, and
+      # scripts/install-engine.sh reuses an archive it finds instead of
+      # downloading again. Keyed by version AND platform, so each target keeps
+      # its own — and so GemTalk's download host sees one request per engine
+      # per platform, not one per run.
+      - name: Cache the engine archive
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/GemDB/GemStone64Bit${{ steps.engine.outputs.version }}-${{ matrix.platform-key }}.${{ matrix.archive-ext }}
+          key: engine-archive-${{ steps.engine.outputs.version }}-${{ matrix.platform-key }}
+
+      - run: npm ci
+
+      # Not just for the packaging step at the end: repl.test.ts drives the
+      # GemDB Shell as a real process through a pty, so `out/gemdb-shell.js`
+      # has to exist before the suite runs or those tests skip themselves.
+      - name: Bundle
+        run: npm run bundle
+
+      - name: Install the database engine
+        run: scripts/install-engine.sh
+
+      # The one thing the extension refuses to automate, because it needs sudo
+      # and changes the machine for all software (CLAUDE.md, "The automation
+      # line"). A CI runner is the one machine where that is uncontroversial:
+      # it is thrown away afterwards. Running the shipped scripts rather than a
+      # copy of their sysctl values means CI exercises what a user is asked to
+      # run with sudo — including, on Linux, the RemoveIPC setting that decides
+      # whether a database survives its owner logging out.
+      - name: Raise shared memory (macOS)
+        if: runner.os == 'macOS'
+        run: sudo resources/setSharedMemoryDarwin.sh
+      - name: Raise shared memory and keep IPC (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo resources/setSharedMemoryLinux.sh
+          sudo resources/setRemoveIPC.sh
+
+      # Clones Grail's default branch unless a ref is given, so this leg is
+      # also the early warning for a Grail change that breaks GemDB's
+      # installer: bundle-grail.sh verifies every file the topaz scripts read.
+      # The dispatch input exists for the reverse case — proving a GemDB branch
+      # against an unmerged Grail branch.
+      - name: Build the Grail payload
+        env:
+          # Bound to an env var rather than interpolated into the script, so a
+          # ref name cannot inject shell.
+          GRAIL_REF: ${{ inputs.grail-ref }}
+        run: npm run bundle:grail
+
+      - name: Build the shipped extent
+        run: npm run bundle:extent
+
+      # The integration suite SKIPS itself when the engine, the payload or the
+      # extent is absent — which is right locally (a fresh checkout still has a
+      # green suite) and dangerous here, where it would report success for a
+      # suite that ran nothing. Assert the preconditions instead of trusting
+      # the exit code.
+      - name: Confirm the suite has something to run against
+        env:
+          ENGINE_VERSION: ${{ steps.engine.outputs.version }}
+          PLATFORM_KEY: ${{ matrix.platform-key }}
+          LIB_EXT: ${{ matrix.lib-ext }}
+        run: |
+          engine="$HOME/GemDB/GemStone64Bit${ENGINE_VERSION}-${PLATFORM_KEY}"
+          fail=0
+          for path in \
+            "$engine/sys/stoned" \
+            "grail/GRAIL_VERSION" \
+            "grail/prebuilt/${PLATFORM_KEY}/libcpython_ua.${LIB_EXT}" \
+            "extent/gemdb.dbf" \
+            "out/gemdb-shell.js"
+          do
+            if [ ! -e "$path" ]; then
+              echo "MISSING: $path" >&2
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "The integration suite would skip itself rather than fail. Refusing to report a green run." >&2
+            exit 1
+          fi
+          echo "Engine, Grail payload and shipped extent are all present."
+
+      - name: Integration tests
+        run: npm run test:integration
+
+      # Now that the artifacts exist, package this target for real and check
+      # what is inside (package.sh does both, and refuses to leave a .vsix
+      # unchecked). This is what CONTRIBUTING.md's release steps could not lean
+      # on before: a missing prebuilt/ directory, a stale extent, or a koffi
+      # filter that stopped working. It matters more per-target than it did on
+      # one platform — `vsce package --target linux-x64` succeeds just as
+      # happily from a tree that has never built a Linux shim.
+      - name: Package and verify the .vsix
+        env:
+          TARGET: ${{ matrix.target }}
+        run: scripts/package.sh "$TARGET"
+
+      # The shim, the extent and the bundles are what a release ships, and this
+      # is the machine that can build this target's shim. Keeping the .vsix
+      # means a release can be assembled from CI artifacts rather than from
+      # three developer machines.
+      - name: Upload the .vsix
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vsix-${{ matrix.target }}
+          path: '*.vsix'
+          if-no-files-found: error
+          retention-days: 7
+
+      # Database logs live under the fixture's temporary root, which is thrown
+      # away with the runner — so collect them while they exist. Only on
+      # failure, and only the logs: the extents beside them are hundreds of
+      # megabytes.
+      - name: Collect database logs
+        if: failure()
+        run: |
+          mkdir -p ci-logs
+          n=0
+          while IFS= read -r -d '' log; do
+            n=$((n + 1))
+            cp "$log" "ci-logs/$(printf '%02d' "$n")-$(basename "$log")" 2>/dev/null || true
+          done < <(find "${TMPDIR:-/tmp}" -maxdepth 4 \
+            \( -name '*.log' -o -name '*.out' \) \
+            \( -path '*gemdb-it-*' -o -path '*gemdb-extent-*' \) -print0 2>/dev/null)
+          echo "Collected $n log file(s)."
+      - name: Upload database logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          # Per-target: matrix legs must not collide on an artifact name.
+          name: database-logs-${{ matrix.target }}
+          path: ci-logs
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # One stable check for branch protection to require. The job names above can
+  # change; this one is the contract. `if: always()` is essential — without it
+  # this job is SKIPPED when a dependency fails, no conclusion is ever
+  # reported, and a required check waits forever.
+  ci-complete:
+    name: ci-complete
+    if: always()
+    needs: [checks, integration]
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Verify all CI jobs succeeded
+        run: |
+          echo "checks=${{ needs.checks.result }}"
+          echo "integration=${{ needs.integration.result }}"
+          if [ "${{ needs.checks.result }}" != "success" ] ||
+             [ "${{ needs.integration.result }}" != "success" ]; then
+            exit 1
+          fi
