@@ -39,14 +39,24 @@ node_modules/koffi/doc/**
 node_modules/koffi/CHANGELOG.md
 node_modules/koffi/README.md
 
-# koffi ships a prebuilt binary for all 18 platforms it supports, ~26 MB of
-# which this build can never load. Its index.js is a `switch` over the detected
-# `${platform}_${arch}` triplet with a static require per case, so only the
-# matching file is ever touched and the absent ones cost nothing.
+# koffi ships a prebuilt binary for all 18 platforms it supports, ~25 MB of
+# which a given build can never load. Its index.js is a `switch` over the
+# detected `${platform}_${arch}` triplet with a static require per case, so only
+# the matching file is ever touched and the absent ones cost nothing.
 #
-# This is tied to `--target darwin-arm64` in package.json and to
-# `isSupportedPlatform()`. Adding a platform means adding its koffi binary back
-# here too, or the extension will load on that platform and then fail to find
-# its FFI module.
+# Kept: the three platforms `isSupportedPlatform()` admits, ~4.3 MB in total.
+# Ideally each per-target `.vsix` would carry only its own (1.2-1.6 MB), but
+# `.vscodeignore` is one static file and vsce has no per-target ignore — so
+# rather than generating this file per build, every target carries all three and
+# wastes about 3 MB. That is a deliberate trade of a few megabytes for one
+# fewer generated build input.
+#
+# This list is tied to `isSupportedPlatform()` in src/platform.ts and to the
+# `package:*` targets in package.json. Adding a platform means adding its koffi
+# binary here too, or the extension will load there and then fail to find its
+# FFI module. `scripts/check-vsix.sh` asserts the target's own binary is
+# present.
 node_modules/koffi/build/koffi/**
 !node_modules/koffi/build/koffi/darwin_arm64/**
+!node_modules/koffi/build/koffi/linux_x64/**
+!node_modules/koffi/build/koffi/linux_arm64/**

@@ -96,11 +96,14 @@ Download and extraction stay out of both: 210 MB to test an HTTP range request.
 lint, both typechecks, the unit suite and the packaging path on Linux in a
 couple of minutes — the unit suite is host-free by design, and running it
 somewhere that cannot possibly host a database is what keeps it that way.
-`integration` is a darwin-arm64 runner doing the whole thing for real:
-`install-engine.sh`, `setSharedMemoryDarwin.sh` under `sudo` (a throwaway
-machine is the one place raising shared memory unattended is uncontroversial),
-`bundle:grail`, `bundle:extent`, `test:integration`, then `package` and
-`check-vsix.sh`. Require `ci-complete` in branch protection, not the job names.
+`integration` runs the whole thing for real, once per shipped target on a
+runner of that architecture: `install-engine.sh`, the shared-memory script for
+that OS under `sudo` (a throwaway machine is the one place raising shared
+memory unattended is uncontroversial), `bundle:grail`, `bundle:extent`,
+`test:integration`, then `package.sh` for that target — which packages and
+checks in one step. Each leg uploads its `.vsix`, so a release can be assembled
+from CI rather than from three machines. Require `ci-complete` in branch
+protection, not the job names: it fans the matrix in to one check.
 
 Two things about it are load-bearing:
 
@@ -286,22 +289,35 @@ the directories nor the process names collide with Jasper's defaults.
 
 ## Platform support
 
-**macOS on Apple Silicon, and nothing else in 1.x.** `isSupportedPlatform()` in
-`platform.ts` is the single gate, and it is narrow on purpose: the release ships
-exactly one compiled Grail shim (`grail/prebuilt/arm64.Darwin/`), and a build
-without a matching shim installs cleanly and then fails at the first `import`.
+**Three targets: `darwin-arm64`, `linux-x64`, `linux-arm64`.**
+`isSupportedPlatform()` in `platform.ts` is the single gate, and its job is to
+agree with the payload: a build without a matching Grail shim installs cleanly
+and then fails at the first `import`. CI builds each target's shim on a runner
+of that architecture, which is what makes the gate honest — a shim can only be
+compiled where it runs.
 
-Everything else in `platform.ts` — `platformKey`, `archiveExtension`,
-`sharedLibraryExtension`, `libraryPathVariable` — still spells Linux and Intel
-macOS correctly. That is deliberate: those platforms are a _build_ away, not a
-port, so do not strip their branches to match the gate.
+Intel macOS is the deliberate omission, and not for lack of code:
+`platformKey` spells it `i386.Darwin` (the vendor's historical name for the
+64-bit Intel build; there is no `x86_64.Darwin` in the catalog, and that URL
+404s), the engine is published, and every branch handles it. What is missing is
+a machine — Apple Silicon hardware and CI runners cannot build its shim without
+cross-compiling, and a cross-built shim nobody has run is exactly what the gate
+refuses to promise.
 
-Adding a platform is two steps in this order: run `bundle:grail` there so its
-shim is staged, then widen the gate and add a `--target` to the publish scripts.
-The reverse order is the bug the gate exists to prevent.
+Adding a platform is still two steps in this order: build its shim so
+`grail/prebuilt/<key>/` carries it, then widen the gate. The reverse order is
+the bug the gate exists to prevent. Four places must agree, and
+`check-vsix.sh`'s `case` will fail loudly if they do not: `isSupportedPlatform`,
+the koffi list in `.vscodeignore`, the targets in `package.json`, and that
+`case`.
 
-The `.vsix` is published as a platform-specific extension
-(`vsce package --target darwin-arm64`), so the Marketplace never offers it to a
-machine that cannot run it. Windows stays out of scope regardless — reaching it
-means routing every command through WSL, as Jasper does. Do not add partial
-Windows paths.
+Each `.vsix` is platform-specific, so the Marketplace never offers one to a
+machine that cannot run it. `scripts/package.sh` builds this machine's target
+(or `--all`) and hands every package to `check-vsix.sh` — nothing here produces
+a `.vsix` that has not been inspected. All three shims ride along in every
+package: a shim is 276 KB, so pruning per target would save a fraction of a
+megabyte and cost a move-and-restore dance around build artifacts. The same
+trade is made for koffi's binaries in `.vscodeignore`.
+
+Windows stays out of scope regardless — reaching it means routing every command
+through WSL, as Jasper does. Do not add partial Windows paths.

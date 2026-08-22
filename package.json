@@ -85,7 +85,7 @@
       },
       {
         "view": "gemdbStatus",
-        "contents": "GemDB needs macOS on Apple Silicon.\n\nThis release ships the Python runtime compiled for Apple Silicon only. Intel Macs, Linux, and Windows are planned.\n[Learn more](https://github.com/GemTalk/GemDB_Code#platform-support)",
+        "contents": "GemDB doesn't run on this machine yet.\n\nThis release ships the Python runtime compiled for Apple Silicon macOS and for Linux on x86-64 and ARM. Intel Macs and Windows are not supported.\n[Learn more](https://github.com/GemTalk/GemDB_Code#platform-support)",
         "when": "gemdb.state == unsupportedPlatform"
       }
     ],
@@ -285,11 +285,12 @@
     "test:integration": "vitest run --config vitest.integration.config.mts",
     "bundle:grail": "./scripts/bundle-grail.sh",
     "bundle:extent": "./scripts/bundle-extent.sh",
-    "//package": "Platform-specific build: this release ships Grail's CPython shim compiled for Apple Silicon only, so the .vsix is targeted and the Marketplace offers it to no one else.",
-    "package": "vsce package --target darwin-arm64",
+    "//package": "Platform-specific builds: each .vsix carries the CPython shim for one platform, so the Marketplace offers each machine only the build that can work on it. `package` builds the target matching this machine; `package:all` needs every platform's shim staged in grail/prebuilt (see CONTRIBUTING.md).",
+    "package": "scripts/package.sh",
+    "package:all": "scripts/package.sh --all",
     "publish": "npm run publish:vsce && npm run publish:ovsx",
-    "publish:vsce": "vsce publish --target darwin-arm64",
-    "publish:ovsx": "ovsx publish --target darwin-arm64"
+    "publish:vsce": "vsce publish --target darwin-arm64 && vsce publish --target linux-x64 && vsce publish --target linux-arm64",
+    "publish:ovsx": "ovsx publish --target darwin-arm64 && ovsx publish --target linux-x64 && ovsx publish --target linux-arm64"
   },
   "dependencies": {
     "koffi": "^2.15.1"

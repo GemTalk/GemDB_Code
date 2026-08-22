@@ -9,12 +9,18 @@ name: CI
 # gate fast, and it holds the unit suite to being genuinely host-free.
 #
 # `integration` is the real thing, and the only place the product is actually
-# exercised: a darwin-arm64 runner that downloads the pinned engine, raises
-# shared memory, compiles the Grail shim, builds the shipped extent, and runs
-# the suite that starts a real database. It ends by packaging a .vsix and
-# checking what is inside it, which is the one release risk nothing else
-# catches — a .vsix packages cleanly from a tree whose build artifacts are
-# missing or stale, installs fine, and then fails at the first `import`.
+# exercised. It runs once per shipped target — darwin-arm64, linux-x64 and
+# linux-arm64 — on a runner of that architecture, because the CPython shim it
+# compiles is valid only for the platform it was built on. Each leg downloads
+# the pinned engine, raises shared memory, compiles the shim, builds the
+# shipped extent, runs the suite that starts a real database, then packages
+# that target's .vsix and checks what is inside it. That last step is the one
+# release risk nothing else catches — a .vsix packages cleanly from a tree
+# whose build artifacts are missing, stale, or built for another platform, and
+# then installs fine and fails at the first `import`.
+#
+# The three legs together are also how a release gets built: each uploads its
+# .vsix, so publishing does not need three developer machines.
 #
 # What is deliberately NOT here: no @vscode/test-electron leg (see CLAUDE.md),
 # and no publish. Releases stay a deliberate act from a developer's machine,
@@ -86,17 +92,43 @@ jobs:
 
       # Packaging has its own failure mode that lint, types and tests cannot
       # see: vsce walks the production dependency tree, and an unresolvable
-      # edge aborts the package with everything else still green. This leg only
-      # proves the path runs — the .vsix built here is missing the gitignored
-      # artifacts, so what it CONTAINS is checked in the integration job, on
-      # the platform that can build them.
+      # edge aborts the package with everything else still green. This calls
+      # vsce directly rather than `npm run package`, which now also verifies
+      # the .vsix contents — a check that cannot pass here, since this runner
+      # has none of the gitignored artifacts. What each package CONTAINS is
+      # checked in the integration job, on the platform that can build them.
       - name: Verify the packaging path
-        run: npm run package
+        run: npx --no-install vsce package --target darwin-arm64 --out "$RUNNER_TEMP/packaging-smoke.vsix"
 
   integration:
-    name: Integration (real database, darwin-arm64)
-    runs-on: macos-15
+    name: Integration (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    strategy:
+      # One platform's failure must not cancel the others: when a Grail or
+      # engine change breaks a build, which platforms it breaks is the
+      # interesting part.
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            runner: macos-15
+            platform-key: arm64.Darwin
+            archive-ext: dmg
+            lib-ext: dylib
+            uname-m: arm64
+          - target: linux-x64
+            runner: ubuntu-latest
+            platform-key: x86_64.Linux
+            archive-ext: zip
+            lib-ext: so
+            uname-m: x86_64
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            platform-key: arm64.Linux
+            archive-ext: zip
+            lib-ext: so
+            uname-m: aarch64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -106,16 +138,27 @@ jobs:
           node-version-file: '.nvmrc'
           cache: 'npm'
 
-      # The shim is compiled here and shipped as-is, so the runner's
-      # architecture decides what the payload is valid for. A runner image that
-      # quietly became Intel would produce a green run and a broken artifact.
-      - name: Confirm the runner is Apple Silicon
+      # Each leg compiles the shim it ships, so the runner's architecture
+      # decides what the payload is valid for. A runner image that quietly
+      # changed architecture would produce a green run and a broken artifact
+      # for everyone on that target.
+      - name: Confirm the runner matches the target
+        env:
+          EXPECTED: ${{ matrix.uname-m }}
+          TARGET: ${{ matrix.target }}
         run: |
           arch="$(uname -m)"
-          if [ "$arch" != "arm64" ]; then
-            echo "This job builds the arm64.Darwin payload but the runner is $arch." >&2
+          if [ "$arch" != "$EXPECTED" ]; then
+            echo "This leg builds the $TARGET payload and expects $EXPECTED, but the runner is $arch." >&2
             exit 1
           fi
+          echo "$TARGET on $(uname -s) $arch"
+
+      # `expect(1)` drives the GemDB Shell through a real pty in
+      # repl.test.ts. macOS ships it; Ubuntu images do not.
+      - name: Install expect
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends expect
 
       - name: Read the pinned engine version
         id: engine
@@ -128,16 +171,17 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Pinned engine version: $version"
 
-      # Cache the downloaded archive, not the extracted engine: 210 MB rather
-      # than 820 MB, and scripts/install-engine.sh reuses an archive it finds
-      # instead of downloading again. Keyed by version, so bumping the pin
-      # fetches the new engine rather than resurrecting the old one — and so
-      # GemTalk's download host sees one request per version, not one per run.
+      # Cache the downloaded archive, not the extracted engine: a few hundred
+      # MB rather than the best part of a gigabyte, and
+      # scripts/install-engine.sh reuses an archive it finds instead of
+      # downloading again. Keyed by version AND platform, so each target keeps
+      # its own — and so GemTalk's download host sees one request per engine
+      # per platform, not one per run.
       - name: Cache the engine archive
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/GemDB/GemStone64Bit${{ steps.engine.outputs.version }}-arm64.Darwin.dmg
-          key: engine-archive-${{ steps.engine.outputs.version }}-arm64.Darwin
+          path: ~/GemDB/GemStone64Bit${{ steps.engine.outputs.version }}-${{ matrix.platform-key }}.${{ matrix.archive-ext }}
+          key: engine-archive-${{ steps.engine.outputs.version }}-${{ matrix.platform-key }}
 
       - run: npm ci
 
@@ -153,11 +197,18 @@ jobs:
       # The one thing the extension refuses to automate, because it needs sudo
       # and changes the machine for all software (CLAUDE.md, "The automation
       # line"). A CI runner is the one machine where that is uncontroversial:
-      # it is thrown away afterwards. Running the shipped script rather than a
-      # copy of its sysctl values means CI exercises the script a user is asked
-      # to run with sudo.
-      - name: Raise shared memory
+      # it is thrown away afterwards. Running the shipped scripts rather than a
+      # copy of their sysctl values means CI exercises what a user is asked to
+      # run with sudo — including, on Linux, the RemoveIPC setting that decides
+      # whether a database survives its owner logging out.
+      - name: Raise shared memory (macOS)
+        if: runner.os == 'macOS'
         run: sudo resources/setSharedMemoryDarwin.sh
+      - name: Raise shared memory and keep IPC (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo resources/setSharedMemoryLinux.sh
+          sudo resources/setRemoveIPC.sh
 
       # Clones Grail's default branch unless a ref is given, so this leg is
       # also the early warning for a Grail change that breaks GemDB's
@@ -182,13 +233,15 @@ jobs:
       - name: Confirm the suite has something to run against
         env:
           ENGINE_VERSION: ${{ steps.engine.outputs.version }}
+          PLATFORM_KEY: ${{ matrix.platform-key }}
+          LIB_EXT: ${{ matrix.lib-ext }}
         run: |
-          engine="$HOME/GemDB/GemStone64Bit${ENGINE_VERSION}-arm64.Darwin"
+          engine="$HOME/GemDB/GemStone64Bit${ENGINE_VERSION}-${PLATFORM_KEY}"
           fail=0
           for path in \
             "$engine/sys/stoned" \
             "grail/GRAIL_VERSION" \
-            "grail/prebuilt/arm64.Darwin/libcpython_ua.dylib" \
+            "grail/prebuilt/${PLATFORM_KEY}/libcpython_ua.${LIB_EXT}" \
             "extent/gemdb.dbf" \
             "out/gemdb-shell.js"
           do
@@ -206,14 +259,29 @@ jobs:
       - name: Integration tests
         run: npm run test:integration
 
-      # Now that the artifacts exist, package for real and check what is
-      # inside. This is the check CONTRIBUTING.md's release steps could not
-      # lean on before: a missing prebuilt/ directory, a stale extent, or a
-      # koffi filter that stopped working.
-      - name: Package the extension
-        run: npm run package
-      - name: Verify what the .vsix carries
-        run: scripts/check-vsix.sh
+      # Now that the artifacts exist, package this target for real and check
+      # what is inside (package.sh does both, and refuses to leave a .vsix
+      # unchecked). This is what CONTRIBUTING.md's release steps could not lean
+      # on before: a missing prebuilt/ directory, a stale extent, or a koffi
+      # filter that stopped working. It matters more per-target than it did on
+      # one platform — `vsce package --target linux-x64` succeeds just as
+      # happily from a tree that has never built a Linux shim.
+      - name: Package and verify the .vsix
+        env:
+          TARGET: ${{ matrix.target }}
+        run: scripts/package.sh "$TARGET"
+
+      # The shim, the extent and the bundles are what a release ships, and this
+      # is the machine that can build this target's shim. Keeping the .vsix
+      # means a release can be assembled from CI artifacts rather than from
+      # three developer machines.
+      - name: Upload the .vsix
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vsix-${{ matrix.target }}
+          path: '*.vsix'
+          if-no-files-found: error
+          retention-days: 7
 
       # Database logs live under the fixture's temporary root, which is thrown
       # away with the runner — so collect them while they exist. Only on
@@ -235,7 +303,8 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: database-logs
+          # Per-target: matrix legs must not collide on an artifact name.
+          name: database-logs-${{ matrix.target }}
           path: ci-logs
           if-no-files-found: ignore
           retention-days: 7
