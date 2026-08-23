@@ -7,17 +7,29 @@ import { SessionOwner, interruptSessionFor } from './session';
 /**
  * Which session a notebook owns.
  *
- * The URI is the identity — stable across renames of the window, unique per
- * document — and the file name is what a person should see in a message about
- * sessions being scarce. `resetScope` keys the notebook's globals by the same
- * string, so a notebook's namespace and its session are named alike.
+ * The URI is the identity — unique per document — and the file name is what a
+ * person should see in a message about sessions being scarce. `resetScope`
+ * keys the notebook's globals by the same string, so a notebook's namespace
+ * and its session are named alike.
+ *
+ * Renaming the file therefore changes both, which is why `renameOwner` exists:
+ * a rename must carry the session and the globals across to the new URI rather
+ * than abandon them under the old one.
  */
 export function notebookOwner(notebook: vscode.NotebookDocument): SessionOwner {
-  const uri = notebook.uri.toString();
+  return notebookOwnerForUri(notebook.uri);
+}
+
+/**
+ * The same, from a URI alone — what a rename has, since the event reports
+ * files rather than open documents.
+ */
+export function notebookOwnerForUri(uri: vscode.Uri): SessionOwner {
+  const key = uri.toString();
   return {
-    key: uri,
+    key,
     kind: 'notebook',
-    label: uri.split('/').pop() || 'notebook',
+    label: key.split('/').pop() || 'notebook',
   };
 }
 

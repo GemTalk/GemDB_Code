@@ -168,7 +168,28 @@ characters** — 32 raises `OutOfRange` (2061), measured — so the name is a
 label and the sessionId remains the identifier; `cacheNameFor` truncates and
 strips non-ASCII rather than letting a long notebook title fail a login. File
 mode needs its own copy of this in `gemdb-run.tpz`, because linked topaz never
-reaches `session.ts` and would otherwise show as the stock `TopazL`.
+reaches `session.ts` and would otherwise show as the stock `TopazL` (an
+unnamed RPC gem is `TopazR` — also measured).
+
+Names read `GemDB nb analysis`, `GemDB Shell 41234`, `GemDB Code`,
+`GemDB run backfill`. The product names are capitalised as the product is
+written, per the GemDB Shell rule above — an administrator reading a session
+list is a user — while `nb` and `run` are common nouns and stay lowercase.
+`nb` is abbreviated where `Shell` is spelled out because a shell's suffix is a
+fixed-width pid while a notebook's is a filename, and every character the tag
+takes is one the title loses: 22 against 16. GemStone's own names in that
+column are PascalCase (`GcReclaim`, `SymbolGem`, `ShrPcMonitor`, `TopazR`);
+the one lowercase entry is the stone's slot, which carries the stone's
+configured name rather than a product's, so it is not a counter-example.
+
+**A notebook's URI is its session key _and_ its namespace key, so a rename
+moves both.** `renameOwner` in `pythonQueries.ts` is that move — it re-keys the
+scope dictionary inside the session, then `renameSession` re-keys the map and
+re-publishes the cache name. Without it a rename strands the old session
+(logged in, spending one of ten, owned by a URI nothing will ask for again) and
+hands the notebook an empty namespace, which reads as lost variables. Wired to
+`onDidRenameFiles`, which is explicit renames only; saving under a new name
+makes a second document and correctly gets a session of its own.
 
 Two things the GCI headers say, so nobody goes looking again: there is no
 `GciInit` equivalent in the thread-safe library at all, `GciInitAppName` "has

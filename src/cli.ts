@@ -171,7 +171,7 @@ SessionTemps current at: #'GrailConsole' put: (Array with: GsFile stdout).
                 ifFalse: [(target subStrings: '/') last]].
         (label size > 3 and: [(label copyFrom: label size - 2 to: label size) = '.py'])
             ifTrue: [label := label copyFrom: 1 to: label size - 3].
-        label := 'gemdb run ', label.
+        label := 'GemDB run ', label.
         label size > 31 ifTrue: [label := label copyFrom: 1 to: 31].
         [System cacheName: label] on: Error do: [:ignored | ignored return: nil].
         target = '-m'

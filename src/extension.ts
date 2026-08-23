@@ -18,11 +18,13 @@ import {
   GemDbNotebookController,
   newNotebook,
   notebookOwner,
+  notebookOwnerForUri,
   resetActiveNotebook,
 } from './notebook';
 import { configureSharedMemory, ensureOsConfigured, isSharedMemoryConfigured } from './osConfig';
 import { isSupportedPlatform, setContext } from './platform';
 import { isRunning } from './processes';
+import { renameOwner } from './pythonQueries';
 import { openRepl, runFile } from './repl';
 import { closeSessionFor, logoutAll, setInputHandler } from './session';
 import { GemDbStatusBar } from './statusBar';
@@ -56,6 +58,26 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.workspace.onDidCloseNotebookDocument((notebook) => {
       closeSessionFor(notebookOwner(notebook).key);
+    }),
+  );
+
+  // A renamed notebook keeps its session and its variables. Both are keyed by
+  // the notebook's URI, so without this a rename would strand the old session
+  // — still logged in, spending one of ten, owned by a URI nothing will ask
+  // for again — and hand the notebook an empty namespace, which reads as "my
+  // variables disappeared". It also re-publishes the session's name, because a
+  // stale one points an administrator at a file that is not there.
+  //
+  // Only explicit renames arrive here: this is `onDidRenameFiles`, which VS
+  // Code raises for a rename it performed (the explorer, a refactor). Saving
+  // under a new name is a different act — it makes a second document — and is
+  // correctly left to log in a session of its own.
+  context.subscriptions.push(
+    vscode.workspace.onDidRenameFiles((event) => {
+      for (const { oldUri, newUri } of event.files) {
+        if (!newUri.path.endsWith('.ipynb')) continue;
+        renameOwner(oldUri.toString(), notebookOwnerForUri(newUri));
+      }
     }),
   );
 
