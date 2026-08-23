@@ -2,7 +2,24 @@ import * as vscode from 'vscode';
 import { ensureRunning } from './lifecycle';
 import { errorMessage, log } from './log';
 import { PyResult, isErrorResult, resetScope, runPython } from './pythonQueries';
-import { interrupt } from './session';
+import { SessionOwner, interruptSessionFor } from './session';
+
+/**
+ * Which session a notebook owns.
+ *
+ * The URI is the identity — stable across renames of the window, unique per
+ * document — and the file name is what a person should see in a message about
+ * sessions being scarce. `resetScope` keys the notebook's globals by the same
+ * string, so a notebook's namespace and its session are named alike.
+ */
+export function notebookOwner(notebook: vscode.NotebookDocument): SessionOwner {
+  const uri = notebook.uri.toString();
+  return {
+    key: uri,
+    kind: 'notebook',
+    label: uri.split('/').pop() || 'notebook',
+  };
+}
 
 /**
  * A Jupyter kernel whose Python runs inside the database.
@@ -13,8 +30,10 @@ import { interrupt } from './session';
  * no other extension required.
  *
  * Cells share globals the way a notebook user expects: `x = 1` in one cell is
- * visible in the next. That state lives in the database session, keyed by the
- * notebook's URI, so two open notebooks do not see each other's variables.
+ * visible in the next. Each notebook gets its own database session, so it also
+ * gets its own transaction: the same isolation VS Code's Jupyter extension
+ * gives by starting a kernel per notebook, and the reason a commit in one
+ * notebook cannot commit another's half-finished work.
  */
 export const NOTEBOOK_TYPE = 'jupyter-notebook';
 export const CONTROLLER_ID = 'gemdb-python';
@@ -33,7 +52,11 @@ export class GemDbNotebookController {
     this.controller.supportsExecutionOrder = true;
     this.controller.description = 'Runs Python inside your GemDB database';
     this.controller.executeHandler = (cells) => this.executeCells(cells);
-    this.controller.interruptHandler = async () => interrupt();
+    // Interrupt only this notebook's session. VS Code hands the handler the
+    // notebook that asked, and now that each has a session of its own, one
+    // notebook's Ctrl+C no longer stops another's cell.
+    this.controller.interruptHandler = async (notebook) =>
+      interruptSessionFor(notebookOwner(notebook).key);
   }
 
   dispose(): void {
@@ -87,7 +110,7 @@ export class GemDbNotebookController {
 
     let result: PyResult;
     try {
-      result = await runPython(source, cell.notebook.uri.toString(), (chunk) => {
+      result = await runPython(source, notebookOwner(cell.notebook), (chunk) => {
         printed += chunk;
         execution.replaceOutput([textOutput(printed)]);
       });
@@ -147,7 +170,7 @@ export async function resetActiveNotebook(): Promise<void> {
     return;
   }
   try {
-    resetScope(editor.notebook.uri.toString());
+    resetScope(notebookOwner(editor.notebook));
     void vscode.window.showInformationMessage('Notebook variables cleared.');
   } catch (e) {
     void vscode.window.showErrorMessage(`Could not clear the notebook: ${errorMessage(e)}`);

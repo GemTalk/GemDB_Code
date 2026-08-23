@@ -14,12 +14,17 @@ import {
 import { autoStartSuppressed, initAutoStart, suppressAutoStart } from './autoStart';
 import { withSetupLock } from './lock';
 import { disposeLog, log, showLog } from './log';
-import { GemDbNotebookController, newNotebook, resetActiveNotebook } from './notebook';
+import {
+  GemDbNotebookController,
+  newNotebook,
+  notebookOwner,
+  resetActiveNotebook,
+} from './notebook';
 import { configureSharedMemory, ensureOsConfigured, isSharedMemoryConfigured } from './osConfig';
 import { isSupportedPlatform, setContext } from './platform';
 import { isRunning } from './processes';
 import { openRepl, runFile } from './repl';
-import { logout, logoutAll, setInputHandler } from './session';
+import { closeSessionFor, logoutAll, setInputHandler } from './session';
 import { GemDbStatusBar } from './statusBar';
 import { StatusViewProvider } from './statusView';
 
@@ -41,6 +46,18 @@ export function activate(context: vscode.ExtensionContext): void {
   // kernel picker explains itself, rather than silently offering nothing.
   const notebooks = new GemDbNotebookController(extensionPath);
   context.subscriptions.push(notebooks);
+
+  // A closed notebook gives its session back. Sessions are scarce — the
+  // database allows ten at once, and its own gems spend some of that — so a
+  // window that opened and closed notebooks all morning must not still be
+  // holding their sessions. Uncommitted work in that notebook is discarded,
+  // which is what closing it already meant: its variables were going away with
+  // the session either way.
+  context.subscriptions.push(
+    vscode.workspace.onDidCloseNotebookDocument((notebook) => {
+      closeSessionFor(notebookOwner(notebook).key);
+    }),
+  );
 
   // Python's input() in a notebook cell becomes an input box — the same move
   // Jupyter makes for stdin requests. Escape cancels the read, and the cell's
@@ -108,7 +125,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(
       'gemdb.uninstall',
       refreshing(async () => {
-        logout();
+        // Every session, not just this window's own: uninstalling deletes the
+        // database each notebook is connected to.
+        logoutAll();
         await uninstall();
       }),
     ),
@@ -133,7 +152,8 @@ export function activate(context: vscode.ExtensionContext): void {
         event.affectsConfiguration('gemdb.rootPath') ||
         event.affectsConfiguration('gemdb.engineVersion')
       ) {
-        logout();
+        // Every notebook's session is bound to the old database too.
+        logoutAll();
         status.refresh();
       }
     }),

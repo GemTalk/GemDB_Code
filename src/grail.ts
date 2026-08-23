@@ -7,7 +7,7 @@ import { platformKey, sharedLibraryExtension } from './platform';
 import { log, logStep } from './log';
 import { engineEnvironment, shimLibraryPath } from './processes';
 import { grailPath, grailStampPath, installedGrailStamp } from './paths';
-import { logout } from './session';
+import { logoutAll } from './session';
 import { writeCliScripts } from './cli';
 
 /**
@@ -188,10 +188,12 @@ export function installGrail(
         // Any session open right now logged in before Grail existed, and a
         // GemStone session sees the repository as of its last transaction
         // boundary — so it would go on reporting "Python support is not
-        // installed" against a database where it plainly is. Dropping it here
-        // rather than at the call sites means no future caller can forget:
-        // the next use logs in fresh and sees what the installer committed.
-        logout();
+        // installed" against a database where it plainly is. Every session,
+        // not just the extension's own: each open notebook holds one, and each
+        // would carry the same stale view. Dropping them here rather than at
+        // the call sites means no future caller can forget; the next use logs
+        // in fresh and sees what the installer committed.
+        logoutAll();
         resolve();
         return;
       }

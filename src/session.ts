@@ -30,6 +30,55 @@ export class SessionError extends Error {}
  */
 export class ExecutionInterrupted extends SessionError {}
 
+/**
+ * The database refused a login because every session is in use.
+ *
+ * Its own class because it is the one login failure a user can act on, and the
+ * only one where the useful thing to say is a list of what is holding the
+ * sessions rather than an error number.
+ */
+export class SessionLimitError extends SessionError {}
+
+/**
+ * GemStone's login errors for "no session available": the stone's limit, the
+ * GCI's own, and too many sessions for one user id. GemDB always logs in as
+ * DataCurator, so the last one is as reachable as the first.
+ * (`$GEMSTONE/include/gcierr.ht`: GS_ERR_MAX_SESSIONS_LIMIT,
+ * GS_ERR_GCI_SESSIONS_LIMIT, GS_ERR_ACTIVE_USER_LIMIT.)
+ */
+const SESSION_LIMIT_ERRORS = new Set([4039, 4041, 4050]);
+
+/** What kind of user interface a session belongs to. */
+export type SessionKind = 'notebook' | 'shell' | 'extension';
+
+/**
+ * Who a session is for.
+ *
+ * Sessions are per-notebook, which is what every other notebook tool does — in
+ * VS Code's Jupyter extension each notebook gets its own kernel — and what
+ * keeps one notebook's transaction out of another's. The cost is that sessions
+ * are a scarce, shared resource: the database allows ten at once and the
+ * system's own gems spend some of that. So every session records who asked for
+ * it, and `sessionRegistry()` can answer which one has been idle longest and
+ * might be worth closing.
+ */
+export interface SessionOwner {
+  /** Stable identity — a notebook's URI, or a fixed id for the extension's own. */
+  key: string;
+  kind: SessionKind;
+  /** What to show a person: a notebook's file name, say. */
+  label: string;
+}
+
+/** A session, described for a human or for joining to `gemdb.sessions`. */
+export interface SessionInfo {
+  owner: SessionOwner;
+  /** GemStone's session serial, if it could be read. */
+  serial: number | undefined;
+  openedAt: number;
+  idleMs: number;
+}
+
 // ---------------------------------------------------------------------------
 // input() and print(): the gem asks, the client answers.
 //
@@ -197,14 +246,43 @@ export class GciSession {
    */
   private breakPending = false;
 
+  /** When this session last ran something, for "which is idlest". */
+  private lastUsedAt = Date.now();
+  /** GemStone's own session serial, so a session here can be found over there. */
+  private sessionSerial: number | undefined;
+  readonly openedAt = Date.now();
+
   private constructor(
     private readonly gci: GciLibrary,
     private handle: unknown | undefined,
-    readonly label: string,
+    readonly owner: SessionOwner,
   ) {}
 
+  /** What the logs call this session. */
+  get label(): string {
+    return this.owner.label;
+  }
+
+  /**
+   * GemStone's serial for this session — the number `gemdb.sessions` reports
+   * and `System descriptionOfSession:` takes. Undefined only if the probe
+   * failed, which is not worth failing a login over.
+   */
+  get serial(): number | undefined {
+    return this.sessionSerial;
+  }
+
+  /** Milliseconds since this session last ran anything for its owner. */
+  get idleMs(): number {
+    return Date.now() - this.lastUsedAt;
+  }
+
   /** Log in, or throw a `SessionError` saying why that is impossible. */
-  static login(label: string): GciSession {
+  static login(owner: SessionOwner | string): GciSession {
+    // A bare string is still accepted: cliMain logs in as 'shell', and a
+    // standalone process has exactly one session and no registry to key.
+    const resolved: SessionOwner =
+      typeof owner === 'string' ? { key: owner, kind: 'shell', label: owner } : owner;
     if (!findStone()) {
       throw new SessionError('GemDB is not running. Start it before running Python.');
     }
@@ -223,11 +301,19 @@ export class GciSession {
       0,
     );
     if (!result.session) {
+      // The database has a session limit — 10 on the Community Edition key
+      // GemDB installs, and the system's own gems (GcUser, SymbolUser) spend
+      // some of it. Hitting it is a normal consequence of opening notebooks,
+      // not a fault, so it gets an error that says what is holding the
+      // sessions rather than a bare error number.
+      if (SESSION_LIMIT_ERRORS.has(result.err.number)) {
+        throw new SessionLimitError(sessionLimitMessage(resolved, sessionRegistry()));
+      }
       throw new SessionError(
         result.err.message || `Could not connect to GemDB (error ${result.err.number}).`,
       );
     }
-    const session = new GciSession(gci, result.session, label);
+    const session = new GciSession(gci, result.session, resolved);
     liveSessions.add(session);
     // Canonical modules are a session-local Grail flag, default off. The
     // shipped extent deploys gemdb (committed, caches warmed) precisely so
@@ -243,9 +329,24 @@ export class GciSession {
           'ifNotNil: [:imp | imp ___canonicalClassesEnabled___: true]. true',
       );
     } catch (e) {
-      log(`Could not enable canonical modules (${label}): ${e instanceof Error ? e.message : e}`);
+      log(
+        `Could not enable canonical modules (${resolved.label}): ${e instanceof Error ? e.message : e}`,
+      );
     }
-    log(`Connected to GemDB as ${DB_USER} (${label})`);
+    // Record GemStone's own serial for this session, so what the extension
+    // knows (which notebook owns it) can be joined to what the database knows
+    // (`gemdb.sessions`, idle times, who is holding resources). Best-effort:
+    // a session that works but cannot tell us its number is still usable.
+    try {
+      const serial = Number.parseInt(session.execute('System session printString'), 10);
+      if (Number.isFinite(serial)) session.sessionSerial = serial;
+    } catch (e) {
+      log(`Could not read the session serial: ${e instanceof Error ? e.message : e}`);
+    }
+    log(
+      `Connected to GemDB as ${DB_USER} (${resolved.label}` +
+        `${session.sessionSerial === undefined ? '' : `, session ${session.sessionSerial}`})`,
+    );
     return session;
   }
 
@@ -255,6 +356,7 @@ export class GciSession {
 
   /** Run Smalltalk synchronously and return its String result. */
   execute(code: string): string {
+    this.lastUsedAt = Date.now();
     const handle = this.requireHandle();
     const { result: inProgress } = this.gci.GciTsCallInProgress(handle);
     if (inProgress !== 0) {
@@ -273,6 +375,7 @@ export class GciSession {
    * a session, and pretending otherwise here would only queue confusion.
    */
   async executeAsync(code: string, onOutput?: OutputSink): Promise<string> {
+    this.lastUsedAt = Date.now();
     const handle = this.requireHandle();
     if (this.busy) {
       throw new SessionError('This session is busy running something else.');
@@ -555,55 +658,158 @@ export class GciSession {
 }
 
 // ---------------------------------------------------------------------------
-// The default session — the one the notebooks and administrative queries share.
+// The sessions this window holds, one per owner.
 // ---------------------------------------------------------------------------
 
-let current: GciSession | undefined;
+/**
+ * Every session this extension host has open, keyed by owner.
+ *
+ * A notebook gets its own session so it gets its own transaction: sharing one
+ * would mean a commit in one notebook commits another's work, and
+ * `gemdb.transaction()` refusing to start because a notebook the user is not
+ * looking at left the session dirty. The extension keeps one of its own for
+ * administrative queries — "is Grail installed", scope resets — which must not
+ * depend on any notebook being open.
+ */
+const sessions = new Map<string, GciSession>();
 
-/** The shared session, logging in if there is not one yet. */
-export function resolveSession(): GciSession {
-  if (current?.connected) return current;
-  current = GciSession.login('notebooks');
-  return current;
+/** The extension's own session: status queries and anything with no notebook. */
+export const EXTENSION_OWNER: SessionOwner = {
+  key: '__extension__',
+  kind: 'extension',
+  label: 'GemDB',
+};
+
+/** The session for one owner, logging in if there is not one yet. */
+export function sessionFor(owner: SessionOwner): GciSession {
+  const existing = sessions.get(owner.key);
+  if (existing?.connected) return existing;
+  const session = GciSession.login(owner);
+  sessions.set(owner.key, session);
+  return session;
 }
 
-/** Run Smalltalk in the shared session and return its String result. */
+/** The extension's own session, for queries that belong to no notebook. */
+export function resolveSession(): GciSession {
+  return sessionFor(EXTENSION_OWNER);
+}
+
+/**
+ * What this window holds, idlest first — the order in which sessions are worth
+ * reclaiming when the database has none left to give.
+ */
+export function sessionRegistry(): SessionInfo[] {
+  return [...sessions.values()]
+    .filter((s) => s.connected)
+    .map((s) => ({
+      owner: s.owner,
+      serial: s.serial,
+      openedAt: s.openedAt,
+      idleMs: s.idleMs,
+    }))
+    .sort((a, b) => b.idleMs - a.idleMs);
+}
+
+/** One owner's session if it is already open, without logging one in. */
+export function sessionForIfOpen(key: string): GciSession | undefined {
+  const session = sessions.get(key);
+  return session?.connected ? session : undefined;
+}
+
+/** Interrupt one owner's session, if it has one and it is running something. */
+export function interruptSessionFor(key: string): void {
+  sessions.get(key)?.interrupt();
+}
+
+/** Close one owner's session, if it has one. Its uncommitted work is lost. */
+export function closeSessionFor(key: string): void {
+  const session = sessions.get(key);
+  if (!session) return;
+  session.logout();
+  sessions.delete(key);
+}
+
+/** Human-readable "3 minutes", for messages about idle sessions. */
+function humanDuration(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  return `${Math.round(minutes / 6) / 10} h`;
+}
+
+/**
+ * What to tell someone whose login was refused for want of a session.
+ *
+ * The database's limit counts sessions this window knows nothing about — other
+ * VS Code windows, the system's own gems, a `topaz` someone left open — so the
+ * message says what it can see rather than claiming to explain the whole
+ * number, and names the one worth closing first.
+ *
+ * Takes the held sessions rather than reading the registry, so the wording can
+ * be tested without a database (the same reason `runStop` takes a `StopWorld`).
+ */
+export function sessionLimitMessage(wanted: SessionOwner, held: SessionInfo[]): string {
+  const lines = [
+    `GemDB could not open a session for ${wanted.label}: the database has no free sessions.`,
+  ];
+  if (held.length > 0) {
+    const idlest = held[0];
+    lines.push(
+      `This window is holding ${held.length}: ` +
+        held.map((s) => `${s.owner.label} (idle ${humanDuration(s.idleMs)})`).join(', ') +
+        `. Closing ${idlest.owner.label} would free the one idle longest.`,
+    );
+  }
+  lines.push(
+    'Other windows, other tools, and the database’s own gems also use sessions. ' +
+      'Close a notebook or a GemDB Shell and try again.',
+  );
+  return lines.join(' ');
+}
+
+/** Run Smalltalk in the extension's own session and return its String result. */
 export function execute(code: string): string {
   return resolveSession().execute(code);
 }
 
-/** Run Smalltalk in the shared session without blocking the extension host. */
+/** Run Smalltalk in the extension's own session without blocking the host. */
 export function executeAsync(code: string, onOutput?: OutputSink): Promise<string> {
   return resolveSession().executeAsync(code, onOutput);
 }
 
-/** Commit the current transaction, so work survives the session. */
+/** Commit the extension session's transaction, so work survives the session. */
 export function commit(): void {
   resolveSession().commit();
 }
 
-/** Interrupt whatever the shared session is running. */
+/**
+ * Interrupt every session this window is running.
+ *
+ * Deliberately all of them: this is the command-palette "stop what you are
+ * doing", and with a session per notebook the user cannot be expected to say
+ * which one. A session that is not executing ignores its break.
+ */
 export function interrupt(): void {
-  current?.interrupt();
+  for (const session of sessions.values()) session.interrupt();
 }
 
-/** Log out the shared session, if logged in. Safe to call when there is none. */
+/** Log out the extension's own session. Safe to call when there is none. */
 export function logout(): void {
-  current?.logout();
-  current = undefined;
+  closeSessionFor(EXTENSION_OWNER.key);
 }
 
 /**
- * Log out every session this window holds — the shared one and every REPL's.
- * This is what stopping the database calls: each of these is a login that
- * `stopstone` would otherwise refuse over.
+ * Log out every session this window holds — the extension's own and every
+ * notebook's. This is what stopping the database calls: each of these is a
+ * login that `stopstone` would otherwise refuse over.
  */
 export function logoutAll(): void {
   for (const session of [...liveSessions]) session.logout();
-  current = undefined;
+  sessions.clear();
 }
 
-/** True when the shared session is currently open. */
+/** True when this window holds any open session. */
 export function isConnected(): boolean {
-  return current?.connected === true;
+  return [...sessions.values()].some((s) => s.connected);
 }

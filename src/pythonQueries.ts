@@ -1,4 +1,13 @@
-import { ExecutionInterrupted, GciSession, OutputSink, execute, executeAsync } from './session';
+import {
+  ExecutionInterrupted,
+  GciSession,
+  OutputSink,
+  SessionOwner,
+  execute,
+  executeAsync,
+  sessionFor,
+  sessionForIfOpen,
+} from './session';
 
 /**
  * Running Python inside the database.
@@ -93,11 +102,12 @@ ${scopePreamble(scope)}
          ifFalse: [r @env1:__repr__]`;
 
 /**
- * Run Python and return what it printed and what it evaluated to.
+ * Run Python for one owner and return what it printed and what it evaluated to.
  *
- * `scopeId` names a persistent set of globals, so `x = 1` in one call is
- * visible in the next — the semantics a notebook needs. Each notebook passes
- * its own URI, giving it its own namespace within the one shared session.
+ * The owner decides two things at once, and they are deliberately the same
+ * string. Its `key` selects the database session — a notebook gets its own, so
+ * it gets its own transaction — and it names the persistent set of globals
+ * inside that session, so `x = 1` in one cell is visible in the next.
  *
  * Async on purpose: this is the path long computations take, and a blocking
  * call would freeze the whole extension host for their duration — including
@@ -105,12 +115,10 @@ ${scopePreamble(scope)}
  */
 export async function runPython(
   source: string,
-  scopeId: string,
+  owner: SessionOwner,
   onOutput?: OutputSink,
 ): Promise<PyResult> {
-  return framed(
-    executeAsync(buildQuery(evaluateInScope(scopeId), source, onOutput !== undefined), onOutput),
-  );
+  return runPythonInSession(sessionFor(owner), source, owner.key, onOutput);
 }
 
 /** Run Python with no persistent globals — a one-shot evaluation. */
@@ -132,12 +140,12 @@ export async function runPythonOnce(source: string, onOutput?: OutputSink): Prom
 }
 
 /**
- * Run Python in a caller-owned session — the REPL's path.
+ * Run Python in a caller-owned session — the REPL's path, and what `runPython`
+ * resolves to once it has looked the owner's session up.
  *
- * Same evaluation, same display rule; the difference is *whose* session. Every
- * REPL terminal logs in on its own, so two terminals are two concurrent
- * database sessions with their own transactions, and none of them contends
- * with the notebooks' shared session.
+ * Same evaluation, same display rule; the difference is only that the session
+ * arrives ready-made. A GemDB Shell is its own process and logs in for itself,
+ * which is why it holds a `GciSession` rather than an owner key.
  */
 export async function runPythonInSession(
   session: GciSession,
@@ -158,9 +166,16 @@ export async function runPythonInSession(
  * "restart kernel" of a notebook. It touches only plain database collections,
  * so it works — and harmlessly does nothing — whether or not Grail is present.
  */
-export function resetScope(scopeId: string): void {
-  const scope = escapeString(scopeId);
-  execute(
+export function resetScope(owner: SessionOwner): void {
+  // Must run in the OWNER's session: the scope dictionary lives in that
+  // session's SessionTemps, so clearing it from anywhere else would empty a
+  // namespace nobody is using and leave the notebook's variables in place.
+  // A notebook with no session yet has nothing to reset, and logging one in
+  // just to clear an empty namespace would spend a scarce session on nothing.
+  const session = sessionForIfOpen(owner.key);
+  if (!session) return;
+  const scope = escapeString(owner.key);
+  session.execute(
     `| scopes |
 scopes := SessionTemps current at: #'__gemdbScopes' ifAbsent: [nil].
 scopes ifNotNil: [scopes removeKey: '${scope}' ifAbsent: []].
