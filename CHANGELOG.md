@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Each notebook now runs in its own database session.** Two notebooks no
+  longer share variables *or* a transaction. This is what every other notebook
+  tool does — VS Code's Jupyter extension starts a kernel per notebook — but
+  here it fixes something sharper than convention: a `commit()` in one notebook
+  used to commit another's half-finished changes, and
+  `with gemdb.transaction():` refused to start whenever *any* open notebook had
+  left the shared session dirty, naming pending changes you could not see from
+  where you were standing. Interrupting a cell now stops only that notebook's
+  work, and closing a notebook gives its session back.
+
+### Fixed
+
+- **A notebook no longer keeps a view of a database that has been replaced.**
+  Reinstalling Python support, uninstalling, and changing the root path or
+  engine version now log out every session rather than only the extension's
+  own.
+
+### Known limitations
+
+- **Sessions are a limited resource, and notebooks now spend one each.** The
+  Community Edition keyfile allows ten at once, the database's own gems take
+  some of those, and every GemDB Shell takes another — so perhaps six or seven
+  notebooks can be open at a time. A login refused for that reason now says so
+  in those terms: what this window is holding, how long each has been idle, and
+  which one closing would free. Sessions held by *other* VS Code windows are
+  not listed, because nothing yet publishes them where another window can read
+  them.
+
 ## [1.1.0] - 2026-08-21
 
 Linux joins macOS, and the Python you can write gets meaningfully bigger:
