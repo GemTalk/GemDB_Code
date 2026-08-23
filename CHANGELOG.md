@@ -10,13 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Sessions now say who they belong to.** Every session GemDB opens names
-  itself in the database's shared cache — `gemdb nb analysis` for a notebook,
-  `gemdb sh 41234` for a GemDB Shell, `gemdb run backfill` for a script started
-  with `gemdb backfill.py`. The names are visible to anything attached to the
-  same database, so a second VS Code window, topaz, or an administrator's tool
-  can tell which of the ten sessions belongs to what, instead of seeing a row
-  of anonymous gems. Nothing is committed to do this and the entry disappears
-  with the process, so a window that crashes leaves nothing behind.
+  itself in the database's shared cache — `GemDB nb analysis` for a notebook,
+  `GemDB Shell 41234` for a GemDB Shell, `GemDB Code` for the extension's own,
+  and `GemDB run backfill` for a script started with `gemdb backfill.py`. The
+  names are visible to anything attached to the same database, so a second VS
+  Code window, topaz, or an administrator's tool can tell which of the ten
+  sessions belongs to what, instead of seeing a row of anonymous gems. Nothing
+  is committed to do this and the entry disappears with the process, so a
+  window that crashes leaves nothing behind.
 
 ### Changed
 
@@ -32,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Renaming a notebook no longer costs it its session or its variables.**
+  A notebook is identified by its file URI, so renaming the file used to leave
+  the old session logged in with nobody to claim it — one of ten, gone until
+  the window closed — while the notebook itself started over with an empty
+  namespace, which looked like its variables had vanished. A rename now carries
+  the session, the variables and the session's published name across.
 - **A notebook no longer keeps a view of a database that has been replaced.**
   Reinstalling Python support, uninstalling, and changing the root path or
   engine version now log out every session rather than only the extension's

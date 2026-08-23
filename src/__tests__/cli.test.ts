@@ -79,7 +79,7 @@ describe('writeCliScripts', () => {
     // otherwise sit in the shared cache as the stock 'TopazL'. The truncation
     // is not optional: 32 characters raises OutOfRange, at login.
     expect(run).toContain('System cacheName: label');
-    expect(run).toContain("label := 'gemdb run ', label");
+    expect(run).toContain("label := 'GemDB run ', label");
     expect(run).toContain('label size > 31 ifTrue:');
   });
 

@@ -5,6 +5,7 @@ import {
   SessionOwner,
   execute,
   executeAsync,
+  renameSession,
   sessionFor,
   sessionForIfOpen,
 } from './session';
@@ -181,6 +182,34 @@ scopes := SessionTemps current at: #'__gemdbScopes' ifAbsent: [nil].
 scopes ifNotNil: [scopes removeKey: '${scope}' ifAbsent: []].
 'reset' encodeAsUTF8`,
   );
+}
+
+/**
+ * Follow a renamed notebook: its session, and the variables inside it.
+ *
+ * A notebook's URI is both its session key and the name of its globals, so
+ * renaming the file would otherwise strand the session and hand the notebook
+ * a fresh, empty namespace — the rename would read as "my variables
+ * disappeared". Moving the scope entry keeps `x` defined across a rename, and
+ * `renameSession` keeps the session and re-publishes its name.
+ *
+ * Does nothing when that notebook has no session yet, which is the common
+ * case: renaming a notebook nobody has run has nothing to carry over.
+ */
+export function renameOwner(oldKey: string, newOwner: SessionOwner): void {
+  const session = sessionForIfOpen(oldKey);
+  if (!session) return;
+  session.execute(
+    `| scopes moved |
+scopes := SessionTemps current at: #'__gemdbScopes' ifAbsent: [nil].
+scopes ifNotNil: [
+  moved := scopes at: '${escapeString(oldKey)}' ifAbsent: [nil].
+  moved ifNotNil: [
+    scopes removeKey: '${escapeString(oldKey)}' ifAbsent: [].
+    scopes at: '${escapeString(newOwner.key)}' put: moved]].
+'renamed' encodeAsUTF8`,
+  );
+  renameSession(oldKey, newOwner);
 }
 
 /** Is Grail installed in this database? */

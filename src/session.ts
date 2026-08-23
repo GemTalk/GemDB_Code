@@ -78,11 +78,29 @@ export interface SessionOwner {
  */
 const CACHE_NAME_LIMIT = 31;
 
-/** How each kind of owner introduces itself in that list. */
+/**
+ * How each kind of owner introduces itself in that list.
+ *
+ * Capitalised the way the product is written, because this is a string a
+ * person reads: "GemDB Shell" is the name of a thing (CLAUDE.md: write it that
+ * way wherever a user can see it, and an administrator reading a session list
+ * is a user), while "nb" and "run" are common nouns describing a role. It also
+ * sits better beside GemStone's own `GcReclaim`, `SymbolGem` and `TopazR` than
+ * an all-lowercase name would — the one lowercase entry in that column is the
+ * stone's slot, which carries the stone's configured name rather than a
+ * product's.
+ *
+ * `nb` stays abbreviated where `Shell` was spelled out, and the asymmetry is
+ * deliberate: a shell's suffix is a pid, five or six characters and fixed, so
+ * spelling out the tag costs nothing. A notebook's suffix is a filename of
+ * unknown length, and every character the tag takes is one the name loses.
+ * `GemDB nb ` leaves 22 for the title; `GemDB notebook ` would leave 16, which
+ * ordinary names exceed.
+ */
 const CACHE_NAME_TAGS: Record<SessionKind, string> = {
-  notebook: 'gemdb nb',
-  shell: 'gemdb sh',
-  extension: 'gemdb ext',
+  notebook: 'GemDB nb',
+  shell: 'GemDB Shell',
+  extension: 'GemDB Code',
 };
 
 /**
@@ -95,8 +113,8 @@ const CACHE_NAME_TAGS: Record<SessionKind, string> = {
  * GemDB session is anonymous, and "which of these ten is worth closing" has no
  * answer from outside the window that opened it.
  *
- * The `gemdb` prefix earns its six characters on a database this extension did
- * not install alone — it is the only thing saying which client a session
+ * The `GemDB` prefix earns its five characters on a database this extension
+ * did not install alone — it is the only thing saying which client a session
  * belongs to. Shells report their pid because a shell is its own process and
  * that is what leads back to the terminal; in the extension host `process.pid`
  * would be the same number for every notebook, which is why only 'shell' uses
@@ -305,12 +323,47 @@ export class GciSession {
   private constructor(
     private readonly gci: GciLibrary,
     private handle: unknown | undefined,
-    readonly owner: SessionOwner,
+    private currentOwner: SessionOwner,
   ) {}
+
+  /** Who this session belongs to — a notebook's URI, or the extension itself. */
+  get owner(): SessionOwner {
+    return this.currentOwner;
+  }
 
   /** What the logs call this session. */
   get label(): string {
-    return this.owner.label;
+    return this.currentOwner.label;
+  }
+
+  /**
+   * Take on a new owner — a renamed notebook — keeping the session. The name
+   * in the shared cache is re-sent, since the old one now points at a file
+   * that is not there.
+   */
+  rename(owner: SessionOwner): void {
+    this.currentOwner = owner;
+    this.publishName();
+  }
+
+  /**
+   * Publish who holds this session, where anything on the host can read it.
+   *
+   * Everything the registry knows is trapped in one extension host;
+   * `System cacheName:` is what makes it visible to another window, to topaz,
+   * and to whatever ends up reporting on sessions. It writes shared memory
+   * rather than the repository, so it costs no commit and — the reason it
+   * beats a committed registry — the entry dies with the process instead of
+   * outliving a window that crashed. Best-effort: an unnamed session works.
+   */
+  private publishName(): void {
+    try {
+      this.execute(
+        `System cacheName: '${cacheNameFor(this.currentOwner).replace(/'/g, "''")}'. true`,
+      );
+    } catch (e) {
+      log(`Could not name the session (${this.label}): ${e instanceof Error ? e.message : e}`);
+    }
   }
 
   /**
@@ -393,19 +446,7 @@ export class GciSession {
     } catch (e) {
       log(`Could not read the session serial: ${e instanceof Error ? e.message : e}`);
     }
-    // Publish who this session belongs to, where anything on the host can read
-    // it. Everything above this point is knowledge trapped in one extension
-    // host; `System cacheName:` is what makes it visible to another window, to
-    // topaz, and to whatever ends up reporting on sessions. It writes shared
-    // memory rather than the repository, so it costs no commit and — the
-    // reason it beats a committed registry — the entry dies with the process
-    // instead of outliving a window that crashed. Best-effort, like the serial:
-    // an unnamed session still works.
-    try {
-      session.execute(`System cacheName: '${cacheNameFor(resolved).replace(/'/g, "''")}'. true`);
-    } catch (e) {
-      log(`Could not name the session (${resolved.label}): ${e instanceof Error ? e.message : e}`);
-    }
+    session.publishName();
     log(
       `Connected to GemDB as ${DB_USER} (${resolved.label}` +
         `${session.sessionSerial === undefined ? '' : `, session ${session.sessionSerial}`})`,
@@ -771,6 +812,29 @@ export function sessionRegistry(): SessionInfo[] {
       idleMs: s.idleMs,
     }))
     .sort((a, b) => b.idleMs - a.idleMs);
+}
+
+/**
+ * Follow a session to its owner's new identity.
+ *
+ * Sessions are keyed by a notebook's URI, so renaming the file changes the
+ * key. Without this the old session would be stranded in the map — still
+ * logged in, spending one of ten, owned by a URI nothing will ask for again —
+ * and the notebook would silently log in a second one. Re-keying keeps the
+ * session, and re-sending the name keeps the shared cache honest about who
+ * holds it; a stale name is worse than none, because it points an
+ * administrator at a notebook that no longer exists.
+ *
+ * Answers whether there was a session to move, so the caller can skip the
+ * work that only matters if there was.
+ */
+export function renameSession(oldKey: string, newOwner: SessionOwner): boolean {
+  const session = sessions.get(oldKey);
+  if (!session) return false;
+  sessions.delete(oldKey);
+  sessions.set(newOwner.key, session);
+  session.rename(newOwner);
+  return true;
 }
 
 /** One owner's session if it is already open, without logging one in. */

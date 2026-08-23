@@ -4,7 +4,7 @@ import { createDatabase } from '../database';
 import { stageGrail } from '../grail';
 import { bundledExtentPath } from '../paths';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
-import { isErrorResult, runPython } from '../pythonQueries';
+import { isErrorResult, renameOwner, runPython } from '../pythonQueries';
 import { SessionOwner, cacheNameFor, execute, logoutAll, sessionRegistry } from '../session';
 import { Fixture, makeFixture } from './fixture';
 
@@ -171,16 +171,45 @@ describe.skipIf(!havePreloaded || !canMakeFixture())('a session per notebook', (
         }),
     );
 
-    expect(cacheNameFor(A)).toBe('gemdb nb one');
-    expect([...slots.keys()]).toEqual(expect.arrayContaining(['gemdb nb one', 'gemdb nb two']));
+    expect(cacheNameFor(A)).toBe('GemDB nb one');
+    expect([...slots.keys()]).toEqual(expect.arrayContaining(['GemDB nb one', 'GemDB nb two']));
     // `execute` runs in the extension's own session, so it named itself too.
-    expect(slots.has('gemdb ext')).toBe(true);
+    expect(slots.has('GemDB Code')).toBe(true);
 
     // The join a dashboard needs: the cache slot's session id is the number
     // this side recorded at login, so a name over there resolves to an owner
     // over here.
     const held = new Map(sessionRegistry().map((s) => [s.owner.key, s]));
-    expect(slots.get('gemdb nb one')).toBe(held.get(A.key)?.serial);
-    expect(slots.get('gemdb nb two')).toBe(held.get(B.key)?.serial);
+    expect(slots.get('GemDB nb one')).toBe(held.get(A.key)?.serial);
+    expect(slots.get('GemDB nb two')).toBe(held.get(B.key)?.serial);
+  });
+
+  it('carries a renamed notebook’s session, variables and name across', async () => {
+    const before = notebook('before-rename');
+    const after = notebook('after-rename');
+
+    await runPython('renamed_marker = 99', before);
+    const originalSerial = sessionRegistry().find((s) => s.owner.key === before.key)?.serial;
+    expect(typeof originalSerial).toBe('number');
+    const openSessions = sessionRegistry().length;
+
+    renameOwner(before.key, after);
+
+    // The same session, not a second one: a rename that logged in again would
+    // spend one of ten and strand the first under a URI nothing asks for.
+    expect(sessionRegistry()).toHaveLength(openSessions);
+    expect(sessionRegistry().find((s) => s.owner.key === after.key)?.serial).toBe(originalSerial);
+    expect(sessionRegistry().some((s) => s.owner.key === before.key)).toBe(false);
+
+    // The variables came too. Without moving the scope entry the notebook
+    // would get an empty namespace, which reads as "my variables disappeared".
+    expect((await runPython('renamed_marker', after)).value).toBe('99');
+
+    // And the shared cache tells the truth about who holds it now — a stale
+    // name points an administrator at a file that is not there.
+    const name = execute(
+      `((System cacheStatisticsForSessionId: ${originalSerial}) at: 1) encodeAsUTF8`,
+    );
+    expect(name).toBe('GemDB nb after-rename');
   });
 });

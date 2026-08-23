@@ -78,34 +78,43 @@ describe('the name a session publishes to the shared cache', () => {
   });
 
   it('names a notebook, without repeating what the tag already said', () => {
-    expect(cacheNameFor(nb('analysis.ipynb'))).toBe('gemdb nb analysis');
+    expect(cacheNameFor(nb('analysis.ipynb'))).toBe('GemDB nb analysis');
   });
 
-  it('names a shell by its process, which is what leads back to the terminal', () => {
+  it('spells out the shell, which is a product name and has room', () => {
+    // "GemDB Shell" is what a user is told this thing is called, and an
+    // administrator reading a session list is a user. The pid is fixed-width,
+    // so spelling out the tag costs a notebook name nothing.
     expect(cacheNameFor({ key: 'shell', kind: 'shell', label: 'shell' }, 41234)).toBe(
-      'gemdb sh 41234',
+      'GemDB Shell 41234',
     );
   });
 
-  it('names the extension’s own session', () => {
+  it('names the extension’s own session after the extension', () => {
     expect(cacheNameFor({ key: 'gemdb.extension', kind: 'extension', label: 'GemDB' })).toBe(
-      'gemdb ext',
+      'GemDB Code',
     );
   });
 
   it('never exceeds what the cache will take', () => {
     const long = nb('a-notebook-with-a-really-quite-long-name.ipynb');
     expect(cacheNameFor(long).length).toBeLessThanOrEqual(31);
-    expect(cacheNameFor(long)).toBe('gemdb nb a-notebook-with-a-real');
+    expect(cacheNameFor(long)).toBe('GemDB nb a-notebook-with-a-real');
+  });
+
+  it('leaves the notebook’s own capitalisation alone', () => {
+    // The tag is ours to style; the title is the user's, and altering its case
+    // would make the label harder to match against the file they can see.
+    expect(cacheNameFor(nb('Q3-Revenue.ipynb'))).toBe('GemDB nb Q3-Revenue');
   });
 
   it('drops what the cache cannot store', () => {
     // The cache holds 8-bit code points, so an emoji or a CJK title would be
     // meaningless there at best; strip rather than let login fail over it.
-    expect(cacheNameFor(nb('sales–📈.ipynb'))).toBe('gemdb nb sales');
+    expect(cacheNameFor(nb('sales–📈.ipynb'))).toBe('GemDB nb sales');
   });
 
   it('falls back to the tag when nothing usable is left', () => {
-    expect(cacheNameFor(nb('📈.ipynb'))).toBe('gemdb nb');
+    expect(cacheNameFor(nb('📈.ipynb'))).toBe('GemDB nb');
   });
 });
