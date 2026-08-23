@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Sessions now say who they belong to.** Every session GemDB opens names
+  itself in the database's shared cache — `gemdb nb analysis` for a notebook,
+  `gemdb sh 41234` for a GemDB Shell, `gemdb run backfill` for a script started
+  with `gemdb backfill.py`. The names are visible to anything attached to the
+  same database, so a second VS Code window, topaz, or an administrator's tool
+  can tell which of the ten sessions belongs to what, instead of seeing a row
+  of anonymous gems. Nothing is committed to do this and the entry disappears
+  with the process, so a window that crashes leaves nothing behind.
+
 ### Changed
 
 - **Each notebook now runs in its own database session.** Two notebooks no

@@ -156,6 +156,28 @@ naming what this window holds and which session has been idle longest.
 first, carrying GemStone's own session serial so a row here can be matched to
 `gemdb.sessions.all()` over there. The status view shows it.
 
+That registry is private to one extension host, which is why every session also
+publishes itself with **`System cacheName:`** — `cacheNameFor` in `session.ts`.
+It writes the shared page cache, so the name is readable by every session on
+the host (`System cacheStatisticsForAllSlots`, whose rows are
+`(name, pid, sessionId)`), which is what lets another window, topaz, or a
+dashboard attribute a session GemDB did not open for it. Preferred over a
+committed registry deliberately: it costs no commit, and the entry dies with
+the process rather than outliving a window that crashed. **The limit is 31
+characters** — 32 raises `OutOfRange` (2061), measured — so the name is a
+label and the sessionId remains the identifier; `cacheNameFor` truncates and
+strips non-ASCII rather than letting a long notebook title fail a login. File
+mode needs its own copy of this in `gemdb-run.tpz`, because linked topaz never
+reaches `session.ts` and would otherwise show as the stock `TopazL`.
+
+Two things the GCI headers say, so nobody goes looking again: there is no
+`GciInit` equivalent in the thread-safe library at all, `GciInitAppName` "has
+no effect in remote GCI applications", and `GciSetCacheName_` does nothing when
+`GciIsRemote()`. The Smalltalk send is the only route that works for GemDB.
+For reporting on sessions, `System descriptionOfSession:` carries what matters
+in slots 5 (last begin/commit/abort), 16 (commits behind this session's view),
+8 (holding the oldest commit record) and 21 (the client's pid, RPC only).
+
 **A release ships a database, not just the code to build one.**
 `scripts/bundle-extent.sh` creates a scratch database, files Grail into it, and
 stages the result as `extent/gemdb.dbf`; `createDatabase` copies that instead of
