@@ -6,9 +6,15 @@ import { FakeController, __controllers, __resetSettings } from '../__mocks__/vsc
 // answer. Grail's own behaviour is covered against a real database in
 // src/__integration__/grail.test.ts.
 const ensureRunning = vi.fn<(extensionPath: string) => Promise<boolean>>();
+interface SessionOwner {
+  key: string;
+  kind: string;
+  label: string;
+}
+
 const runPython =
   vi.fn<
-    (source: string, scopeId: string, onOutput?: (text: string) => void) => Promise<PyResult>
+    (source: string, owner: SessionOwner, onOutput?: (text: string) => void) => Promise<PyResult>
   >();
 const isErrorResult = vi.fn<(result: string) => boolean>();
 
@@ -21,8 +27,8 @@ const py = (value: string, output = ''): PyResult => ({ output, value });
 
 vi.mock('../lifecycle', () => ({ ensureRunning: (p: string) => ensureRunning(p) }));
 vi.mock('../pythonQueries', () => ({
-  runPython: (source: string, scope: string, onOutput?: (text: string) => void) =>
-    runPython(source, scope, onOutput),
+  runPython: (source: string, owner: SessionOwner, onOutput?: (text: string) => void) =>
+    runPython(source, owner, onOutput),
   isErrorResult: (result: string) => isErrorResult(result),
   resetScope: () => {},
 }));
@@ -89,14 +95,33 @@ describe('the notebook kernel', () => {
     expect(controller.executions.every((e) => e.started && e.success === false)).toBe(true);
   });
 
-  it('keys the scope on the notebook, so two notebooks keep their own globals', async () => {
+  it('keys the owner on the notebook, so two notebooks keep their own globals', async () => {
     const controller = newController();
     await run(controller, [cell('x', 'file:///one.ipynb'), cell('x', 'file:///two.ipynb')]);
 
-    expect(runPython.mock.calls.map(([, scope]) => scope)).toEqual([
+    // The key is what selects both the session and the namespace inside it, so
+    // two notebooks getting different keys is what keeps their variables — and
+    // their transactions — apart.
+    expect(runPython.mock.calls.map(([, owner]) => owner.key)).toEqual([
       'file:///one.ipynb',
       'file:///two.ipynb',
     ]);
+    expect(runPython.mock.calls.map(([, owner]) => owner.kind)).toEqual(['notebook', 'notebook']);
+  });
+
+  it('labels a notebook session by file name, for messages about scarce sessions', async () => {
+    const controller = newController();
+    await run(controller, [cell('x', 'file:///work/analysis.ipynb')]);
+
+    expect(runPython.mock.calls[0][1].label).toBe('analysis.ipynb');
+  });
+
+  it('runs every cell of one notebook under the same owner', async () => {
+    const controller = newController();
+    await run(controller, [cell('a'), cell('b'), cell('c')]);
+
+    const keys = new Set(runPython.mock.calls.map(([, owner]) => owner.key));
+    expect([...keys]).toEqual(['file:///a.ipynb']);
   });
 
   it('does not touch the database for an empty cell', async () => {

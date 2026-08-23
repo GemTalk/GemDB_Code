@@ -12,8 +12,13 @@ import {
   runPythonInSession,
   runPythonOnce,
 } from '../pythonQueries';
-import { GciSession, logout } from '../session';
+import { GciSession, SessionOwner, logout } from '../session';
 import { Fixture, makeFixture } from './fixture';
+
+/** A notebook owner for a test scope: one session per name, as the kernel does. */
+function nb(name: string): SessionOwner {
+  return { key: `file:///${name}.ipynb`, kind: 'notebook', label: `${name}.ipynb` };
+}
 
 /**
  * Grail, filed into a database that was created moments earlier.
@@ -105,20 +110,20 @@ describe.skipIf(!havePayload || !canMakeFixture())('Grail in a real database', (
     // canonical flag session.ts sets at login. Without either half, this
     // import would dirty the session and gemdb's transaction() entry check
     // would blame the user for it.
-    const result = await runPython('import gemdb\ngemdb.needs_commit()', 'notebook-gemdb');
+    const result = await runPython('import gemdb\ngemdb.needs_commit()', nb('notebook-gemdb'));
     expect(result.value).toBe('False');
   });
 
   it('keeps globals within a scope, and apart between scopes', async () => {
     // What a notebook depends on: one cell's assignment visible to the next,
     // and two notebooks not seeing each other's variables.
-    await runPython('x = 41', 'notebook-a');
-    expect((await runPython('x + 1', 'notebook-a')).value).toBe('42');
-    expect(isErrorResult((await runPython('x', 'notebook-b')).value)).toBe(true);
+    await runPython('x = 41', nb('notebook-a'));
+    expect((await runPython('x + 1', nb('notebook-a'))).value).toBe('42');
+    expect(isErrorResult((await runPython('x', nb('notebook-b'))).value)).toBe(true);
   });
 
   it('reports a Python error as an error rather than a result', async () => {
-    const result = await runPython('1 / 0', 'notebook-a');
+    const result = await runPython('1 / 0', nb('notebook-a'));
     expect(isErrorResult(result.value)).toBe(true);
   });
 
@@ -133,7 +138,7 @@ describe.skipIf(!havePayload || !canMakeFixture())('Grail in a real database', (
   });
 
   it('delivers output printed before an error, alongside the error', async () => {
-    const result = await runPython('print("before")\n1 / 0', 'notebook-a');
+    const result = await runPython('print("before")\n1 / 0', nb('notebook-a'));
     expect(result.output).toContain('before');
     expect(isErrorResult(result.value)).toBe(true);
   });
@@ -155,7 +160,7 @@ describe.skipIf(!havePayload || !canMakeFixture())('Grail in a real database', (
 
   it('delivers streamed output printed before an error, alongside the error', async () => {
     const chunks: string[] = [];
-    const result = await runPython("print('before')\n1 / 0", 'stream-err', (text) =>
+    const result = await runPython("print('before')\n1 / 0", nb('stream-err'), (text) =>
       chunks.push(text),
     );
     expect(chunks.join('')).toContain('before');

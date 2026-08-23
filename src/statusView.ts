@@ -6,6 +6,15 @@ import { isRemoveIpcConfigured, isSharedMemoryConfigured, sharedMemoryLabel } fr
 import { databaseExists, databasePath, enginePath, installedGrailStamp } from './paths';
 import { isSupportedPlatform, setContext } from './platform';
 import { isListening, isRunning, listProcesses } from './processes';
+import { sessionRegistry } from './session';
+
+/** "20 min" — the same scale the session-limit message uses. */
+function humanIdle(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.round(seconds / 60);
+  return minutes < 60 ? `${minutes} min` : `${Math.round(minutes / 6) / 10} h`;
+}
 
 export type GemDbState = 'unsupportedPlatform' | 'notInstalled' | 'stopped' | 'running';
 
@@ -158,6 +167,32 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
         ? { command: 'gemdb.reinstallPython', title: 'Reinstall the Python Execution Engine' }
         : undefined,
     });
+
+    // Sessions are scarce and invisible, which is a bad combination: each
+    // notebook holds one so it gets its own transaction, the database allows
+    // ten at once, and its own gems spend some of that. So say what this
+    // window is holding, and which one has been idle longest — that is the one
+    // to close when the database has none left to give. Only shown when
+    // something is connected; a row saying "0" would be noise.
+    const held = sessionRegistry();
+    if (held.length > 0) {
+      const idlest = held[0];
+      rows.push({
+        label: 'Sessions',
+        description: `${held.length} in this window`,
+        tooltip:
+          held
+            .map(
+              (s) =>
+                `${s.owner.label}${s.serial === undefined ? '' : ` — session ${s.serial}`}` +
+                ` (idle ${humanIdle(s.idleMs)})`,
+            )
+            .join('\n') +
+          `\n\nIdle longest: ${idlest.owner.label}. The database allows a limited number of ` +
+          'sessions at once, shared with other windows and its own gems.',
+        icon: new vscode.ThemeIcon('plug'),
+      });
+    }
 
     const sharedMemoryOk = await isSharedMemoryConfigured();
     rows.push({

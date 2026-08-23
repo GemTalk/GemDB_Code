@@ -129,6 +129,33 @@ never publishes one.
 
 ## The things that are easy to get wrong
 
+**A session is a unit of work, so each notebook owns one.** Sharing a session
+across notebooks would mean sharing a transaction: a commit in one notebook
+commits another's half-finished changes, and `gemdb.transaction()` refuses to
+start because a notebook the user is not looking at left the session dirty. So
+`sessionFor(owner)` keys sessions by owner — a notebook's URI, or
+`EXTENSION_OWNER` for administrative queries that must work with no notebook
+open. This also matches what every other notebook tool does: VS Code's Jupyter
+extension starts a kernel per notebook.
+
+Three consequences are easy to miss. **Anything that invalidates the database
+must log out _every_ session**, not the extension's own — `logoutAll()`, which
+is why installing Grail, uninstalling, and a root-path change all call it; a
+notebook left logged in would keep a view of a database that no longer exists.
+**Anything that runs in a notebook's scope must run in that notebook's
+session**: the scope dictionary lives in that session's SessionTemps, so
+`resetScope` takes an owner and clears nothing if that owner has no session
+yet. And **sessions are scarce** — the Community Edition keyfile GemDB installs
+says `Stone Session limit: 10`, the database's own gems (GcUser, SymbolUser)
+spend some of it, and every GemDB Shell terminal is another. So a closed
+notebook gives its session back (`onDidCloseNotebookDocument`), and a login
+refused with GemStone error 4039, 4041 or 4050 becomes a `SessionLimitError`
+naming what this window holds and which session has been idle longest.
+
+`sessionRegistry()` is the map from a session to the UI that owns it, idlest
+first, carrying GemStone's own session serial so a row here can be matched to
+`gemdb.sessions.all()` over there. The status view shows it.
+
 **A release ships a database, not just the code to build one.**
 `scripts/bundle-extent.sh` creates a scratch database, files Grail into it, and
 stages the result as `extent/gemdb.dbf`; `createDatabase` copies that instead of
@@ -259,9 +286,9 @@ note below for how the bundle is built and staged.
 | `lifecycle.ts`               | `prepare` (inert, unattended) and `ensureRunning` (prompts, starts)                      |
 | `lock.ts`                    | the cross-window setup lock — activation runs in every window                            |
 | `statusBar.ts`               | the always-visible "a database is running" indicator                                     |
-| `session.ts`                 | the single GCI session                                                                   |
+| `session.ts`                 | GCI sessions, one per owner, and who owns which                                          |
 | `pythonQueries.ts`           | the Smalltalk that runs Python and reports its errors                                    |
-| `notebook.ts`                | the notebook kernel — cells through the shared session                                   |
+| `notebook.ts`                | the notebook kernel — one session per notebook                                           |
 | `pyRepl.ts`, `lineEditor.ts` | the GemDB Shell: the REPL loop and its line editing, both host-free                      |
 | `cliMain.ts`                 | the shell as a process — a raw tty wired to `pyRepl.ts`; bundled to `out/gemdb-shell.js` |
 | `cliVscode.ts`               | the environment-backed stand-in for `vscode` in that bundle                              |

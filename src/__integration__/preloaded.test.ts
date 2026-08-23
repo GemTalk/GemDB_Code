@@ -5,8 +5,13 @@ import { stageGrail } from '../grail';
 import { bundledExtentPath } from '../paths';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
 import { isErrorResult, isGrailInstalled, runPython } from '../pythonQueries';
-import { logout } from '../session';
+import { SessionOwner, logout } from '../session';
 import { Fixture, makeFixture } from './fixture';
+
+/** A notebook owner for a test scope: one session per name, as the kernel does. */
+function nb(name: string): SessionOwner {
+  return { key: `file:///${name}.ipynb`, kind: 'notebook', label: `${name}.ipynb` };
+}
 
 const ext = process.cwd();
 
@@ -46,22 +51,22 @@ describe.skipIf(!havePreloaded || !canMakeFixture())('a database from the shippe
   });
 
   it('runs Python immediately', async () => {
-    const result = await runPython('sum(range(10))', 'nb');
+    const result = await runPython('sum(range(10))', nb('nb'));
     expect(isErrorResult(result.value)).toBe(false);
     expect(result.value).toBe('45');
   });
 
   it('keeps notebook scopes apart, as a filed-in database does', async () => {
-    await runPython('x = 41', 'nb-a');
-    expect((await runPython('x + 1', 'nb-a')).value).toBe('42');
-    expect(isErrorResult((await runPython('x', 'nb-b')).value)).toBe(true);
+    await runPython('x = 41', nb('nb-a'));
+    expect((await runPython('x + 1', nb('nb-a'))).value).toBe('42');
+    expect(isErrorResult((await runPython('x', nb('nb-b'))).value)).toBe(true);
   });
 
   // The extent ships gemdb deployed and the session enables canonical
   // modules at login (session.ts), so importing gemdb must leave nothing
   // to commit — the property its transaction() entry check stands on.
   it('ships gemdb deployed: importing it leaves nothing to commit', async () => {
-    const result = await runPython('import gemdb\ngemdb.needs_commit()', 'nb-gemdb');
+    const result = await runPython('import gemdb\ngemdb.needs_commit()', nb('nb-gemdb'));
     expect(result.value).toBe('False');
   });
 
@@ -75,7 +80,7 @@ describe.skipIf(!havePreloaded || !canMakeFixture())('a database from the shippe
         'gemdb.commit()',
         'v',
       ].join('\n'),
-      'nb-gemdb',
+      nb('nb-gemdb'),
     );
     expect(isErrorResult(result.value)).toBe(false);
     expect(result.value).toBe('7');
@@ -89,7 +94,7 @@ describe.skipIf(!havePreloaded || !canMakeFixture())('a database from the shippe
         's = gemdb.sessions.current()',
         'z["bytes"] > 0 and s["user"] == "DataCurator" and s["current"]',
       ].join('\n'),
-      'nb-gemdb',
+      nb('nb-gemdb'),
     );
     expect(result.value).toBe('True');
   });
