@@ -12,6 +12,10 @@ vitest*.mts
 eslint.config.mjs
 CLAUDE.md
 CONTRIBUTING.md
+# Design notes for contributors. README.md and CHANGELOG.md do ship — they
+# become the Marketplace's Overview and Changelog tabs — but nothing in docs/
+# is written for someone who installed the extension.
+docs/**
 # The full lockup is source art and a README banner, not something the running
 # extension ever loads — resources/icon.png is a crop of it. Shipping it would
 # put 25 KB of unreferenced image in every install.
