@@ -12,9 +12,11 @@ it becomes visible to everyone else.
 import gemdb
 
 RABBIT = r"""
-    (\(\
-    ( -.-)
-    o_(")(")
+  (\_/)
+  (•.•)
+ _(")_(") 
+(   X   )
+  ( ) ( )
 """
 
 gemdb.root["hat"] = RABBIT
