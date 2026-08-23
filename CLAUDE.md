@@ -344,6 +344,24 @@ note below for how the bundle is built and staged.
 (`.vscodeignore` keeps them out of the `.vsix`): decisions taken, what was
 measured, and what is still open. Start with
 [`docs/reaching-windows.md`](docs/reaching-windows.md).
+[`docs/demo-rabbit-in-the-hat.md`](docs/demo-rabbit-in-the-hat.md) is the
+five-minute demo of persistence and sessions, with runnable scripts in
+`docs/demo/`; every command and output in it was measured, which is how the
+`runPath` gap below was found.
+
+**`gemdb file.py` starts with a dirty session, so `gemdb.transaction()` cannot
+be a script's first statement.** Measured 2026-08-23, and it contradicts what
+`cli.ts` claims a few lines above its driver. Walking the preamble one send at
+a time in a clean session: `___canonicalClassesEnabled___: true` leaves
+`System needsCommit` false, the `#GrailConsole` store leaves it false, and
+`importlib runPath:` sets it true — twice from clean, so it is `runPath`
+itself, not the file's own code (a script whose first line is
+`import gemstone; print(gemstone.needs_commit)` already prints True). The
+transaction block's entry check then blames the user for Grail's plumbing.
+Shell and notebook sessions are unaffected: they evaluate through
+`evaluateSource:usingModuleScope:` and a fresh one runs a transaction block as
+its first action. The fix belongs in Grail; until it lands, scripts should
+`commit()` or `abort()` first.
 
 `src/gci/` is copied byte-for-byte from Jasper's `client/src/gciLibrary.ts`,
 `gciConstants.ts`, and `gciLibraryError.ts` so upstream fixes can be pulled in
