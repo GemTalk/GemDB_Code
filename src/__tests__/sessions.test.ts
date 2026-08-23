@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SessionInfo, SessionOwner, sessionLimitMessage } from '../session';
+import { SessionInfo, SessionOwner, cacheNameFor, sessionLimitMessage } from '../session';
 
 /**
  * Running out of sessions is a normal consequence of opening notebooks, not a
@@ -59,5 +59,53 @@ describe('the message when the database has no sessions left', () => {
     expect(message).toContain('a (idle 1.5 h)');
     expect(message).toContain('b (idle 3 min)');
     expect(message).toContain('c (idle 2s)');
+  });
+});
+
+/**
+ * The name a session takes in the shared cache.
+ *
+ * The 31-character limit is the whole difficulty: 32 raises OutOfRange, and it
+ * would raise it at login, on the notebook the user just opened. So the rule
+ * that keeps names short is worth testing without a database — the same reason
+ * `sessionLimitMessage` takes its sessions as an argument.
+ */
+describe('the name a session publishes to the shared cache', () => {
+  const nb = (label: string): SessionOwner => ({
+    key: `file:///${label}`,
+    kind: 'notebook',
+    label,
+  });
+
+  it('names a notebook, without repeating what the tag already said', () => {
+    expect(cacheNameFor(nb('analysis.ipynb'))).toBe('gemdb nb analysis');
+  });
+
+  it('names a shell by its process, which is what leads back to the terminal', () => {
+    expect(cacheNameFor({ key: 'shell', kind: 'shell', label: 'shell' }, 41234)).toBe(
+      'gemdb sh 41234',
+    );
+  });
+
+  it('names the extension’s own session', () => {
+    expect(cacheNameFor({ key: 'gemdb.extension', kind: 'extension', label: 'GemDB' })).toBe(
+      'gemdb ext',
+    );
+  });
+
+  it('never exceeds what the cache will take', () => {
+    const long = nb('a-notebook-with-a-really-quite-long-name.ipynb');
+    expect(cacheNameFor(long).length).toBeLessThanOrEqual(31);
+    expect(cacheNameFor(long)).toBe('gemdb nb a-notebook-with-a-real');
+  });
+
+  it('drops what the cache cannot store', () => {
+    // The cache holds 8-bit code points, so an emoji or a CJK title would be
+    // meaningless there at best; strip rather than let login fail over it.
+    expect(cacheNameFor(nb('sales–📈.ipynb'))).toBe('gemdb nb sales');
+  });
+
+  it('falls back to the tag when nothing usable is left', () => {
+    expect(cacheNameFor(nb('📈.ipynb'))).toBe('gemdb nb');
   });
 });

@@ -75,6 +75,12 @@ describe('writeCliScripts', () => {
     // enables canonical modules — without this line every CLI run
     // cold-imports and gemdb's clean-session contract is void.
     expect(run).toContain('___canonicalClassesEnabled___: true');
+    // A file run is linked topaz, so it never reaches session.ts and would
+    // otherwise sit in the shared cache as the stock 'TopazL'. The truncation
+    // is not optional: 32 characters raises OutOfRange, at login.
+    expect(run).toContain('System cacheName: label');
+    expect(run).toContain("label := 'gemdb run ', label");
+    expect(run).toContain('label size > 31 ifTrue:');
   });
 
   it('makes no arguments the GemDB Shell, run by the recorded Node runtime', () => {

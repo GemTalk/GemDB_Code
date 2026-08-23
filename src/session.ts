@@ -70,6 +70,56 @@ export interface SessionOwner {
   label: string;
 }
 
+/**
+ * The longest name the shared cache will take: 32 raises OutOfRange (error
+ * 2061, measured on 3.7.5). It is a small budget on purpose — the name is a
+ * label for a person reading a list of sessions, not an identifier. What joins
+ * a session here to a row over there is the serial.
+ */
+const CACHE_NAME_LIMIT = 31;
+
+/** How each kind of owner introduces itself in that list. */
+const CACHE_NAME_TAGS: Record<SessionKind, string> = {
+  notebook: 'gemdb nb',
+  shell: 'gemdb sh',
+  extension: 'gemdb ext',
+};
+
+/**
+ * What to call this session where the whole machine can see it.
+ *
+ * `System cacheName:` writes into the shared page cache, so the name shows up
+ * for every session on the host — other VS Code windows, topaz, Jasper, a
+ * dashboard — via `System cacheStatisticsForAllSlots`, alongside the stock
+ * `GcReclaim`, `SymbolGem` and `TopazL`. That is the point: without it a
+ * GemDB session is anonymous, and "which of these ten is worth closing" has no
+ * answer from outside the window that opened it.
+ *
+ * The `gemdb` prefix earns its six characters on a database this extension did
+ * not install alone — it is the only thing saying which client a session
+ * belongs to. Shells report their pid because a shell is its own process and
+ * that is what leads back to the terminal; in the extension host `process.pid`
+ * would be the same number for every notebook, which is why only 'shell' uses
+ * it (shells never log in from the extension host — "Open GemDB Shell" runs
+ * the wrapper in a terminal).
+ *
+ * Truncation is plain and lossy, and that is accepted: two notebooks whose
+ * names agree for 22 characters get the same label, and the serial tells them
+ * apart. Non-ASCII goes too, since the cache stores 8-bit code points.
+ */
+export function cacheNameFor(owner: SessionOwner, pid: number = process.pid): string {
+  const tag = CACHE_NAME_TAGS[owner.kind];
+  if (owner.kind === 'extension') return tag;
+  if (owner.kind === 'shell') return `${tag} ${pid}`;
+  // `.ipynb` is what the `nb` tag already said, so spend the room on the name.
+  const name = owner.label
+    .replace(/\.ipynb$/i, '')
+    .replace(/[^\x20-\x7e]/g, '')
+    .trim();
+  if (!name) return tag;
+  return `${tag} ${name}`.slice(0, CACHE_NAME_LIMIT);
+}
+
 /** A session, described for a human or for joining to `gemdb.sessions`. */
 export interface SessionInfo {
   owner: SessionOwner;
@@ -342,6 +392,19 @@ export class GciSession {
       if (Number.isFinite(serial)) session.sessionSerial = serial;
     } catch (e) {
       log(`Could not read the session serial: ${e instanceof Error ? e.message : e}`);
+    }
+    // Publish who this session belongs to, where anything on the host can read
+    // it. Everything above this point is knowledge trapped in one extension
+    // host; `System cacheName:` is what makes it visible to another window, to
+    // topaz, and to whatever ends up reporting on sessions. It writes shared
+    // memory rather than the repository, so it costs no commit and — the
+    // reason it beats a committed registry — the entry dies with the process
+    // instead of outliving a window that crashed. Best-effort, like the serial:
+    // an unnamed session still works.
+    try {
+      session.execute(`System cacheName: '${cacheNameFor(resolved).replace(/'/g, "''")}'. true`);
+    } catch (e) {
+      log(`Could not name the session (${resolved.label}): ${e instanceof Error ? e.message : e}`);
     }
     log(
       `Connected to GemDB as ${DB_USER} (${resolved.label}` +

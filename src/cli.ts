@@ -132,7 +132,7 @@ set user ${DB_USER} pass ${DB_PASSWORD}
 set gemstone ${STONE_NAME}
 login
 run
-| args ofs target status statusFile |
+| args ofs target status statusFile label |
 "Canonical modules, session-local and default off: with it on, the modules
 the extent ships deployed (gemdb above all) warm-bind instead of
 cold-importing, so running a script leaves no uncommitted plumbing behind
@@ -156,6 +156,24 @@ SessionTemps current at: #'GrailConsole' put: (Array with: GsFile stdout).
 [
     [
         target := args at: ofs + 1.
+        "Name this session in the shared cache, so a long-running script is
+        identifiable from outside -- another window, topaz, a dashboard --
+        rather than showing as the stock 'TopazL'. The extension does the
+        same for its own sessions after login (session.ts cacheNameFor); this
+        mode never goes through that code, because it is linked topaz rather
+        than a GCI login. Limit is 31 characters (32 raises OutOfRange), and
+        the whole thing is best-effort: a script must run even if it cannot
+        be labelled."
+        label := target = '-m'
+            ifTrue: [args at: ofs + 2]
+            ifFalse: [(target subStrings: '/') isEmpty
+                ifTrue: [target]
+                ifFalse: [(target subStrings: '/') last]].
+        (label size > 3 and: [(label copyFrom: label size - 2 to: label size) = '.py'])
+            ifTrue: [label := label copyFrom: 1 to: label size - 3].
+        label := 'gemdb run ', label.
+        label size > 31 ifTrue: [label := label copyFrom: 1 to: 31].
+        [System cacheName: label] on: Error do: [:ignored | ignored return: nil].
         target = '-m'
             ifTrue: [importlib runModule: (args at: ofs + 2)]
             ifFalse: [importlib runPath: target].

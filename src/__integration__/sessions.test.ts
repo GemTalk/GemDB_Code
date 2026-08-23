@@ -5,7 +5,7 @@ import { stageGrail } from '../grail';
 import { bundledExtentPath } from '../paths';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
 import { isErrorResult, runPython } from '../pythonQueries';
-import { SessionOwner, logoutAll, sessionRegistry } from '../session';
+import { SessionOwner, cacheNameFor, execute, logoutAll, sessionRegistry } from '../session';
 import { Fixture, makeFixture } from './fixture';
 
 /**
@@ -142,5 +142,45 @@ describe.skipIf(!havePreloaded || !canMakeFixture())('a session per notebook', (
     expect(inB.value).toBe('7');
 
     await runPython('gemdb.abort()', A);
+  });
+
+  it('publishes each session’s owner where any other session can read it', async () => {
+    // The point of naming: what this window knows (which notebook owns which
+    // session) becomes readable by anything attached to the same cache —
+    // another window, topaz, a dashboard. So the assertion deliberately reads
+    // it back the long way round, through the shared cache, rather than from
+    // the registry that wrote it.
+    await runPython('1', A);
+    await runPython('1', B);
+
+    const listing = execute(
+      `| ws |
+       ws := WriteStream on: Unicode7 new.
+       System cacheStatisticsForAllSlots do: [:each |
+         each ifNotNil: [
+           ws nextPutAll: (each at: 1); nextPut: $|; print: (each at: 3); lf]].
+       ws contents encodeAsUTF8`,
+    );
+    const slots = new Map(
+      listing
+        .split('\n')
+        .filter((line) => line.includes('|'))
+        .map((line) => {
+          const [name, sessionId] = line.split('|');
+          return [name, Number.parseInt(sessionId, 10)] as const;
+        }),
+    );
+
+    expect(cacheNameFor(A)).toBe('gemdb nb one');
+    expect([...slots.keys()]).toEqual(expect.arrayContaining(['gemdb nb one', 'gemdb nb two']));
+    // `execute` runs in the extension's own session, so it named itself too.
+    expect(slots.has('gemdb ext')).toBe(true);
+
+    // The join a dashboard needs: the cache slot's session id is the number
+    // this side recorded at login, so a name over there resolves to an owner
+    // over here.
+    const held = new Map(sessionRegistry().map((s) => [s.owner.key, s]));
+    expect(slots.get('gemdb nb one')).toBe(held.get(A.key)?.serial);
+    expect(slots.get('gemdb nb two')).toBe(held.get(B.key)?.serial);
   });
 });
