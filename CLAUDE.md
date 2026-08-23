@@ -270,6 +270,11 @@ note below for how the bundle is built and staged.
 | `statusView.ts`              | the one tree view                                                                        |
 | `gci/`                       | **vendored from Jasper — do not edit**                                                   |
 
+`docs/` holds design notes that are not part of the shipped extension
+(`.vscodeignore` keeps them out of the `.vsix`): decisions taken, what was
+measured, and what is still open. Start with
+[`docs/reaching-windows.md`](docs/reaching-windows.md).
+
 `src/gci/` is copied byte-for-byte from Jasper's `client/src/gciLibrary.ts`,
 `gciConstants.ts`, and `gciLibraryError.ts` so upstream fixes can be pulled in
 with a plain `cp`. ESLint ignores it; keep it that way, and send fixes upstream
@@ -319,5 +324,12 @@ package: a shim is 276 KB, so pruning per target would save a fraction of a
 megabyte and cost a move-and-restore dance around build artifacts. The same
 trade is made for koffi's binaries in `.vscodeignore`.
 
-Windows stays out of scope regardless — reaching it means routing every command
-through WSL, as Jasper does. Do not add partial Windows paths.
+Windows is out of scope in the shipped product, and the obstacle is not the
+extension: there is no GemStone server for Windows, so any Windows story puts
+the database on Linux and decides where the seam falls. **Do not add partial
+Windows paths.** The options — VS Code's WSL window (which needs no new code at
+all), a native Windows client against a remote server, and Docker as a server
+backend — are worked through in
+[`docs/reaching-windows.md`](docs/reaching-windows.md), together with what was
+measured and what still needs a Windows machine. Read that before starting any
+of it.
