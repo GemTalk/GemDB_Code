@@ -33,6 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **First-run setup no longer fails right after creating the database.** On a
+  machine where GemDB had never been installed, setup stopped with
+  `ENOENT: no such file or directory, open '<root>/grail/.gemdb-grail-stamp'`
+  and Python support was never staged. It recorded Python as installed before
+  creating the directory that record lives in — harmless on any machine that
+  had run an earlier version, which is why it reached a release. Upgrades were
+  affected too, more quietly: the same misordering made GemDB believe the
+  Python payload was already current, so a new version's payload was never
+  written to disk and the `gemdb` command kept its old contents.
 - **Renaming a notebook no longer costs it its session or its variables.**
   A notebook is identified by its file URI, so renaming the file used to leave
   the old session logged in with nobody to claim it — one of ten, gone until

@@ -8,6 +8,7 @@ import {
   grailLabel,
   grailNeedsUpdate,
   recordGrailInstalled,
+  stageAndRecordGrail,
   installGrail,
   stageGrail,
   bundledGrailStamp,
@@ -21,7 +22,6 @@ import {
   grailInstalled,
   grailPath,
   grailStagedOnDisk,
-  bundledExtentPath,
 } from './paths';
 import {
   findNetldi,
@@ -80,14 +80,16 @@ async function prepareFiles(
   if (token.isCancellationRequested) return;
 
   progress.report({ message: 'Creating your database…' });
-  createDatabase(engine, extensionPath);
-  // A database made from the shipped extent already has Grail in it, so record
-  // that here. Without the stamp `ensureRunning` would file it in again on
-  // first use — several minutes of work to arrive where we already are.
-  if (fs.existsSync(bundledExtentPath(extensionPath))) recordGrailInstalled(extensionPath);
+  const database = createDatabase(engine, extensionPath);
 
+  // Stage Grail, then — only if this run made the database from the shipped
+  // extent — record that it is already filed in, saving the several minutes
+  // `ensureRunning` would otherwise spend filing it in on first use. The order
+  // matters and the reasons are in stageAndRecordGrail; so does the condition,
+  // which asks what this call did rather than what the extension ships, since
+  // an upgrade finds a database carrying whatever Grail it was built with.
   progress.report({ message: 'Preparing Python support…' });
-  if (grailNeedsUpdate(extensionPath)) stageGrail(extensionPath);
+  stageAndRecordGrail(extensionPath, database.created && database.preloaded);
 }
 
 /** Guard against a build that forgot to run `npm run bundle:grail`. */
