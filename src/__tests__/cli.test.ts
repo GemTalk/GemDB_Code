@@ -71,10 +71,10 @@ describe('writeCliScripts', () => {
     // SystemExit's Python args tuple, and CPython truncates an int to n % 256.
     expect(run).toContain("objectNamed: #'SystemExit'");
     expect(run).toContain('\\\\ 256');
-    // Deployed modules (gemdb above all) warm-bind only when the session
-    // enables canonical modules — without this line every CLI run
-    // cold-imports and gemdb's clean-session contract is void.
-    expect(run).toContain('___canonicalClassesEnabled___: true');
+    // Grail retired the canonical-modules flag when warm binding became its
+    // only path. Sending it is now a doesNotUnderstand that kills the run at
+    // that line, so the driver must not carry it.
+    expect(run).not.toContain('___canonicalClassesEnabled___');
     // A file run is linked topaz, so it never reaches session.ts and would
     // otherwise sit in the shared cache as the stock 'TopazL'. The truncation
     // is not optional: 32 characters raises OutOfRange, at login.

@@ -133,12 +133,11 @@ set gemstone ${STONE_NAME}
 login
 run
 | args ofs target status statusFile label |
-"Canonical modules, session-local and default off: with it on, the modules
-the extent ships deployed (gemdb above all) warm-bind instead of
-cold-importing, so running a script leaves no uncommitted plumbing behind
-and gemdb.transaction() works as its first statement. Mirrors the same
-setting in the extension's session.ts."
-importlib ___canonicalClassesEnabled___: true.
+"No canonical-modules flag is set here; see cli.ts. Grail retired that
+flag once warm binding became its only path -- what is warm is now
+decided by what has been committed, which is what the shipped extent
+already provides -- and the send became a doesNotUnderstand that killed
+every file run at this line."
 args := System commandLineArguments.
 1 to: args size do: [:j | (args at: j) = '--' ifTrue: [ofs := j]].
 statusFile := System gemEnvironmentVariable: 'GEMDB_STATUS_FILE'.
