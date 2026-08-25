@@ -19,10 +19,24 @@ import {
  * is otherwise the same shape Jasper writes, because that is the shape the
  * engine's tooling expects to find.
  */
-export function createDatabase(enginePath: string, extensionPath?: string): void {
+/**
+ * What a call to `createDatabase` actually did.
+ *
+ * `preloaded` is true only when this call made the database *and* made it from
+ * the shipped extent — which is the one case where Grail is already filed in
+ * and the stamp may be written without doing the work. "The extension ships an
+ * extent" is not the same question: an upgrade finds the database already
+ * there, carrying whatever Grail was filed into it before.
+ */
+export interface DatabaseCreation {
+  created: boolean;
+  preloaded: boolean;
+}
+
+export function createDatabase(enginePath: string, extensionPath?: string): DatabaseCreation {
   if (databaseExists()) {
     log(`Database already exists at ${databasePath()}`);
-    return;
+    return { created: false, preloaded: false };
   }
 
   logStep('Creating the database');
@@ -111,6 +125,7 @@ export function createDatabase(enginePath: string, extensionPath?: string): void
   fs.chmodSync(extentPath(), 0o644);
 
   log(`Database created at ${dbPath}`);
+  return { created: true, preloaded: extentSource.preloaded };
 }
 
 /** Delete the database directory, extent and all. */

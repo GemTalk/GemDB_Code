@@ -294,6 +294,25 @@ executeAsync loop clears the stack at the next forwarder stop and throws
 `Error: KeyboardInterrupt - `. Anything new that evaluates Python should go
 through that layer, not `execute` directly.
 
+**Stage Grail before stamping it, and stamp only what this run created.**
+`stageAndRecordGrail` in `grail.ts` owns that order. Reversed, it broke both
+ways at once: on a first install `<rootPath>/grail` does not exist yet, so
+writing the stamp threw ENOENT and setup died just after "Database created"
+(reported from the field, 2026-08-24); on an upgrade the stamp landed in the
+*previous* version's directory, `grailNeedsUpdate` then compared the bundled
+stamp against itself and skipped staging, so the old payload stayed on disk
+labelled as the new one and `writeCliScripts` never refreshed `bin/gemdb`. It
+could not have worked regardless — `stageGrail` replaces the directory
+wholesale, stamp included. Neither failure reproduces on a machine that has run
+an earlier version, and the integration suite calls `stageGrail` itself rather
+than going through `prepare`, which is why `src/__tests__/grailStaging.test.ts`
+starts from a root path that does not exist. The condition is equally
+load-bearing: `createDatabase` returns `{created, preloaded}` so the stamp
+follows *this call having made the database from the shipped extent*, not "the
+extension ships an extent" — an upgrade finds a database carrying whatever
+Grail was filed into it before, and stamping there would claim an install that
+never happened.
+
 **Grail must be staged to a stable directory.** `installGrail` records Grail's
 own directory _inside the database_, and every session resolves modules relative
 to it. The extension directory is versioned (`gemdb.gemdb-<version>/`), so it

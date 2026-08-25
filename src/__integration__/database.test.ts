@@ -63,9 +63,19 @@ afterAll(async () => {
 });
 
 describe.skipIf(!makeFixtureIsPossible())('a real database', () => {
-  it('creates a database from the engine', () => {
-    createDatabase(fixture!.engine);
+  it('creates a database from the engine, and says what it did', () => {
+    // What it did, not what the extension ships: whether Grail may be recorded
+    // as filed in turns on this call having made the database from the shipped
+    // extent. Passing no extension path here means the engine's own extent, so
+    // Grail is not in it and `preloaded` must say so.
+    const made = createDatabase(fixture!.engine);
     expect(databaseExists()).toBe(true);
+    expect(made).toEqual({ created: true, preloaded: false });
+
+    // Second call finds it already there and creates nothing — the state an
+    // upgrade arrives in, where stamping the bundled Grail would be a lie
+    // about a database that was filed in by some earlier version.
+    expect(createDatabase(fixture!.engine)).toEqual({ created: false, preloaded: false });
   });
 
   it('starts, and reports itself through gslist', async () => {

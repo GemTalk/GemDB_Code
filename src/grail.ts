@@ -110,6 +110,36 @@ export function stageGrail(extensionPath: string): void {
 }
 
 /**
+ * Put Grail on disk and, when the database was just made from the shipped
+ * extent, record that it is filed in. In that order, which is the whole point.
+ *
+ * The two steps were once the other way round, and each of the three things
+ * that went wrong is worth naming, because none of them showed up on a machine
+ * that had run an earlier version:
+ *
+ *   - On a first install `<rootPath>/grail` does not exist yet, so writing the
+ *     stamp into it threw ENOENT and setup died right after creating the
+ *     database. Reported from the field; every developer machine already had
+ *     the directory, and the integration suite stages Grail itself rather than
+ *     going through this path.
+ *   - On an upgrade the stamp *could* be written, into the previous version's
+ *     directory — at which point `grailNeedsUpdate` compared the bundled stamp
+ *     with the bundled stamp, found them equal, and skipped staging. The old
+ *     Grail then stayed on disk indefinitely, labelled as the new one, with
+ *     `writeCliScripts` never re-running to refresh `bin/gemdb`.
+ *   - And it could not have worked anyway: `stageGrail` replaces the directory
+ *     wholesale, so it deletes the stamp that was just written into it.
+ *
+ * Staging last also gives the upgrade case the behaviour the stamp is for: the
+ * fresh copy arrives without a stamp, `isInstalled()` is false, and
+ * `ensureRunning` files the new Grail into the existing database.
+ */
+export function stageAndRecordGrail(extensionPath: string, fromPreloadedExtent: boolean): void {
+  if (grailNeedsUpdate(extensionPath)) stageGrail(extensionPath);
+  if (fromPreloadedExtent) recordGrailInstalled(extensionPath);
+}
+
+/**
  * Record that the staged Grail is now filed into the database.
  *
  * Kept separate from staging, and written only after the install succeeds,
