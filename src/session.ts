@@ -418,24 +418,13 @@ export class GciSession {
     }
     const session = new GciSession(gci, result.session, resolved);
     liveSessions.add(session);
-    // Canonical modules are a session-local Grail flag, default off. The
-    // shipped extent deploys gemdb (committed, caches warmed) precisely so
-    // that a session's `import gemdb` leaves nothing to commit — but the
-    // import only consults that deployed state when this flag is on. Without
-    // it every session cold-imports, and gemdb's transaction() entry check
-    // reports the import's own writes as the user's pending changes. Guarded
-    // send, best-effort: a database this extension did not install may
-    // predate the flag, and a session without it still works — just colder.
-    try {
-      session.execute(
-        '(System myUserProfile symbolList objectNamed: #importlib) ' +
-          'ifNotNil: [:imp | imp ___canonicalClassesEnabled___: true]. true',
-      );
-    } catch (e) {
-      log(
-        `Could not enable canonical modules (${resolved.label}): ${e instanceof Error ? e.message : e}`,
-      );
-    }
+    // Nothing is sent here to make imports warm. Grail once gated that on a
+    // session-local flag, `___canonicalClassesEnabled___`, which this login
+    // turned on; the flag was retired when warm binding became the only path,
+    // and what is warm is now decided by what has been committed — which is
+    // exactly what the shipped extent, with gemdb deployed and its caches
+    // warmed, provides. The send survived here for a while as a caught DNU,
+    // logging a failure on every single login, which is worse than nothing.
     // Record GemStone's own serial for this session, so what the extension
     // knows (which notebook owns it) can be joined to what the database knows
     // (`gemdb.sessions`, idle times, who is holding resources). Best-effort:

@@ -350,9 +350,9 @@ five-minute demo of persistence and sessions, with runnable scripts in
 `runPath` gap below was found.
 
 **`gemdb file.py` starts with a dirty session, so `gemdb.transaction()` cannot
-be a script's first statement.** Measured 2026-08-23, and it contradicts what
-`cli.ts` claims a few lines above its driver. Walking the preamble one send at
-a time in a clean session: `___canonicalClassesEnabled___: true` leaves
+be a script's first statement.** Measured 2026-08-23 against the payload of
+that date, before Grail retired the canonical-modules flag. Walking the
+preamble one send at a time in a clean session: setting the flag left
 `System needsCommit` false, the `#GrailConsole` store leaves it false, and
 `importlib runPath:` sets it true — twice from clean, so it is `runPath`
 itself, not the file's own code (a script whose first line is
