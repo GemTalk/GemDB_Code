@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { engineVersion, reinstallPythonOnUpdate, rootPath } from './config';
-import { cliPath, writeCliScripts } from './cli';
+import { writeCliScripts } from './cli';
 import { createDatabase, removeDatabase } from './database';
 import { Progress, installEngine, removeEngine } from './engine';
 import {
@@ -278,16 +278,17 @@ export async function ensureRunning(extensionPath: string): Promise<boolean> {
     if (!prepared || !isInstalled()) return false;
   }
 
-  // The shell command is normally written when Grail is staged, but an
-  // install that predates it never runs that staging again — the payload on
-  // disk already matches. Backstop it here, on the single path everything
-  // that needs a database goes through.
-  if (!fs.existsSync(cliPath())) {
-    try {
-      writeCliScripts(extensionPath);
-    } catch (e) {
-      log(`Could not write the gemdb command: ${errorMessage(e)}`);
-    }
+  // Staging Grail writes the shell command too, but only when the payload
+  // changed — so an update that changed only code would leave the previous
+  // `bin/gemdb` and shell bundle in place, and a fix to the shell would reach
+  // the editor while the terminal it opens kept running the old one. Called
+  // unconditionally here, on the single path everything that needs a database
+  // goes through; `writeCliScripts` compares a fingerprint and returns without
+  // touching the disk when it would write the same bytes.
+  try {
+    writeCliScripts(extensionPath);
+  } catch (e) {
+    log(`Could not write the gemdb command: ${errorMessage(e)}`);
   }
 
   if (!(await ensureOsConfigured(extensionPath))) return false;
