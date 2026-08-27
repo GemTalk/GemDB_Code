@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The GemDB Shell no longer prints the database client's own chatter.**
+  Opening a shell wrote a line like
+  `gcits login: session 0x… lgc 0x… rpc gem processId 4726` onto your terminal
+  between the banner and the first prompt, with a matching one on exit — the
+  client library narrating itself. Every session GemDB opens now asks it not
+  to.
+
 ## [1.2.0] - 2026-08-27
 
 A notebook is a unit of work again: each one gets its own database session, and
