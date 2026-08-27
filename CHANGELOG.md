@@ -7,14 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- **The sample code now starts with `import gemdb`.** A new notebook's first
-  cell, the walkthrough and the README all opened with `import gemstone` —
-  Grail's own lower-level surface, inherited from Jasper. The first thing a
-  developer meets is now `gemdb`: `gemdb.root` for the data that outlives the
-  session, `gemdb.commit()` for the moment it becomes everyone's.
-
 ### Added
 
 - **`gemdb` is on the PATH of terminals you open in VS Code.** The command is
@@ -24,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   terminals this editor launches — and takes it back when the extension is
   disabled or uninstalled. Your shell profile is still yours; add it there
   too if you want `gemdb` in terminals outside VS Code.
+
+### Changed
+
+- **The sample code now starts with `import gemdb`.** A new notebook's first
+  cell, the walkthrough and the README all opened with `import gemstone` —
+  Grail's own lower-level surface, inherited from Jasper. The first thing a
+  developer meets is now `gemdb`: `gemdb.root` for the data that outlives the
+  session, `gemdb.commit()` for the moment it becomes everyone's.
 
 ### Fixed
 
