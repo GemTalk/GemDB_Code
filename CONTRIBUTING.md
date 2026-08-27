@@ -142,6 +142,20 @@ falling back to filing Grail in on first use.
 GemDB Code is published to both the **VS Code Marketplace** and **Open VSX**,
 under the same `gemtalksystems` publisher as Jasper.
 
+**Pre-flight — check the Marketplace token before you touch anything else:**
+
+```sh
+npx @vscode/vsce verify-pat gemtalksystems
+```
+
+Azure DevOps personal access tokens expire (one year at most), and the failure
+is a bare `401` from the publish step — after the version is bumped, the
+changelog promoted, the commit made, the tag cut and CI run. That happened on
+1.1.0: everything up to publishing was correct and the release still stopped
+dead, half-published, needing a token only a human could issue. This check costs
+a second and moves that discovery to before the first commit. Reissue with
+`vsce login` (see [Credentials](#credentials)) if it fails.
+
 1. `npm version <X.Y.Z> --no-git-tag-version` — bumps `package.json` and the two
    root fields in `package-lock.json` atomically. Don't hand-edit these or
    find-and-replace the version across the lockfile: the version string can
@@ -193,6 +207,18 @@ npx ovsx create-namespace gemtalksystems -p <token>  # Open VSX (one-time; alrea
 `ovsx publish` reads `OVSX_PAT` from the environment (or a stored token). The
 Marketplace token is an Azure DevOps PAT with **Marketplace → Manage** scope,
 issued from the organization that owns the publisher.
+
+Reissuing one (User settings → Personal access tokens in Azure DevOps) has two
+settings that must be right, and getting either wrong produces the same
+uninformative `401` as an expired token:
+
+- **Scopes: Marketplace → Manage.** Acquire and Publish alone are not enough.
+- **Organization: All accessible organizations.** A token scoped to a single
+  organization is rejected, which is the surprising one — the publisher is a
+  Marketplace entity rather than an organization-level resource.
+
+Then `npx @vscode/vsce login gemtalksystems` to store it in the keychain, and
+`verify-pat` to confirm before relying on it.
 
 Keep both out of your shell profile. `vsce login` stores the Marketplace token
 in the OS keychain, which is the safer place for it, and a token needed only for
