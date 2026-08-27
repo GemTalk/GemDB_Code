@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-27
+
+`gemdb` is on your PATH in VS Code's terminals, the samples start with
+`import gemdb`, and running a script no longer garbles non-ASCII text or talks
+about topaz.
+
 ### Added
 
 - **`gemdb` is on the PATH of terminals you open in VS Code.** The command is
@@ -286,7 +292,8 @@ gets out of the way.
 - **`sys.exit(n)` exits 1 rather than `n`**, and **`input()` is not yet
   supported**. Both are upstream in Grail.
 
-[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/GemTalk/GemDB_Code/releases/tag/v1.0.0
