@@ -130,6 +130,29 @@ function cliIsCurrent(fingerprint: string): boolean {
   }
 }
 
+/**
+ * Guarantee `<rootPath>/bin/gemdb` exists and matches this build, for callers
+ * about to hand that path to something else.
+ *
+ * Opening a GemDB Shell makes VS Code launch the wrapper as a terminal's shell
+ * program, so a missing or stale file is not an internal detail — it is
+ * "The terminal process failed to launch", or a shell running last week's
+ * code. `requireRunning` cannot carry this: it returns early when the database
+ * is already up, which is the common case, so `ensureRunning` — where staging
+ * lives — is skipped exactly when nothing else would notice.
+ *
+ * Cheap to call: `writeCliScripts` fingerprints what it would write and
+ * returns without touching the disk when that matches what is already there.
+ */
+export function ensureCliCurrent(extensionPath: string): boolean {
+  try {
+    writeCliScripts(extensionPath);
+  } catch (e) {
+    log(`Could not write the gemdb command: ${e instanceof Error ? e.message : e}`);
+  }
+  return fs.existsSync(cliPath());
+}
+
 export function writeCliScripts(extensionPath: string): void {
   const engine = enginePath();
   if (!engine) throw new Error('The database engine is not installed.');

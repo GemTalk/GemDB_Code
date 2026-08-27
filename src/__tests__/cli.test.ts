@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { __setSetting } from '../__mocks__/vscode';
-import { cliPath, writeCliScripts } from '../cli';
+import { cliPath, ensureCliCurrent, writeCliScripts } from '../cli';
 import { cliStampPath, expectedEnginePath } from '../paths';
 
 /**
@@ -178,6 +178,20 @@ describe('writeCliScripts', () => {
     fs.rmSync(expectedEnginePath(), { recursive: true, force: true });
     expect(() => writeCliScripts(ext)).toThrow(/not installed/);
     expect(fs.existsSync(cliStampPath())).toBe(false);
+  });
+
+  it('reports whether the command a terminal is about to launch is really there', () => {
+    // openRepl hands this path to VS Code as a terminal's shell program, so a
+    // false here is the difference between an explanation and
+    // "The terminal process failed to launch".
+    expect(ensureCliCurrent(ext)).toBe(true);
+    expect(fs.existsSync(cliPath())).toBe(true);
+
+    // Generation impossible: it must say so rather than throw, and must not
+    // claim a wrapper that is not there.
+    fs.rmSync(cliPath());
+    fs.rmSync(expectedEnginePath(), { recursive: true, force: true });
+    expect(ensureCliCurrent(ext)).toBe(false);
   });
 
   it('refuses to generate against a missing engine', () => {
