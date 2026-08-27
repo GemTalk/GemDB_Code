@@ -76,6 +76,20 @@ export function grailStampPath(): string {
   return path.join(grailPath(), '.gemdb-grail-stamp');
 }
 
+/**
+ * Marker recording which build of the generated `gemdb` command is staged.
+ *
+ * Holds a fingerprint of what `writeCliScripts` would produce — the wrapper,
+ * the topaz driver and the shell bundle — so staging can be skipped when it
+ * would rewrite the same bytes, and, more to the point, is NOT skipped when it
+ * would not. Its own stamp rather than the extension's version because a
+ * developer running the extension host rebuilds the bundle far more often than
+ * they change the version.
+ */
+export function cliStampPath(): string {
+  return path.join(rootPath(), 'bin', '.gemdb-cli-stamp');
+}
+
 export function locksPath(): string {
   return path.join(rootPath(), 'locks');
 }

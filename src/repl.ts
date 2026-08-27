@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { shellQuote } from './osConfig';
 import { findNetldi, findStone } from './processes';
 import { ensureRunning } from './lifecycle';
-import { cliPath } from './cli';
+import { cliPath, ensureCliCurrent } from './cli';
 
 /**
  * Make sure the database is up, starting it if it is not.
@@ -29,6 +29,15 @@ async function requireRunning(extensionPath: string): Promise<boolean> {
 let replCounter = 0;
 export async function openRepl(extensionPath: string): Promise<void> {
   if (!(await requireRunning(extensionPath))) return;
+  // The wrapper is this terminal's shell program, so it has to be there and
+  // has to be this build — VS Code reports a missing one as a launch failure
+  // with no hint of what GemDB should have done about it.
+  if (!ensureCliCurrent(extensionPath)) {
+    void vscode.window.showErrorMessage(
+      'GemDB could not write the gemdb command, so the GemDB Shell cannot start. See the GemDB log.',
+    );
+    return;
+  }
 
   replCounter += 1;
   const name = replCounter === 1 ? 'GemDB Shell' : `GemDB Shell ${replCounter}`;
@@ -62,6 +71,14 @@ export async function runFile(extensionPath: string, uri?: vscode.Uri): Promise<
     return;
   }
   if (!(await requireRunning(extensionPath))) return;
+  // Same guarantee as the shell: this terminal is about to be sent the
+  // wrapper's path as a command line.
+  if (!ensureCliCurrent(extensionPath)) {
+    void vscode.window.showErrorMessage(
+      'GemDB could not write the gemdb command, so the file cannot be run. See the GemDB log.',
+    );
+    return;
+  }
 
   // Save first: the database reads the file from disk, so an unsaved buffer
   // would silently run the previous version.

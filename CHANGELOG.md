@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   between the banner and the first prompt, with a matching one on exit — the
   client library narrating itself. Every session GemDB opens now asks it not
   to.
+- **Updating GemDB now updates the `gemdb` command and the shell it runs.**
+  The staged copies under `~/GemDB/bin` were rewritten only when the Python
+  payload changed, so a release that changed only extension code left the
+  previous ones in place — a fix to the GemDB Shell reached the editor while
+  the terminal it opens kept running the old build. They are now refreshed
+  whenever they differ from what the installed version carries, and left alone
+  when they do not. Opening a GemDB Shell or running a file now guarantees the
+  command is there and current first, rather than handing VS Code a path and
+  letting it report "The terminal process failed to launch".
 
 ## [1.2.0] - 2026-08-27
 
