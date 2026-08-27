@@ -48,6 +48,23 @@ export class SessionLimitError extends SessionError {}
  */
 const SESSION_LIMIT_ERRORS = new Set([4039, 4041, 4050]);
 
+/**
+ * `GCI_LOGIN_QUIET` — stop the client library narrating each login on stdout.
+ *
+ * Without it every login writes a line like
+ * `gcits login: session 0x… lgc 0x… rpc gem processId 4726` (and a matching
+ * one at logout) to the process's real stdout, from inside the C library. In
+ * the extension host that is merely noise in the log; in a GemDB Shell it is
+ * printed straight onto the user's terminal, and in `gemdb -c` it lands in
+ * output a script may be piping somewhere.
+ *
+ * Defined here rather than in `gci/gciConstants.ts` because that directory is
+ * vendored from Jasper byte-for-byte and carries no login flags at all. The
+ * value is from the engine's own `include/gci.ht` (`GCI_LOGIN_QUIET = 0x10`,
+ * in the flag enum `GciTsLogin`'s `loginFlags` takes).
+ */
+const GCI_LOGIN_QUIET = 0x10;
+
 /** What kind of user interface a session belongs to. */
 export type SessionKind = 'notebook' | 'shell' | 'extension';
 
@@ -400,7 +417,7 @@ export class GciSession {
       gemNrs(),
       DB_USER,
       DB_PASSWORD,
-      0,
+      GCI_LOGIN_QUIET,
       0,
     );
     if (!result.session) {

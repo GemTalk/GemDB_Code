@@ -162,6 +162,11 @@ send "exit()\\r"
     expect(ran.transcript).toContain('42');
     expect(ran.transcript).toContain('marco polo');
     expect(ran.transcript).toContain('KeyboardInterrupt');
+    // The client library narrates every login and logout on stdout unless the
+    // session asks it not to (GCI_LOGIN_QUIET, session.ts). This is the one
+    // place that shows: the shell's stdout is the user's terminal, so the
+    // chatter would land between the banner and the first prompt.
+    expect(ran.transcript).not.toContain('gcits');
     expect(ran.code).toBe(0);
     expect(isRunning()).toBe(true); // the shell brought the stone up itself
   });
