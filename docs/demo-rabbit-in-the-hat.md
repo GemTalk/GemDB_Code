@@ -8,10 +8,11 @@ below was run against a real database on 2026-08-23; where something surprised
 me, that is noted rather than tidied away.
 
 > **Before you start.** GemDB must be installed (open VS Code once and let it
-> finish setting up), and `gemdb` must be on your PATH:
+> finish setting up). A terminal opened in VS Code has `gemdb` on its PATH
+> already; in any other terminal, put it there:
 >
 > ```sh
-> export PATH="$HOME/GemDB/bin:$PATH"
+> export PATH="$HOME/GemDB/bin:$PATH"   # not needed in a VS Code terminal
 > cd docs/demo
 > ```
 >

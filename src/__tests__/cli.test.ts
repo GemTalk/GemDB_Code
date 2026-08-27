@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { __setSetting } from '../__mocks__/vscode';
-import { cliPath, ensureCliCurrent, writeCliScripts } from '../cli';
+import { cliPath, ensureCliCurrent, putCliOnPath, writeCliScripts } from '../cli';
 import { cliStampPath, expectedEnginePath } from '../paths';
 
 /**
@@ -78,6 +78,16 @@ describe('writeCliScripts', () => {
     // A file run is linked topaz, so it never reaches session.ts and would
     // otherwise sit in the shared cache as the stock 'TopazL'. The truncation
     // is not optional: 32 characters raises OutOfRange, at login.
+    // No `exit` command: with -S, topaz exits when the script completes and
+    // ignores exit outright — quietly on a pipe, but on a tty it prints four
+    // lines about ignoring it and a spurious "Logging out session 1.". A test
+    // here because a pipe is what both suites use, so nothing else would
+    // notice it coming back.
+    expect(run.split('\n').some((line) => /^\s*(exit|quit)\b/.test(line))).toBe(false);
+    // The console sink is a GsFile, which takes bytes; the second slot of
+    // the #GrailConsole box is what tells Grail to encode. Without it,
+    // non-ASCII print() output is UTF-16 code units on the terminal.
+    expect(run).toContain("put: (Array with: GsFile stdout with: #'utf8')");
     expect(run).toContain('System cacheName: label');
     expect(run).toContain("label := 'GemDB run ', label");
     expect(run).toContain('label size > 31 ifTrue:');
@@ -197,5 +207,63 @@ describe('writeCliScripts', () => {
   it('refuses to generate against a missing engine', () => {
     fs.rmSync(expectedEnginePath(), { recursive: true, force: true });
     expect(() => writeCliScripts(ext)).toThrow(/not installed/);
+  });
+});
+
+describe('putCliOnPath', () => {
+  /** A stand-in for the collection VS Code applies to its own terminals. */
+  function fakeEnvironment(): { cleared: number; prepended: [string, string][] } & {
+    clear(): void;
+    prepend(variable: string, value: string): void;
+  } {
+    return {
+      cleared: 0,
+      prepended: [],
+      clear() {
+        this.cleared += 1;
+      },
+      prepend(variable: string, value: string) {
+        this.prepended.push([variable, value]);
+      },
+    };
+  }
+
+  it('prepends the directory the command is generated into', () => {
+    const env = fakeEnvironment();
+
+    putCliOnPath(env);
+
+    // Prepended, not appended: a `gemdb` of GemDB's own is the one this
+    // installation generated. And the trailing delimiter is the whole
+    // mechanism — without it the entry runs into the rest of the PATH.
+    expect(env.prepended).toEqual([['PATH', `${path.join(root, 'bin')}${path.delimiter}`]]);
+  });
+
+  it('clears first, because the collection outlives the window', () => {
+    // VS Code persists it across reloads and re-applies it before activation.
+    // Re-applying without clearing would stack an entry per reload, and a
+    // changed root path would leave the old one in front of the new.
+    const env = fakeEnvironment();
+
+    putCliOnPath(env);
+    __setSetting('gemdb.rootPath', path.join(root, 'elsewhere'));
+    putCliOnPath(env);
+
+    expect(env.cleared).toBe(2);
+    expect(env.prepended[1]).toEqual([
+      'PATH',
+      `${path.join(root, 'elsewhere', 'bin')}${path.delimiter}`,
+    ]);
+  });
+
+  it('contributes the directory even before the command is written', () => {
+    // First run: the PATH is set at activation and setup writes bin/gemdb
+    // minutes later. A terminal opened in between must not need reopening.
+    fs.rmSync(path.join(root, 'bin'), { recursive: true, force: true });
+    const env = fakeEnvironment();
+
+    putCliOnPath(env);
+
+    expect(env.prepended).toHaveLength(1);
   });
 });

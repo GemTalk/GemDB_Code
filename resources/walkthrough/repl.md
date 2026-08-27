@@ -3,10 +3,10 @@
 Opens a Python prompt that runs *inside* the database:
 
 ```
->>> import gemstone
->>> gemstone["answer"] = 42
->>> gemstone.system.commit()
->>> gemstone["answer"]
+>>> import gemdb
+>>> gemdb.root["answer"] = 42
+>>> gemdb.commit()
+>>> gemdb.root["answer"]
 42
 ```
 

@@ -13,10 +13,10 @@ whose objects *are* the database's objects. Assign to a variable, commit, and
 it is still there tomorrow.
 
 ```python
-import gemstone
+import gemdb
 
-gemstone["routes"] = load_routes()
-gemstone.system.commit()
+gemdb.root["routes"] = load_routes()
+gemdb.commit()
 ```
 
 ## Getting started
@@ -63,12 +63,19 @@ Setup also writes a shell command to `~/GemDB/bin/gemdb` that behaves like
 CPython's command line, backed by the database:
 
 ```sh
-export PATH="$HOME/GemDB/bin:$PATH"   # once, in your shell profile
-
 gemdb hello.py          # like python3 hello.py
 gemdb -m some.module    # like python3 -m
 gemdb -c 'print(1+1)'   # like python3 -c
 gemdb                   # the GemDB Shell
+```
+
+Terminals you open in VS Code already have it: GemDB adds `~/GemDB/bin` to
+their PATH, and removes it again if you disable the extension. Terminals
+outside VS Code are yours, so GemDB does not edit your shell profile — add it
+there yourself if you want `gemdb` everywhere:
+
+```sh
+export PATH="$HOME/GemDB/bin:$PATH"   # once, in your shell profile
 ```
 
 It needs no environment set up — the wrapper carries its own — and if the
