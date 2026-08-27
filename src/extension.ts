@@ -12,6 +12,7 @@ import {
   uninstall,
 } from './lifecycle';
 import { autoStartSuppressed, initAutoStart, suppressAutoStart } from './autoStart';
+import { cliDirPath, putCliOnPath } from './cli';
 import { withSetupLock } from './lock';
 import { disposeLog, log, showLog } from './log';
 import {
@@ -176,6 +177,8 @@ export function activate(context: vscode.ExtensionContext): void {
       ) {
         // Every notebook's session is bound to the old database too.
         logoutAll();
+        // And the `gemdb` on the PATH of new terminals is the old root's.
+        if (isSupportedPlatform()) putCliOnPath(context.environmentVariableCollection);
         status.refresh();
       }
     }),
@@ -189,6 +192,15 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     return;
   }
+
+  // `which gemdb` should answer in a terminal opened here. After the platform
+  // gate: on a platform GemDB cannot run, there will never be a command to
+  // find, and pointing the PATH at a directory that stays empty explains
+  // nothing.
+  // Named with the real directory, not `~/GemDB/bin`: the root path is a
+  // setting, and this string is what the terminal shows to explain itself.
+  context.environmentVariableCollection.description = `Adds the \`gemdb\` command (${cliDirPath()}) to the PATH.`;
+  putCliOnPath(context.environmentVariableCollection);
 
   status.refresh();
 

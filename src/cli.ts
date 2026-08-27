@@ -131,6 +131,39 @@ function cliIsCurrent(fingerprint: string): boolean {
 }
 
 /**
+ * The slice of VS Code's `EnvironmentVariableCollection` that putting `gemdb`
+ * on the PATH needs, so the decision is testable without an editor.
+ */
+export interface TerminalEnvironment {
+  clear(): void;
+  prepend(variable: string, value: string): void;
+}
+
+/**
+ * Put `gemdb` on the PATH of terminals VS Code opens.
+ *
+ * The command is generated into `<rootPath>/bin`, which is on nobody's PATH,
+ * so `which gemdb` in a VS Code terminal reported nothing and the README's
+ * answer was an `export PATH=...` line the user had to add to their own
+ * profile. VS Code contributes this itself, per extension: it applies to
+ * terminals this editor launches, is reverted when GemDB is disabled or
+ * uninstalled, and never touches the user's shell profile — which keeps it on
+ * the automated side of the line (inert, reversible, and not a change to the
+ * machine), where editing a profile would not be.
+ *
+ * `clear()` first because the collection is persisted across window reloads:
+ * re-applying on activation is what keeps it right after the root path
+ * changes, and without the clear it would accumulate a stale entry per
+ * reload. Contributed whether or not `bin/gemdb` exists yet — on first run it
+ * does not, and a terminal opened during setup should find the command once
+ * setup writes it rather than needing to be reopened.
+ */
+export function putCliOnPath(env: TerminalEnvironment): void {
+  env.clear();
+  env.prepend('PATH', `${cliDirPath()}${path.delimiter}`);
+}
+
+/**
  * Guarantee `<rootPath>/bin/gemdb` exists and matches this build, for callers
  * about to hand that path to something else.
  *
@@ -165,6 +198,17 @@ export function writeCliScripts(extensionPath: string): void {
   // Grail's Python exceptions live outside the Error branch, which is why
   // grail.tpz's own file mode exits 0 on a Python error.
   //
+  // There is deliberately no `exit` command at the end. topaz's own help says
+  // it of `-S`: the script is processed with INPUT, "topaz exits when the
+  // script completes", and "exit and quit commands are ignored". Ignored
+  // quietly when stdin is a pipe, which is why both suites and every run
+  // through a non-interactive shell missed it — but out loud when stdin is a
+  // tty, where `gemdb hide.py` printed four lines of topaz explaining that it
+  // was ignoring the EXIT, plus a "Logging out session 1." the ignored exit
+  // provoked. The status still leaves through GEMDB_STATUS_FILE, which never
+  // depended on that line (measured again without it: sys.exit(3) → 3, an
+  // uncaught exception → 1, a missing file → 2).
+  //
   // sys.exit(n) is decoded here, not upstream: Grail raises its own SystemExit
   // (never ExitClientError — input()'s except SystemExit and finally blocks
   // must keep working), and the exit argument survives only in the exception's
@@ -196,8 +240,19 @@ warnings) consult SessionTemps #GrailConsole first; that write is
 transient and leaves System needsCommit untouched. Boxed in an Array
 because that is the #GrailConsole protocol (see builtins.gs
 ___console___: SessionTemps at:put: sends to what it stores, which a
-ClientForwarder cannot survive; a GsFile could, but one protocol)."
-SessionTemps current at: #'GrailConsole' put: (Array with: GsFile stdout).
+ClientForwarder cannot survive; a GsFile could, but one protocol).
+
+The second slot declares what this sink takes: a GsFile takes BYTES, so
+every console write must be encoded. Without it Grail wrote a Unicode16's
+code units straight to stdout -- a NUL between every ASCII character, and
+a non-ASCII character truncated to its low byte -- so print('caf\u00e9')
+was UTF-16BE on the terminal while the same print through the shell (a
+character stream over GCI) was right. Declared here rather than sniffed
+there because the sink cannot be asked: the shell's sink is a
+ClientForwarder, and asking one anything -- class, respondsTo:, isNil --
+forwards to the client as error 2336, which is not catchable in the gem."
+SessionTemps current at: #'GrailConsole'
+    put: (Array with: GsFile stdout with: #'utf8').
 [
     [
         target := args at: ofs + 1.
@@ -259,7 +314,6 @@ SessionTemps current at: #'GrailConsole' put: (Array with: GsFile stdout).
         f nextPutAll: status printString; close].
 ].
 %
-exit 0
 `;
 
   const script = `#!/bin/bash

@@ -192,19 +192,22 @@ export async function resetActiveNotebook(): Promise<void> {
 /**
  * Open a new notebook with one Python cell, ready to run.
  *
- * The starter cell is not decoration: `import gemstone` is the one thing that
+ * The starter cell is not decoration: `import gemdb` is the one thing that
  * makes this different from any other Python notebook, and showing it here is
- * cheaper than explaining it.
+ * cheaper than explaining it. `gemdb` is the module a developer should meet
+ * first — `gemstone` is Grail's own lower-level surface, and a starter cell
+ * that opens with it teaches the wrong name.
  */
 export async function newNotebook(): Promise<void> {
   const starter = [
     '# Python here runs inside your GemDB database.',
-    '# The gemstone module reaches the data stored in it.',
-    'import gemstone',
+    '# Everything reachable from gemdb.root is still there tomorrow.',
+    'import gemdb',
     '',
-    'gemstone["greeting"] = "Hello from GemDB!"',
-    'gemstone.system.commit()',
-    'gemstone["greeting"]',
+    'gemdb.root["greeting"] = "Hello from GemDB!"',
+    'gemdb.commit()',
+    '',
+    'gemdb.root["greeting"]',
   ].join('\n');
 
   const cell = new vscode.NotebookCellData(vscode.NotebookCellKind.Code, starter, 'python');

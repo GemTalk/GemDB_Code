@@ -56,6 +56,17 @@ reversible; ask about what is persistent or global.**
   unraised it stands down and leaves that to `ensureRunning`, where a `sudo`
   dialog has a visible cause.
 
+- Putting `gemdb` on the PATH of terminals VS Code opens —
+  `putCliOnPath` in `cli.ts`, applied to
+  `context.environmentVariableCollection`. Automated because VS Code owns the
+  reversal: the entry applies only to terminals this editor launches and goes
+  away when the extension is disabled. **Editing the user's shell profile
+  would be the other side of the line** — persistent, global, not ours to
+  undo — so the README asks rather than does. `clear()` before every
+  `prepend` because the collection is persisted across window reloads and
+  re-applied before activation; without it a reload stacks a second entry and
+  a changed root path leaves the old one in front.
+
 `ensureRunning` in `lifecycle.ts` is the single path to a running database,
 whether the user pressed Start or just ran a notebook cell. It finishes any
 outstanding preparation, prompts for shared memory, starts the processes, and
@@ -218,7 +229,13 @@ re-running `bundle:grail` on every supported platform.
 
 **The CLI's exit codes go through a status file, not topaz.** topaz cannot
 carry an exit status out of a `run` block — `ExitClientError status:` is not
-translated, and an `iferr … exit 1` action exits 0 (all measured). So
+translated, and an `iferr … exit 1` action exits 0 (all measured). The driver
+therefore ends with no `exit` command at all, and must not grow one: `topaz -h`
+says of `-S` that topaz "exits when the script completes" and that "exit and
+quit commands are ignored". Ignored silently when stdin is a pipe — which is
+every CI run, every test, and every `gemdb x.py | cat` — and out loud when
+stdin is a tty, where it printed four lines of explanation and a
+`Logging out session 1.` in front of the user. So
 `gemdb-run.tpz` writes the status to the file named in `GEMDB_STATUS_FILE` and
 the bash wrapper becomes the exit code. Errors there are caught as
 `AbstractException`, not `Error`: Grail's Python exceptions live outside the
@@ -293,6 +310,23 @@ executeAsync loop clears the stack at the next forwarder stop and throws
 `ExecutionInterrupted`, which the query layer reports as
 `Error: KeyboardInterrupt - `. Anything new that evaluates Python should go
 through that layer, not `execute` directly.
+
+**The console box says what the sink takes, because the sink cannot be
+asked.** `SessionTemps #GrailConsole` holds an Array; slot 1 is the sink, and
+slot 2 — `#'utf8'` — declares that it takes bytes. `gemdb-run.tpz` sets it,
+because its sink is `GsFile stdout` and `nextPutAll:` writes a Unicode string's
+code units straight through: `print('café')` was UTF-16BE on the terminal, a
+NUL between every ASCII character, while the same print through the shell was
+right. Grail encodes with `nextPutAsUtf8:` when the slot says so. It cannot
+instead probe the sink: the shell installs a `ClientForwarder`, and *any* send
+to one — `class`, `respondsTo:`, `isNil` — forwards to the client as error
+2336, which is not a Smalltalk exception and is not catchable in the gem
+(measured; `on: AbstractException` around `forwarder class` does not run). A
+probe would turn every print in a streaming session into a spurious client
+stop. The read side is the same seam from the other direction: `GsFile stdin`
+answers bytes, so Grail decodes that one branch with `decodeFromUTF8`, keeping
+the raw line when it is not UTF-8. Both directions are pinned in
+`src/__integration__/cli.test.ts`.
 
 **Stage Grail before stamping it, and stamp only what this run created.**
 `stageAndRecordGrail` in `grail.ts` owns that order. Reversed, it broke both
