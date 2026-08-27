@@ -145,6 +145,28 @@ describe.skipIf(!ready || !canMakeFixture())('the gemdb command', () => {
     expect(ran.code).toBe(0);
   });
 
+  it('writes non-ASCII output as UTF-8, not UTF-16 code units', async () => {
+    // The console this mode installs is a GsFile, which takes BYTES: writing
+    // a Unicode string to it straight put a NUL between every ASCII character
+    // and truncated anything above U+00FF to its low byte, so an ASCII-art
+    // rabbit with a bullet in it came out as binary. Grail encodes because
+    // the driver's #GrailConsole box declares the sink takes utf8.
+    const ran = await gemdb('-c', 'print("caf\u00e9 \u2022 \u4e2d")');
+    expect(ran.stdout).toContain('caf\u00e9 \u2022 \u4e2d');
+    expect(ran.stdout).not.toContain('\u0000');
+    expect(ran.code).toBe(0);
+  });
+
+  it('reads non-ASCII input as characters, not bytes', async () => {
+    // The other half of the same seam: GsFile stdin answers bytes, so a
+    // terminal's UTF-8 arrived one Character per byte — 'w\u00f6rld' as
+    // 'w\u00c3\u00b6rld', six characters long, and mojibake on the way back
+    // out.
+    const ran = await run(['-c', 'n = input()\nprint(n, len(n))'], 'w\u00f6rld\n');
+    expect(ran.stdout).toContain('w\u00f6rld 5');
+    expect(ran.code).toBe(0);
+  });
+
   it('raises EOFError when stdin runs dry', async () => {
     const ran = await run(['-c', 'input()'], '');
     expect(ran.stderr).toContain('EOF');

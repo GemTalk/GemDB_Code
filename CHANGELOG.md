@@ -7,8 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`gemdb` is on the PATH of terminals you open in VS Code.** The command is
+  generated into `~/GemDB/bin`, which is on nobody's PATH, so `which gemdb`
+  answered "not found" and the README's answer was a line you had to add to
+  your own shell profile. GemDB now contributes that directory to the
+  terminals this editor launches — and takes it back when the extension is
+  disabled or uninstalled. Your shell profile is still yours; add it there
+  too if you want `gemdb` in terminals outside VS Code.
+
+### Changed
+
+- **The sample code now starts with `import gemdb`.** A new notebook's first
+  cell, the walkthrough and the README all opened with `import gemstone` —
+  Grail's own lower-level surface, inherited from Jasper. The first thing a
+  developer meets is now `gemdb`: `gemdb.root` for the data that outlives the
+  session, `gemdb.commit()` for the moment it becomes everyone's.
+
 ### Fixed
 
+- **Non-ASCII text now survives `gemdb file.py` in both directions.**
+  `print()` from a script wrote its characters as UTF-16 code units — a NUL
+  between every ASCII letter, and anything above U+00FF truncated to one byte
+  — so a `•` in an ASCII-art rabbit turned the whole drawing into binary.
+  `input()` had the mirror-image fault: a line typed at the terminal arrived
+  one character per *byte*, so `wörld` came back six characters long and
+  mojibake. Only this mode was affected; the GemDB Shell and notebooks were
+  always right, because they exchange characters over the client connection
+  rather than bytes through a file. Needs the matching Grail change
+  (GemTalk/Grail, console writes encode for a byte sink).
+- **`gemdb file.py` no longer prints topaz's own commentary.** Running a
+  script from a real terminal ended with four lines about topaz ignoring an
+  EXIT command, followed by `Logging out session 1.`. The driver ended with
+  an `exit` that topaz documents as ignored for the way GemDB runs it — it
+  already exits when the script completes — and ignoring it is silent on a
+  pipe but spoken aloud on a terminal, which is why it never showed in CI.
+  Exit codes are unaffected: they never travelled through that line.
 - **The GemDB Shell no longer prints the database client's own chatter.**
   Opening a shell wrote a line like
   `gcits login: session 0x… lgc 0x… rpc gem processId 4726` onto your terminal
