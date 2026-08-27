@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-27
+
+A notebook is a unit of work again: each one gets its own database session, and
+the sessions GemDB holds are now visible — named where the whole machine can see
+them, and listed in the panel.
+
 ### Added
 
 - **Sessions now say who they belong to.** Every session GemDB opens names
@@ -18,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sessions belongs to what, instead of seeing a row of anonymous gems. Nothing
   is committed to do this and the entry disappears with the process, so a
   window that crashes leaves nothing behind.
+- **The GemDB panel shows the sessions this window is holding.** A **Sessions**
+  row appears whenever anything is connected, listing each notebook, shell and
+  the extension's own — with the database's session number and how long each
+  has been idle, idlest first. Sessions are scarce and were previously
+  invisible, which is the combination that makes hitting the limit baffling;
+  now the one worth closing is the one named at the bottom of the tooltip.
 
 ### Changed
 
@@ -33,6 +45,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`gemdb file.py` keeps working with the Python runtime this release ships.**
+  GemDB asked each session to enable a module-binding flag that the Python
+  implementation has since retired — warm binding is now its only path. Paired
+  with the runtime in this release, every file run would have stopped at that
+  line (taking the whole `gemdb` command with it) and every login would have
+  logged a failure. Both requests are gone; what the release ships already
+  behaves the way the flag asked for. Users of 1.1.0 were never affected, since
+  its runtime still had the flag — but the extension and its Python runtime are
+  a matched pair, and this is the half that had to move.
 - **First-run setup no longer fails right after creating the database.** On a
   machine where GemDB had never been installed, setup stopped with
   `ENOENT: no such file or directory, open '<root>/grail/.gemdb-grail-stamp'`
@@ -53,8 +74,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine version now log out every session rather than only the extension's
   own.
 
+### Documentation
+
+- **A five-minute demo of persistence and sessions.**
+  [`docs/demo-rabbit-in-the-hat.md`](docs/demo-rabbit-in-the-hat.md), with
+  runnable scripts in `docs/demo/`: put an object in the database in one
+  process, exit, and take it back out in another. Every command and output in
+  it was measured rather than written from memory, which is how the `runPath`
+  gap below was found.
+- **How GemDB could reach Windows.**
+  [`docs/reaching-windows.md`](docs/reaching-windows.md) works through the three
+  routes — a WSL window, a native client against a remote server, and Docker as
+  a backend — with what was measured and what still needs a Windows machine.
+  Read it before starting any of them. (Design notes live in `docs/` and are
+  not part of the shipped extension.)
+
 ### Known limitations
 
+- **A script's first statement cannot be `gemdb.transaction()`.** `gemdb
+  file.py` starts with a session that already has pending changes — the Python
+  runtime's own `runPath` makes them, not your code — so a transaction block
+  opened on line 1 blames you for them. Call `commit()` or `abort()` first. The
+  fix belongs in the Python runtime; the GemDB Shell and notebooks are
+  unaffected.
 - **Sessions are a limited resource, and notebooks now spend one each.** The
   Community Edition keyfile allows ten at once, the database's own gems take
   some of those, and every GemDB Shell takes another — so perhaps six or seven
@@ -191,6 +233,7 @@ gets out of the way.
 - **`sys.exit(n)` exits 1 rather than `n`**, and **`input()` is not yet
   supported**. Both are upstream in Grail.
 
-[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/GemTalk/GemDB_Code/releases/tag/v1.0.0
