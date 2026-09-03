@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-09-03
+
+The bundled Python runtime takes a large step forward. Nothing in the extension
+itself changed.
+
+### Changed
+
+- **A substantially better Python.** GemDB ships the Python implementation
+  rather than relying on one you install, so a release is how you receive it —
+  and this is the first since 1.3.0 to carry a large one: 317 commits across
+  136 pull requests. The headlines:
+  - **Tracebacks that point at the code.** Multi-line statement spans, frame
+    locals, and correct file and line across modules, lambdas and closures.
+  - **A wider text story.** UTF-7, UTF-32, the transform codecs,
+    punycode/IDNA, and `html.unescape`.
+  - **Correct scoping where Python is subtle.** The walrus operator in
+    comprehensions, lambdas and displays; comprehensions and decorators in
+    class bodies.
+  - **More of the standard library behaving as CPython does.** Broader
+    `typing` and generic-class coverage, per-class `__slots__` strictness
+    (a subclass declaring no `__slots__` gets an instance dict again), gaps
+    closed in `struct`, and `ssl.OPENSSL_VERSION` reporting the OpenSSL the
+    database actually loaded.
+
+  Because the runtime is built from Grail's default branch when a release is
+  packaged, which commit shipped was previously only recoverable from the
+  payload. From this release the Python implementation is tagged to match:
+  **Grail `v1.4.0`** is the commit this release was built from.
+
 ## [1.3.0] - 2026-08-27
 
 `gemdb` is on your PATH in VS Code's terminals, the samples start with
@@ -292,7 +321,8 @@ gets out of the way.
 - **`sys.exit(n)` exits 1 rather than `n`**, and **`input()` is not yet
   supported**. Both are upstream in Grail.
 
-[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.0.0...v1.1.0
