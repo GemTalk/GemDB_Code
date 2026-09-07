@@ -256,9 +256,23 @@ def _settle():
     inside a `with gemdb.transaction():` block, so anything dirty at the
     moment this is called came from the machinery rather than from a
     caller's half-finished work.
+
+    That is also why the ConflictError is caught and aborted rather than
+    raised.  Two sessions calling the same function for the first time both
+    compile it, and compiling is a repository write, so both try to commit
+    the same method -- a Write-Write conflict on machinery neither of them
+    typed.  Since nothing of the caller's is pending, discarding is exactly
+    right, and it has to be done: a commit conflict leaves the changes in
+    place, so an app that lets one through answers 500 to *every* later
+    request, not just the one that collided.  Measured 2026-09-07: with a
+    bare `gemdb.commit()` here, one `gemdb lapse.py` from another session
+    while the app was serving wedged the app permanently.
     """
     if gemdb.needs_commit():
-        gemdb.commit()
+        try:
+            gemdb.commit()
+        except gemdb.ConflictError:
+            gemdb.abort()
 
 
 def _empty_store():
@@ -314,9 +328,10 @@ def record_quote(store, answers, applicant_name="", applicant_email=""):
 def accept_quote(store, quote_id, plan_name):
     """Turn a quote into a policyholder and a policy -- FR-5.5.
 
-    ASSUMPTION (the PRD's A5): a policy is `active` the moment it is bought.
-    There is no payment step and no effective date, so a holder who has just
-    accepted a quote can file a claim immediately.
+    ASSUMPTION: a policy is `active` the moment it is bought.  CUJ-3 runs
+    quote -> accept -> claim with no payment step and no effective date
+    anywhere between them, so a holder who has just accepted a quote has to
+    be able to file a claim immediately.
     """
     quote = store["quotes"][quote_id]
     option = None

@@ -462,18 +462,34 @@ five-minute demo of persistence and sessions, with runnable scripts in
 `runPath` gap below was found.
 [`docs/demo-brain-freeze-insurance.md`](docs/demo-brain-freeze-insurance.md)
 is the longer one — a Flask app that lives in the database, with its scripts
-in `docs/demo/brain-freeze/`. Its four findings are the ones to read before
-building a second application on this: committing after the imports is what
-keeps class identity stable across sessions (aborting instead breaks
-`isinstance` for records written seconds earlier by identical source);
-*calling* a function for the first time dirties the session, because Grail
-compiles it then, so a transaction block needs a commit immediately before
-it and the resulting `PendingChangesError` names no cause; a schema change
-keeps `isinstance` but leaves older records without the new attribute, so
-optional fields must be read with `getattr`; and an exception in a Flask view
-is invisible unless the app registers its own `Exception` handler, because
-Flask logs with `exc_info=` and Grail's `logging` is a stub that raises on
-it.
+in `docs/demo/brain-freeze/`, its requirements in
+[`docs/prd-brain-freeze-insurance.md`](docs/prd-brain-freeze-insurance.md),
+and the order to run it in under "Reproducing this". Its five findings are
+the ones to read before building a second application on this: committing
+after the imports is what keeps class identity stable across sessions
+(aborting instead breaks `isinstance` for records written seconds earlier by
+identical source); *calling* a function for the first time dirties the
+session, because Grail compiles it then, so a transaction block needs a
+commit immediately before it and the resulting `PendingChangesError` names
+no cause — and because that compile is a repository write, two sessions
+racing to make it collide on a method neither of them typed, so the commit
+that settles a session has to abort on conflict or the app wedges for good;
+a schema change keeps `isinstance` but leaves older records without the new
+attribute, so optional fields must be read with `getattr`; an exception in a
+Flask view is invisible unless the app registers its own `Exception`
+handler, because Flask logs with `exc_info=` and Grail's `logging` is a stub
+that raises on it — and that handler must print with
+`print(traceback.format_exc())`, because `sys.stderr` is None in a gem and
+`traceback.print_exc()` therefore raises inside the handler and drops the
+connection anyway; and **`gemdb file.py` does not put the script's directory
+on `sys.path`** the way `python3 file.py` does, and `sys.path` is otherwise
+empty, so a script cannot import the file next to it until it inserts its
+own directory. That last one is a second `runPath` gap, alongside the dirty
+session below, and it belongs in Grail. All five are filed upstream —
+Grail #847 (`sys.path`), #848 (`sys.stdout`/`sys.stderr` are None), #849 (no
+`__traceback__`), #850 (`sys.argv` is topaz's), #851 (compiling is a write,
+including the dirty session below) — so a workaround here can be retired
+against an issue rather than rediscovered.
 
 **`gemdb file.py` starts with a dirty session, so `gemdb.transaction()` cannot
 be a script's first statement.** Measured 2026-08-23 against the payload of
@@ -486,7 +502,8 @@ itself, not the file's own code (a script whose first line is
 transaction block's entry check then blames the user for Grail's plumbing.
 Shell and notebook sessions are unaffected: they evaluate through
 `evaluateSource:usingModuleScope:` and a fresh one runs a transaction block as
-its first action. The fix belongs in Grail; until it lands, scripts should
+its first action. The fix belongs in Grail (filed as Grail #851, with the
+other two faces of the same root cause); until it lands, scripts should
 `commit()` or `abort()` first.
 
 `src/gci/` is copied byte-for-byte from Jasper's `client/src/gciLibrary.ts`,

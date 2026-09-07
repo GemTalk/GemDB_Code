@@ -1,0 +1,22 @@
+{
+  "name": "Tomas Lindqvist",
+  "email": "tomas@example.test",
+  "answers": {
+    "age": 23,
+    "gender": "male",
+    "hair_colour": "brown",
+    "siblings": 0,
+    "birth_order": "only",
+    "handedness": "right",
+    "tongue_roll": "yes",
+    "cilantro_soap": "no",
+    "favorite_flavor": "vanilla",
+    "spoon_or_straw": "spoon",
+    "eating_speed": "glacial",
+    "prior_freezes": 0,
+    "can_whistle": "yes",
+    "pineapple_pizza": "no",
+    "shoe_size": 11,
+    "slushies_last_month": 1
+  }
+}
