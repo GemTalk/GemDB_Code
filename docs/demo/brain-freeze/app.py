@@ -22,6 +22,7 @@ section 5's cross-surface promise, and it is one line.
 
 import datetime
 import os
+import sys
 import traceback
 
 import gemdb
@@ -29,6 +30,14 @@ import jinja2
 from flask import Flask, jsonify, redirect, render_template, request, url_for
 from werkzeug.exceptions import HTTPException
 from werkzeug.serving import make_server
+
+# `gemdb file.py` does not put the script's own directory on the import path,
+# the way `python3 file.py` makes it `sys.path[0]`.  Grail's resolver searches
+# grailDir, its bundled stdlib, its own extra roots and then `sys.path` -- and
+# under `importlib runPath:` that list is empty, so a sibling module is simply
+# not found.  These two lines are the fix, they are what CPython would make
+# redundant, and every script here that imports a sibling needs them first.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import model
 import underwriting as uw
@@ -68,12 +77,22 @@ def show_the_traceback(exc):
     means Flask never reaches its logging path, so the real traceback
     reaches stdout and the client gets a 500 it can read.
 
+    It has to be `print(format_exc())` and not `traceback.print_exc()`:
+    Grail leaves `sys.stdout` and `sys.stderr` as None in a gem, so
+    `print_exc` -- which writes to `sys.stderr` -- raises
+    `AttributeError: 'NoneType' object has no attribute 'write'` *inside this
+    handler*, and werkzeug then abandons the connection exactly as described
+    above.  `print()` is the one route out of a gem that works, because Grail
+    sends it to the console the driver installed.  Measured 2026-09-07: with
+    `print_exc` here, the finding-4 request answers nothing at all and the
+    app's log says only `'NoneType' object has no attribute 'write'`.
+
     Remove this and the app still works; remove it and the app stops being
     debuggable.
     """
     if isinstance(exc, HTTPException):
         return exc
-    traceback.print_exc()
+    print(traceback.format_exc())
     return "500 %s: %s" % (type(exc).__name__, exc), 500
 
 

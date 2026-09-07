@@ -12,7 +12,18 @@ claims, and the aggregates, so "did the import/flow work" has an answer that
 fits on a screen.
 """
 
+import os
+import sys
+
 import gemdb
+
+# `gemdb file.py` does not put the script's own directory on the import path,
+# the way `python3 file.py` makes it `sys.path[0]`.  Grail's resolver searches
+# grailDir, its bundled stdlib, its own extra roots and then `sys.path` -- and
+# under `importlib runPath:` that list is empty, so a sibling module is simply
+# not found.  These two lines are the fix, they are what CPython would make
+# redundant, and every script here that imports a sibling needs them first.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import model
 import underwriting as uw

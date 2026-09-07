@@ -5,16 +5,19 @@ entirely inside the database. It exists to answer one question an evaluator
 asks after the rabbit comes out of the hat: *fine, but can I build an
 application on this?*
 
-The scripts are in [`demo/brain-freeze/`](demo/brain-freeze/). Every command
-and every line of output below was run on 2026-09-07 against a real
-GemStone/S 3.7.5 stone carrying Grail `46c2a68`; where something surprised
-me, it is written down rather than tidied away — four of the findings cost
+The scripts are in [`demo/brain-freeze/`](demo/brain-freeze/), and
+[Reproducing this](#reproducing-this) is the order to run them in. Every
+command and every line of output below was run on 2026-09-07 against a real
+GemStone/S 3.7.5 stone carrying Grail `5e8fc42`; where something surprised
+me, it is written down rather than tidied away — five of the findings cost
 enough time that they are the most useful part of this document.
 
 This implements the quote flow (FR-5.x) and the claims flow (FR-6.x) of the
-Brain Freeze Insurance PRD. It does not implement the notebook (CUJ-1), the
-MCP server (CUJ-2), the CSV import (§7.2) or the schema change (CUJ-4) — but
-it is built so CUJ-4 is a ten-line edit, and the measurements below are why.
+[Brain Freeze Insurance PRD](prd-brain-freeze-insurance.md), which is in this
+directory so every citation below can be checked. It does not implement the
+notebook (CUJ-1), the MCP server (CUJ-2), the CSV import (§7.2) or the schema
+change (CUJ-4) — but it is built so CUJ-4 is a ten-line edit, and the
+measurements below are why.
 
 > **Before you start.** A terminal opened in VS Code has `gemdb` on its PATH
 > already; in any other terminal, put it there:
@@ -41,6 +44,18 @@ Four files, and no framework beyond Flask:
 arithmetic, so the product rules can be read, argued about and changed
 without thinking about sessions, and the app can be changed without
 re-deriving a premium.
+
+Everything else in the directory exists so that this document can be re-run
+rather than believed:
+
+| File | What it is for |
+| --- | --- |
+| `seed.py` | the dataset every transcript below reads: three quotes, three policies, seventeen claims, all nine adjudication rules |
+| `calm.json` | the sixteen answers Act 3 posts to `/api/quote` as JSON, integers and all |
+| `lapse.py`, `reinstate.py` | Act 5 — one policy's status, changed from a session of its own while the app serves |
+| `dirty.py` | finding 2, and nothing else: it stores nothing and reads no record |
+| `toppings.py` | finding 3, over the two claim shapes `seed.py` leaves in the store |
+| `class-identity/` | finding 1: four scripts, two arms, one token of difference |
 
 That split has a second payoff worth knowing about: because
 `underwriting.py` is pure, **plain CPython can import it and check the
@@ -82,18 +97,17 @@ diagnosis. What a real underwriter would ask is exactly what this product
 declines to.
 
 ```console
-$ curl -s localhost:8720/api/questions | head -20
-[
-    {
-        "field": "age",
-        "kind": "int",
-        "max": 25,
-        "min": 5,
-        "prompt": "How old are you?",
-        "rationale": "Cold-stimulus headache peaks in the early teens and eases after; the middle of the range carries the load.",
-        "scored": true,
-        "values": null
-    },
+$ curl -s localhost:8720/api/questions | jq '.[0]'
+{
+  "field": "age",
+  "kind": "int",
+  "max": 25,
+  "min": 5,
+  "prompt": "How old are you?",
+  "rationale": "Cold-stimulus headache peaks in the early teens and eases after; the middle of the range carries the load.",
+  "scored": true,
+  "values": null
+}
 ```
 
 Thirteen of the sixteen move the price. Three — handedness, whistling, and
@@ -120,18 +134,23 @@ $ curl -si -X POST localhost:8720/quote \
     -d 'handedness=left' -d 'tongue_roll=no' -d 'cilantro_soap=yes' \
     --data-urlencode 'favorite_flavor=mint choc chip' -d 'spoon_or_straw=straw' \
     -d 'eating_speed=competitive' -d 'prior_freezes=9' -d 'can_whistle=no' \
-    -d 'pineapple_pizza=undecided' -d 'shoe_size=7' -d 'slushies_last_month=14'
+    -d 'pineapple_pizza=undecided' -d 'shoe_size=7' -d 'slushies_last_month=14' \
+  | grep -E '^HTTP/|^Location:'
 HTTP/1.1 302 FOUND
 Location: /quote/BFI-Q-000001
 ```
 
 ```console
-$ curl -s localhost:8720/quote/BFI-Q-000001
-...
-<p>Risk score <strong>100</strong> of 100 -- tier <strong>Full Ache</strong>.</p>
-    <h3>Basic</h3>    <div class="price">$8.00<span class="tag">/month</span></div>
-    <h3>Standard</h3> <div class="price">$14.00<span class="tag">/month</span></div>
-    <h3>Premium</h3>  <div class="price">$24.00<span class="tag">/month</span></div>
+$ curl -s localhost:8720/quote/BFI-Q-000001 \
+  | grep -E 'Risk score|tier <strong>|<h3>|class="price"'
+<p>Risk score <strong>100</strong> of 100 --
+   tier <strong>Full Ache</strong>.</p>
+    <h3>Basic</h3>
+    <div class="price">$8.00<span class="tag">/month</span></div>
+    <h3>Standard</h3>
+    <div class="price">$14.00<span class="tag">/month</span></div>
+    <h3>Premium</h3>
+    <div class="price">$24.00<span class="tag">/month</span></div>
 ```
 
 A thirteen-year-old redhead with three older siblings who drinks
@@ -142,19 +161,31 @@ The same flow in JSON, for a calmer applicant:
 
 ```console
 $ curl -s -X POST localhost:8720/api/quote -H 'Content-Type: application/json' \
-    --data @calm.json
-quote_id BFI-Q-000002 | score 14 - Cool Head
-  Basic      $4.56/mo  deductible $15.00  per-incident  $50.00  annual cap  $150.00
-  Standard   $7.98/mo  deductible $10.00  per-incident $125.00  annual cap  $500.00
-  Premium   $13.68/mo  deductible  $5.00  per-incident $300.00  annual cap $1200.00
+    --data @calm.json \
+  | jq -c '{quote_id, risk_score, risk_tier},
+           (.options[] | {plan, monthly_premium_cents, deductible_cents,
+                          per_incident_limit_cents, annual_payout_cap_cents})'
+{"quote_id":"BFI-Q-000002","risk_score":14,"risk_tier":"Cool Head"}
+{"plan":"Basic","monthly_premium_cents":456,"deductible_cents":1500,"per_incident_limit_cents":5000,"annual_payout_cap_cents":15000}
+{"plan":"Standard","monthly_premium_cents":798,"deductible_cents":1000,"per_incident_limit_cents":12500,"annual_payout_cap_cents":50000}
+{"plan":"Premium","monthly_premium_cents":1368,"deductible_cents":500,"per_incident_limit_cents":30000,"annual_payout_cap_cents":120000}
 ```
+
+456, 798 and 1368 cents: $4.56, $7.98 and $13.68 once `fmt_money` has had
+them, which is what the HTML quote page shows for the same three plans. The
+API answers in cents because cents are what the database holds, and the one
+decimal point in the product is in one function.
+
+`calm.json` is also where finding 4 came from. Five of its sixteen answers
+are JSON integers rather than the strings an HTML form posts, which is a
+difference `parse_answers` did not survive the first time.
 
 Buying is one POST, and creates a policyholder and a policy:
 
 ```console
 $ curl -s -o /dev/null -w '%{redirect_url}\n' \
     -X POST localhost:8720/quote/BFI-Q-000001/accept -d 'plan=Standard'
-http://127.0.0.1:8720/policy/BFI-P-000001
+http://localhost:8720/policy/BFI-P-000001
 ```
 
 ## Act 4 — Claims, and nine ways to decide one
@@ -165,6 +196,23 @@ actually bound** — not the first one that could have. A $500 claim at
 severity 5 on Standard is capped twice, by the severity schedule to $300 and
 then by the $125 per-incident limit, and it is the second cap that decided
 the number.
+
+`seed.py` is where the dataset comes from. It scores three real
+questionnaires, buys three policies and files seventeen claims through the
+same `model.record_quote`, `accept_quote` and `file_claim` that the web
+routes call, so a seeded store and a store filled in through the browser are
+the same store. It also names the rule that decided each claim, and says so
+if any of the nine went unexercised:
+
+```console
+$ gemdb seed.py
+BFI-Q-000001  Priya Raman      score 100  Full Ache       ->  BFI-P-000001  Standard  $14.00/mo
+BFI-Q-000002  Tomas Lindqvist  score  14  Cool Head       ->  BFI-P-000002  Basic     $4.56/mo
+BFI-Q-000003  Marisol Okonkwo  score  59  Rapid Onset     ->  BFI-P-000003  Premium   $19.08/mo
+...
+seeded: 3 policyholder(s), 3 policy(ies), 3 quote(s), 17 claim(s)
+adjudication rules exercised: 9 of 9
+```
 
 Every rule, exercised over three policies:
 
@@ -206,13 +254,27 @@ the demo does, in one place, so that every surface reports the same number.
 ## Act 5 — A different session, and then no database at all
 
 The claim above that reads `policy-not-active` was decided against a policy
-lapsed by *another* session while the web app was still running:
+lapsed by *another* session. `lapse.py` is that session, and `reinstate.py`
+is the same line with the other status, so the change can be watched in both
+directions while the web app keeps serving — which is the part worth
+watching:
 
 ```console
-$ gemdb lapse.py                 # a separate process, a separate session
+$ curl -s localhost:8720/api/policy/BFI-P-000001 | jq -r '"status via HTTP: " + .status'
+status via HTTP: lapsed
+
+$ gemdb reinstate.py             # a separate process, a separate session
+BFI-P-000001 was: lapsed
+BFI-P-000001 is now: active
+
+$ curl -s localhost:8720/api/policy/BFI-P-000001 | jq -r '"status via HTTP: " + .status'
+status via HTTP: active
+
+$ gemdb lapse.py
+BFI-P-000001 was: active
 BFI-P-000001 is now: lapsed
 
-$ curl -s localhost:8720/api/policy/BFI-P-000001 | grep status
+$ curl -s localhost:8720/api/policy/BFI-P-000001 | jq -r '"status via HTTP: " + .status'
 status via HTTP: lapsed
 ```
 
@@ -224,11 +286,13 @@ Then the hard version. Stop the app, stop the database entirely, start it
 again, and read:
 
 ```console
-$ stopstone bfstone DataCurator swordfish
+$ stopstone bfstone DataCurator swordfish | grep Info
+stopstone[Info]: GemStone version '3.7.5'
+stopstone[Info]: initiating 'bfstone' shutdown...
 stopstone[Info]: Stone repository monitor 'bfstone' has been stopped.
 
-$ startstone bfstone
-startstone[Info]: GemStone server bfstone has been started, process 13011
+$ startstone bfstone | grep 'has been started'
+startstone[Info]: GemStone server bfstone has been started, process 3685
 
 $ gemdb verify.py
 3 policyholder(s), 3 policy(ies), 3 quote(s), 17 claim(s): 10 approved, 7 denied (58.82% approved)
@@ -240,7 +304,7 @@ format was chosen.
 
 ---
 
-# The four findings
+# The five findings
 
 These are the ones that cost time. Anyone building a second application on
 this should read them before writing a line.
@@ -252,19 +316,56 @@ its class in the repository. So a script's first `with gemdb.transaction():`
 raises `PendingChangesError` before running a line of its own, and CLAUDE.md
 already says to `commit()` or `abort()` first.
 
-**Which one you pick is not cosmetic.** Measured with two scripts and one
-unchanged class:
+**Which one you pick is not cosmetic.** Measured with the four scripts in
+[`class-identity/`](demo/brain-freeze/class-identity/): two arms that differ
+in one token, `gemdb.commit()` against `gemdb.abort()`, each writing one
+record of a three-line class and reading it back in a second process.
 
-| after the imports | later session's `isinstance(old_record, model.Claim)` |
+| after the imports | later session's `isinstance(record, Sample)` |
 | --- | --- |
 | `gemdb.commit()` | **True** |
 | `gemdb.abort()` | **False** |
 
+```console
+$ gemdb class-identity/commit_write.py
+stored n = 7
+id(Sample) in the writing session: 296375
+
+$ gemdb class-identity/commit_read.py
+read n = 7
+isinstance(record, Sample): True
+type(record) is Sample: True
+id(Sample) in this session: 296375
+
+$ gemdb class-identity/abort_write.py
+stored n = 7
+id(Sample) in the writing session: 296979
+
+$ gemdb class-identity/abort_read.py
+read n = 7
+isinstance(record, Sample): False
+type(record) is Sample: False
+id(Sample) in this session: 297465
+```
+
 With `abort()`, the compiled class is discarded, the next session compiles a
 throwaway one, and records written five seconds earlier by *identical source*
-are no longer instances of it. With `commit()` the class is persisted and
-every later session gets the same one back. `id(model.Claim)` was the same
-number across three separate processes.
+are no longer instances of it. Nothing about the record looks broken —
+`read n = 7` in both arms — and the two `id(Sample)` values are the recompile,
+visible. With `commit()` the class is persisted and every later session gets
+the same one back.
+
+Those four `id` values are the one thing above that will not come back the
+same: they are repository allocations and they move with the extent. What
+reproduces is the relation between them — the same number in the committing
+arm's two processes, two different numbers in the aborting arm's — and that
+is the whole finding.
+
+The two arms need two identical copies of the class, in `sample_committed.py`
+and `sample_aborted.py`, for the same reason the finding exists. A committed
+class is found by every later session, so once one arm has persisted
+`Sample`, the other arm's import has nothing left to compile and would
+measure the first arm's answer instead of its own.
 
 This is worth saying plainly because the earlier probe that produced "class
 versioning breaks `isinstance`" had used `abort()`. Against a committed
@@ -281,7 +382,7 @@ $ gemdb dirty.py
 after imports+commit: False
 score 100 Full Ache | after first score_answers call: True
 after SECOND score_answers call: False
-uncommitted_imports-ish: []
+gemdb._pending_imports(): []
 ```
 
 Nothing was stored. `score_answers` is pure arithmetic over a dict. The
@@ -290,10 +391,38 @@ refusal cannot explain itself, because `gemdb._pending_imports()` answers
 `[]`: no *import* is pending, so the message falls back to blaming the caller
 for changes the caller never made.
 
+That transcript only comes out of a repository where `score_answers` has
+never been called, and finding this out is worth the second run: the compile
+is a repository write, and committing it makes it *everyone's*. Run
+`dirty.py` again against the same stone, in a new session, and the first call
+reports clean.
+
+```console
+$ gemdb dirty.py                 # same stone, a new session
+after imports+commit: False
+score 100 Full Ache | after first score_answers call: False
+after SECOND score_answers call: False
+gemdb._pending_imports(): []
+```
+
 `model._settle()` is the whole fix, and every write in `model.py` calls it
-immediately before opening its transaction. In a long-running server the
-effect is bounded — each function compiles once — but a web app that does not
-do this fails on the *first* request through every new code path.
+immediately before opening its transaction. The bound is therefore tighter
+than "once per process": a function compiles once per *repository*, so the
+hazard is the first request through a new code path after a fresh install or
+a code change — not the first request after every restart. Which is worse in
+one way, because it will not show up in a developer's second run, and it is
+the run a reviewer does.
+
+`_settle()` also has to survive losing the race. Two sessions calling the
+same function for the first time both compile it, so both try to commit the
+same method, and the loser gets a `ConflictError` naming a Write-Write
+conflict on machinery neither of them typed. A failed commit leaves the
+changes in place, so an app that lets one through answers 500 to *every*
+later request rather than just the one that collided — measured, and it
+wedged this app permanently until `_settle()` learned to abort and carry on.
+Discarding is safe here for the same reason the commit was: nothing of the
+caller's is ever pending at that point. All of finding 2 is filed as
+[Grail #851](https://github.com/GemTalk/Grail/issues/851), the race included.
 
 ## 3. A schema change keeps `isinstance` and loses the attribute
 
@@ -338,19 +467,88 @@ curl: (52) Empty reply from server
 An hour went into looking for that bug in the wrong file.
 
 `app.py` registers a handler for `Exception`, which means Flask never reaches
-its logging path. The real traceback reaches stdout and the client gets a 500
-it can read:
+its logging path, and the client gets a 500 it can read:
 
 ```console
-$ curl -si -X POST localhost:8720/api/quote -H 'Content-Type: application/json' --data @calm.json
+$ curl -si -X POST localhost:8720/api/quote -H 'Content-Type: application/json' \
+    -d '{"answers": 5}' | grep -E '^HTTP/|^500 '
 HTTP/1.1 500 INTERNAL SERVER ERROR
-500 AttributeError: 'SmallInteger' object has no attribute 'strip'
+500 AttributeError: 'SmallInteger' object has no attribute 'get'
 ```
 
-That was a real bug — `parse_answers` assumed the HTML form's strings and
-`/api/quote` posts real integers — and it took thirty seconds to find with the
-handler and would have taken another hour without it. Any Flask app under
-Grail should carry those five lines.
+The bug that found this was the same shape, one layer in, and it no longer
+reproduces because it is fixed: `parse_answers` assumed the HTML form's
+strings, `/api/quote` posted `calm.json`'s real integers, and the answer came
+back `'SmallInteger' object has no attribute 'strip'`. It took thirty seconds
+to find with the handler and had already taken an hour without it. Any Flask
+app under Grail should carry those five lines.
+
+**Two things about the handler are load-bearing, and both were found by it
+failing.** It must print with `print(traceback.format_exc())` and not
+`traceback.print_exc()`, because Grail leaves `sys.stdout` and `sys.stderr`
+as None in a gem — so `print_exc`, which writes to `sys.stderr`, raises
+`AttributeError: 'NoneType' object has no attribute 'write'` *inside the
+handler*, and werkzeug abandons the connection exactly as it does without a
+handler at all. `print()` is the one route out of a gem that works, because
+Grail sends it to the console the driver installed.
+[Grail #848](https://github.com/GemTalk/Grail/issues/848).
+
+And what arrives is not a traceback. Grail's `format_exc()` answers a single
+line — the exception's type and message, with no `File "…", line N` frames
+and no source echo:
+
+```console
+$ gemdb -c 'import traceback
+try:
+    (5).get("x")
+except Exception:
+    print(repr(traceback.format_exc()))'
+"AttributeError: 'SmallInteger' object has no attribute 'get'\n"
+```
+
+The cause is that a Grail exception carries no `__traceback__` at all, so
+there is nothing for `traceback` to format —
+[Grail #849](https://github.com/GemTalk/Grail/issues/849).
+
+So the handler's value is the 500 body, which names the fault at the client
+rather than dropping the connection. Locating it is still on you — but a
+named exception in the right file beats `curl: (52)` by about an hour.
+
+## 5. `gemdb file.py` cannot import the file next to it
+
+`python3 file.py` puts the script's own directory on `sys.path` as entry 0,
+so a script can import its siblings. `gemdb file.py` does not, and nothing
+else fills the gap: Grail resolves a module against `grailDir`, its bundled
+stdlib, its own extra search roots and then `sys.path`, and under
+`importlib runPath:` that last list is empty.
+
+```console
+$ gemdb -c 'import sys; print("sys.path:", sys.path)'
+sys.path: []
+```
+
+So every script that imports `model` or `underwriting` — which is every entry
+point in the directory — fails at its first import until it says where it
+lives:
+
+```python
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+```
+
+Two lines, at the top of each entry point, before the sibling import. They
+are exactly the two lines CPython makes unnecessary, `os.path.abspath`
+resolves `__file__` against the directory the command was run from, and
+`model.py` needs none of them because by the time anything imports it the
+entry point has already put the directory on the path.
+
+The gap belongs in Grail rather than here — CPython's behaviour is
+documented and this is a deviation from it — but a demo that cannot be run
+is worth less than one that carries the workaround and says why. Filed as
+[Grail #847](https://github.com/GemTalk/Grail/issues/847); `sys.argv` has the
+same shape and is [#850](https://github.com/GemTalk/Grail/issues/850).
 
 ---
 
@@ -394,11 +592,11 @@ them is a choice made here, all of them in one block at the top of
 | Annual payout caps | $150.00 / $500.00 / $1,200.00 | same |
 | "Annual claim cap" | **both** a money cap (per plan, above) and a count cap (6) | FR-6.2's phrase reads either way, so both are implemented |
 | Severity schedule | 1→$12, 2→$30, 3→$75, 4→$150, 5→$300 | FR-6.1 asks for severity as an input and FR-6.2 for an amount as an output, and never connects them. This is the connection |
-| Policy term | 365 days, active on purchase | the PRD's A5: a just-quoted holder is claim-eligible immediately, with no payment step and no effective date |
+| Policy term | 365 days, active on purchase | CUJ-3 goes quote → accept → claim with no payment step and no effective date in between, so a just-accepted holder has to be claim-eligible; the term itself is nowhere in the PRD |
 | Triggers | nine, from ice cream to snow | "favorite trigger" is named and never enumerated |
 | Loss ratio | claims approved to date ÷ premium billed to date, billed as whole months elapsed × monthly premium, floored at 1 and capped at 12 | used by CUJ-1 and CUJ-2 and defined nowhere |
 | Questionnaire | the sixteen questions, their allowed values, and all thirteen points tables | the PRD lists five inputs (age, sex, migraine/TTH history, favorite trigger, eating speed); the medical two are deliberately not asked |
-| Identity | `BFI-H-`/`P-`/`C-`/`Q-` plus a six-digit counter | the PRD's M7 — there is no auth, so a policy id is how a claim finds its policy |
+| Identity | `BFI-H-`/`P-`/`C-`/`Q-` plus a six-digit counter | §3 rules out auth ("a single local user/session"), so a policy id is how a claim finds its policy |
 | Bind address | `127.0.0.1`, overridable by `BFI_HOST` | the app has no authentication and can commit, so a port on every interface would be an unauthenticated writer facing the network |
 | Port | 8720, overridable by `BFI_PORT` | "single documented command" (FR-5.1) needs a port |
 
@@ -409,35 +607,111 @@ this product does not ask medical questions. The register James asked for is
 
 ---
 
+# Reproducing this
+
+Every transcript in this document is a script or a request in
+[`demo/brain-freeze/`](demo/brain-freeze/). From a stone started on a fresh
+copy of `extent/gemdb.dbf`:
+
+```sh
+export PATH="$HOME/GemDB/bin:$PATH"   # not needed in a VS Code terminal
+cd docs/demo/brain-freeze
+```
+
+| Order | Command | Produces |
+| --- | --- | --- |
+| 1 | `gemdb dirty.py` | finding 2 — and it has to be first |
+| 2 | `gemdb class-identity/commit_write.py`, then `commit_read.py` | finding 1, the committing arm |
+| 3 | `gemdb class-identity/abort_write.py`, then `abort_read.py` | finding 1, the aborting arm |
+| 4 | `gemdb seed.py` | the dataset: three quotes, three policies, seventeen claims |
+| 5 | `gemdb verify.py` | Act 4, and the reading either side of Act 5's restart |
+| 6 | `gemdb toppings.py` | finding 3 |
+| 7 | `gemdb app.py`, in a second terminal | Act 1, and then Acts 2 and 3's requests |
+| 8 | `gemdb reinstate.py` and `gemdb lapse.py`, with the app still up | Act 5, and finding 4's 500 |
+
+Four things about that order are load-bearing:
+
+- **`dirty.py` has to run first.** The compile it measures happens once per
+  repository, so the only session that sees `score_answers` dirty a clean
+  session is the first one ever to call it. Anything run before it spends
+  that measurement, and `seed.py` certainly does. Finding 2.
+- **`seed.py` refuses a store that already holds records.** The ids in every
+  transcript here come out of counters that only count up, so `BFI-Q-000001`
+  exists exactly once per extent. Start again from a fresh copy of the
+  extent rather than trying to clear the store.
+- **Acts 2 and 3 are requests against a running app, and two of them
+  write.** The quote POST and the accept POST allocate the next ids, so
+  against a seeded store they produce `BFI-Q-000004` and `BFI-P-000004`
+  rather than the `BFI-Q-000001` and `BFI-P-000001` printed above. Act 3's
+  transcripts were measured on a second stone, also from a fresh extent,
+  with nothing quoted yet — the same three applicants, the same scores and
+  the same prices as `seed.py` gives them, because it is the same
+  `record_quote` either way. Run Act 3 first to watch the flow allocate the
+  ids, or `seed.py` first to get the dataset Act 4 reads; the two cannot
+  share one extent.
+- **`verify.py`, `toppings.py` and `dirty.py` only read.** They can be run at
+  any point after `seed.py`, as often as you like, and none of them changes
+  what the next run prints.
+
+---
+
 # How this was measured
 
-Everything above ran in this container, as OS user `gsadmin`, against a stone
-started on a copy of the Grail-loaded extent (`extent/gemdb.dbf`, Grail
-`46c2a68`) with its own `GEMSTONE_GLOBAL_DIR` and netldi. `curl` ran outside
-the database as a separate process on the host.
+Everything above ran on 2026-09-07 against a stone started on a fresh copy of
+the Grail-loaded extent (`extent/gemdb.dbf`, Grail `5e8fc42`) with its own
+`GEMSTONE_GLOBAL_DIR`. `curl` and `jq` ran outside the database as separate
+processes on the host. The transcripts were first captured against Grail
+`46c2a68` and have all been re-run against `5e8fc42`, which is the payload
+this checkout builds; where the two disagreed, `5e8fc42` is what is printed.
 
-Three honest caveats about the transcripts:
+Four honest caveats about the transcripts:
 
 - The `gemdb file.py` commands are written the way a user runs them. The
-  actual driver was an RPC topaz session issuing
+  actual driver was a linked topaz session issuing
   `importlib grailDir: … ; importlib runPath: '<file>'` — which is what
   `cli.ts:279` does for `gemdb file.py`, but it is not the generated wrapper
   itself, because that wrapper belongs to an extension-managed `~/GemDB`
-  install this harness did not have.
-- Memory tuning reached the gems through the netldi's `-E gemconfig`
-  (`GEM_TEMPOBJ_CACHE_SIZE = 400000; GEM_TEMPOBJ_CODE_SIZE = 300000;`) rather
-  than topaz's `-T`/`-C`, which apply only to a linked session.
-- The claim field was named `flavour` when these transcripts were captured
-  and is `flavor` in the code now, to match FR-7.1 and the rest of the PRD's
-  spelling. The transcripts above have been relabelled to match the code;
-  nothing else about them changed.
+  install and this ran against a scratch stone of its own.
+- `app.py` wants generous temporary object memory: `topaz -T 400000` for a
+  linked session, or the netldi's `-E gemconfig` for RPC gems. `import flask`
+  alone comes close to the default, and a session that runs out reports
+  `AlmostOutOfMemory` (notification 6013) rather than anything about Flask.
+- The claim field was named `flavour` when these transcripts were first
+  captured and is `flavor` in the code now, to match FR-7.1 and the rest of
+  the PRD's spelling. Everything above has since been re-run against the
+  renamed code, so the transcripts are the renamed code's own output rather
+  than a relabelling.
+- **`app.py` needs one line of setup that the scripts do not**, and it is a
+  bug in this repository rather than in the demo. `import flask` reaches
+  `import re`, `re` imports `_sre`, and `_sre` is one of the CPython shim's
+  built-ins — so it resolves only if the extent has the shim's library path
+  recorded in it, which happens at install time from `SHIM_LIB_PATH`.
+  `scripts/bundle-extent.sh:88` points that variable at
+  `grail/src/c/shim/libcpython_ua.so`, a path `bundle-grail.sh` no longer
+  produces — it stages the shim under `grail/prebuilt/<platform>/` instead —
+  so `install-grail.sh` warns, clears the variable, and the extent records
+  nothing. Measured against the extent in this checkout:
 
-Four short helper scripts produced some of the output above and are **not**
-in this directory: `calm.json` (the JSON quote body), `lapse.py` (Act 5's
-separate session), `dirty.py` (finding 2) and `toppings.py` (finding 3).
-They were written in the harness that ran the demo. Everything the four
-committed files do is reachable without them, but those four transcripts
-cannot be reproduced from this repository as it stands.
+      $ CPythonShim libraryPath
+      RAISED: CPythonShim library path not configured.
+      $ import re
+      ModuleNotFoundError: No module named '_sre'
+
+  One committed statement fixes it for the life of a database, and `import
+  flask` then works:
+
+      CPythonShim libraryPath:
+          '<checkout>/grail/prebuilt/<platform>/libcpython_ua.<ext>'.
+      System commitTransaction.
+
+  This is not only the demo's problem. A user who installs a `.vsix` gets a
+  database copied from that same extent and never files Grail in, so their
+  database records nothing either — `print(6 * 7)` works and `import re` does
+  not, until something re-files Grail. `seed.py`, `verify.py`, `dirty.py`,
+  `toppings.py` and `class-identity/` need none of it and were measured on an
+  untouched extent; it is only the web app. Not fixed here — it is upstream
+  of this demo, and it wants a regression test in `preloaded.test.ts` rather
+  than a line in a demo doc.
 
 One environment note worth keeping: the socket belongs to the **gem**
 process, a child of the netldi, not to the topaz client that drove it.
