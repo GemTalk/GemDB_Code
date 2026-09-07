@@ -3,7 +3,7 @@
 A five-minute demo of the two things GemDB is for: **objects that outlive the
 program without being saved**, and **sessions as units of work**.
 
-The scripts are in [`demo/`](demo/). Every command and every line of output
+The scripts are in this directory. Every command and every line of output
 below was run against a real database on 2026-08-23; where something surprised
 me, that is noted rather than tidied away.
 
@@ -13,7 +13,7 @@ me, that is noted rather than tidied away.
 >
 > ```sh
 > export PATH="$HOME/GemDB/bin:$PATH"   # not needed in a VS Code terminal
-> cd docs/demo
+> cd docs/demo/rabbit-in-the-hat
 > ```
 >
 > Nothing else. You do not create a database, choose a file format, or start a
@@ -23,7 +23,7 @@ me, that is noted rather than tidied away.
 
 ## Act 1 — Put the rabbit in the hat
 
-[`hide.py`](demo/hide.py):
+[`hide.py`](hide.py):
 
 ```python
 import gemdb
@@ -54,7 +54,7 @@ The rabbit is stored as the string it is.
 
 ## Act 2 — A different process pulls it out
 
-[`reveal.py`](demo/reveal.py):
+[`reveal.py`](reveal.py):
 
 ```python
 import gemdb
@@ -102,7 +102,7 @@ anything, and at no stage was there a file the program knew about.
 
 ## Act 4 — A counter that survives everything
 
-[`tricks.py`](demo/tricks.py) increments a number and commits it:
+[`tricks.py`](tricks.py) increments a number and commits it:
 
 ```python
 import gemdb

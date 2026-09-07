@@ -5,16 +5,16 @@ entirely inside the database. It exists to answer one question an evaluator
 asks after the rabbit comes out of the hat: *fine, but can I build an
 application on this?*
 
-The scripts are in [`demo/brain-freeze/`](demo/brain-freeze/), and
-[Reproducing this](#reproducing-this) is the order to run them in. Every
+The scripts are in this directory, and [Reproducing this](#reproducing-this)
+is the order to run them in. Every
 command and every line of output below was run on 2026-09-07 against a real
 GemStone/S 3.7.5 stone carrying Grail `5e8fc42`; where something surprised
 me, it is written down rather than tidied away — five of the findings cost
 enough time that they are the most useful part of this document.
 
 This implements the quote flow (FR-5.x) and the claims flow (FR-6.x) of the
-[Brain Freeze Insurance PRD](prd-brain-freeze-insurance.md), which is in this
-directory so every citation below can be checked. It does not implement the
+[Brain Freeze Insurance PRD](PRD.md), which is beside it so every citation
+below can be checked. It does not implement the
 notebook (CUJ-1), the MCP server (CUJ-2), the CSV import (§7.2) or the schema
 change (CUJ-4) — but it is built so CUJ-4 is a ten-line edit, and the
 measurements below are why.
@@ -317,7 +317,7 @@ raises `PendingChangesError` before running a line of its own, and CLAUDE.md
 already says to `commit()` or `abort()` first.
 
 **Which one you pick is not cosmetic.** Measured with the four scripts in
-[`class-identity/`](demo/brain-freeze/class-identity/): two arms that differ
+[`class-identity/`](class-identity/): two arms that differ
 in one token, `gemdb.commit()` against `gemdb.abort()`, each writing one
 record of a three-line class and reading it back in a second process.
 
@@ -609,8 +609,8 @@ this product does not ask medical questions. The register James asked for is
 
 # Reproducing this
 
-Every transcript in this document is a script or a request in
-[`demo/brain-freeze/`](demo/brain-freeze/). From a stone started on a fresh
+Every transcript in this document is a script or a request in this
+directory. From a stone started on a fresh
 copy of `extent/gemdb.dbf`:
 
 ```sh

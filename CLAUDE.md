@@ -456,15 +456,21 @@ measured, and what is still open. Start with
 [`docs/mcp-server.md`](docs/mcp-server.md) covers the bundled MCP server —
 what was measured about its gems, and why it registers itself with VS Code and
 refuses to touch any other client's configuration.
-[`docs/demo-rabbit-in-the-hat.md`](docs/demo-rabbit-in-the-hat.md) is the
-five-minute demo of persistence and sessions, with runnable scripts in
-`docs/demo/`; every command and output in it was measured, which is how the
-`runPath` gap below was found.
-[`docs/demo-brain-freeze-insurance.md`](docs/demo-brain-freeze-insurance.md)
-is the longer one — a Flask app that lives in the database, with its scripts
-in `docs/demo/brain-freeze/`, its requirements in
-[`docs/prd-brain-freeze-insurance.md`](docs/prd-brain-freeze-insurance.md),
-and the order to run it in under "Reproducing this". Its five findings are
+**`docs/demo/` is one directory per demo, and each one is self-contained** —
+its `README.md`, its scripts, and anything else it needs, so a demo can be
+read in one place and lifted out in one move. Nothing in CI runs them, which
+is worth knowing before trusting one: every script in the Brain Freeze demo
+was committed unable to import its own siblings, and neither the repo gate nor
+the integration suite could have noticed.
+[`docs/demo/rabbit-in-the-hat/`](docs/demo/rabbit-in-the-hat/) is the
+five-minute demo of persistence and sessions; every command and output in it
+was measured, which is how the `runPath` gap below was found.
+[`docs/demo/brain-freeze/`](docs/demo/brain-freeze/) is the longer one — a
+Flask app that lives in the database, with its requirements beside it in
+[`PRD.md`](docs/demo/brain-freeze/PRD.md) and the order to run it in under
+"Reproducing this". Per that PRD (FR-1.1, FR-8.2) it is eventually its own
+public repo rather than ours, which is the other reason each demo is a
+directory that can travel. Its five findings are
 the ones to read before building a second application on this: committing
 after the imports is what keeps class identity stable across sessions
 (aborting instead breaks `isinstance` for records written seconds earlier by
