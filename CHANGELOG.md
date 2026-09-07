@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **An MCP server, so an AI agent can use your database.** GemDB now bundles
+  [GemTalk's native GemStone MCP server](https://github.com/GemTalk/mcp_server)
+  and files it into your database, which means an agent can list what is
+  stored, run Python against it, and commit — against the same database your
+  notebooks use, with no separate setup.
+
+  It starts and stops with the database, so there is no second thing to
+  remember, and it binds `127.0.0.1` only. In VS Code there is nothing to
+  configure at all: the server registers itself with the editor, and an agent's
+  first tool call starts the database the way a notebook's first cell does. For
+  an agent elsewhere, **GemDB: Connect an AI Agent to GemDB** copies the exact
+  command or JSON that client needs — GemDB does not edit those files itself,
+  for the same reason it does not edit your shell profile.
+
+  Each connected client gets its own database session, so two agents never see
+  each other's uncommitted work. That has a cost, and it is why **this is off
+  until you turn it on** (`gemdb.mcp.enabled`, or say yes when the connect
+  command asks): a client that disconnects without saying so keeps its session
+  for up to 30 minutes, reconnecting counts as a new client, and enough
+  repeated reconnections can use up every session your database allows and
+  leave you unable to log in until they are released. Stopping GemDB frees them
+  at once. Bounding that properly belongs in the MCP server, which is the only
+  component that knows how many sessions it has opened; the default comes back
+  on once it does.
+
+  The new **AI agent access** row in the GemDB panel says whether it is on and
+  what is connected. `gemdb.mcp.port` moves it off 50390, and
+  `gemdb.mcp.readOnly` limits a connected agent to browsing and searching.
+
 ## [1.4.0] - 2026-09-03
 
 The bundled Python runtime takes a large step forward. Nothing in the extension

@@ -1,9 +1,16 @@
 import * as vscode from 'vscode';
-import { engineVersion, isEngineVersionOverridden } from './config';
+import { engineVersion, isEngineVersionOverridden, mcpEnabled, mcpReadOnly } from './config';
 import { bundledGrailStamp, grailLabel } from './grail';
 import { isInstalled } from './lifecycle';
+import { bundledMcpStamp, mcpLabel, mcpServerState, mcpUrl } from './mcp';
 import { isRemoveIpcConfigured, isSharedMemoryConfigured, sharedMemoryLabel } from './osConfig';
-import { databaseExists, databasePath, enginePath, installedGrailStamp } from './paths';
+import {
+  databaseExists,
+  databasePath,
+  enginePath,
+  installedGrailStamp,
+  installedMcpStamp,
+} from './paths';
 import { isSupportedPlatform, setContext } from './platform';
 import { isListening, isRunning, listProcesses } from './processes';
 import { sessionRegistry } from './session';
@@ -167,6 +174,76 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
         ? { command: 'gemdb.reinstallPython', title: 'Reinstall the Python Execution Engine' }
         : undefined,
     });
+
+    // The MCP server, said plainly, because a door into the database that
+    // nothing mentions is the wrong kind of quiet. Three things a user needs
+    // from this row and cannot get anywhere else: whether an agent can reach
+    // the database right now, what address to point one at, and — the one
+    // that bites — that it is spending a session.
+    //
+    // Shown even when it is switched off, which was the opposite call while
+    // the default was on: then a "disabled" row was noise for someone who had
+    // turned it off deliberately, and now off is simply where everyone starts.
+    // A feature nobody can see is a feature nobody turns on.
+    if (!mcpEnabled()) {
+      rows.push({
+        label: 'AI agent access',
+        description: 'off',
+        tooltip:
+          'GemDB can run an MCP server so AI agents can query and change your database. ' +
+          'It is off by default: each connected client uses one of the limited number of ' +
+          'database sessions, and a client that disconnects badly holds its own for up to ' +
+          '30 minutes.\n\nClick to turn it on.',
+        icon: new vscode.ThemeIcon('circle-slash'),
+        command: {
+          command: 'gemdb.registerMcpClient',
+          title: 'Connect an AI Agent to GemDB',
+        },
+      });
+    } else {
+      const mcp = await mcpServerState();
+      const installedMcp = installedMcpStamp();
+      const bundledMcp = bundledMcpStamp(this.extensionPath);
+      const mcpOutdated =
+        installedMcp !== undefined && bundledMcp !== undefined && installedMcp !== bundledMcp;
+      rows.push({
+        label: 'AI agent access',
+        description: mcp.foreign
+          ? `port ${mcp.port} is taken`
+          : mcp.running
+            ? mcpReadOnly()
+              ? `listening, read-only`
+              : 'listening'
+            : state === 'running'
+              ? 'not running'
+              : 'starts with the database',
+        tooltip: mcp.foreign
+          ? `Something other than GemDB is listening on 127.0.0.1:${mcp.port}, so the MCP ` +
+            'server could not start. Set `gemdb.mcp.port` to a free port, or stop whatever holds ' +
+            'this one.'
+          : mcp.running
+            ? `MCP server ${mcpLabel(installedMcp ?? bundledMcp)} at ${mcpUrl(mcp.port)}.\n\n` +
+              (mcpReadOnly()
+                ? 'Read-only: tools that would change the database are hidden and refused.\n\n'
+                : 'Connected agents can run Python and commit.\n\n') +
+              'It holds one database session, and gives each connected client another.' +
+              (mcpOutdated
+                ? `\n\nThis GemDB update ships ${mcpLabel(bundledMcp)}; it will be installed the ` +
+                  'next time GemDB starts.'
+                : '')
+            : 'The MCP server starts and stops with the database. Click to get the ' +
+              'configuration an AI agent needs.',
+        icon: mcp.foreign
+          ? warn('warning')
+          : mcp.running
+            ? ok('plug')
+            : new vscode.ThemeIcon('circle-outline'),
+        command: {
+          command: 'gemdb.registerMcpClient',
+          title: 'Connect an AI Agent to GemDB',
+        },
+      });
+    }
 
     // Sessions are scarce and invisible, which is a bad combination: each
     // notebook holds one so it gets its own transaction, the database allows

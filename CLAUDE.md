@@ -17,6 +17,7 @@ npm test                   # unit tests, mocked, milliseconds
 npm run test:integration   # a real database in a temp root path; seconds
 npm run bundle             # esbuild -> out/extension.js
 npm run bundle:grail       # assemble the Grail payload (needs a C toolchain)
+npm run bundle:mcp         # assemble the MCP server payload (needs nothing)
 npm run bundle:extent      # build the preloaded extent (needs an engine + shared memory)
 npm run package            # .vsix
 scripts/install-engine.sh  # download + extract the pinned engine, no editor involved
@@ -56,6 +57,25 @@ reversible; ask about what is persistent or global.**
   unraised it stands down and leaves that to `ensureRunning`, where a `sudo`
   dialog has a visible cause.
 
+- Starting the MCP server, and registering it with **this editor** — inert and
+  editor-owned, so both are automated *once the user has asked for the feature
+  at all*. `gemdb.mcp.enabled` is **off by default**, because a client that
+  reconnects repeatedly leaks a worker gem each time and can exhaust the ten
+  sessions the Community Edition allows — measured, and it locked a real
+  database's owner out of it (`docs/mcp-server.md`, "The session leak"). The
+  default returns once the router can cap its own workers. Given consent,
+  running it is part of `ensureRunning` (see `mcp.ts`), because "the database is
+  running" and "an agent can reach it" should be one state. Registering it uses VS Code's own
+  `registerMcpServerDefinitionProvider`, which is the same call as
+  `putCliOnPath` below: the definition lives only while the extension is
+  enabled. **Registering it with any other client is the other side of the
+  line** — Claude Code, Claude Desktop and Cursor are configured by JSON files
+  the user owns, so `gemdb.registerMcpClient` hands over the command or snippet
+  and stops at the clipboard. A failure to start the MCP server never fails
+  `ensureRunning`: every other step there is something the user's own work
+  needs, and a router that cannot bind must not be why a notebook cell will not
+  run. See [`docs/mcp-server.md`](docs/mcp-server.md).
+
 - Putting `gemdb` on the PATH of terminals VS Code opens —
   `putCliOnPath` in `cli.ts`, applied to
   `context.environmentVariableCollection`. Automated because VS Code owns the
@@ -69,9 +89,9 @@ reversible; ask about what is persistent or global.**
 
 `ensureRunning` in `lifecycle.ts` is the single path to a running database,
 whether the user pressed Start or just ran a notebook cell. It finishes any
-outstanding preparation, prompts for shared memory, starts the processes, and
-files Grail in. New entry points that need a database should call it rather than
-checking and asking.
+outstanding preparation, prompts for shared memory, starts the processes, files
+Grail in, and brings the MCP server up. New entry points that need a database
+should call it rather than checking and asking.
 
 ## The two test suites
 
@@ -124,15 +144,16 @@ locally, where a fresh checkout should still have a green suite, and dangerous
 in CI, where an artifact that failed to build would report success for a suite
 that executed nothing. The `Confirm the suite has something to run against`
 step asserts those paths instead of trusting the exit code — the engine, the
-payload, the shim, the extent, and `out/gemdb-shell.js`, which `repl.test.ts`
-needs because it drives the shell as a real process. Anything new that skips on
-a missing artifact belongs in that list.
+payload, the shim, the extent, `out/gemdb-shell.js` (which `repl.test.ts`
+needs because it drives the shell as a real process), and the MCP payload.
+Anything new that skips on a missing artifact belongs in that list.
 
 **`bundle:grail` clones Grail's default branch**, so the integration job is
 also the early warning that a Grail change broke GemDB's installer — and it
 means a GemDB branch that depends on unmerged Grail work is red until that
 Grail PR lands. Prove it in the meantime with `workflow_dispatch` and its
 `grail-ref` input, which becomes `GRAIL_REF` for `bundle-grail.sh`.
+`bundle:mcp` does the same for the MCP server, with an `mcp-ref` input.
 
 Releases are deliberately not automated: publishing stays a developer's act
 from a Mac, per CONTRIBUTING.md. CI packages a `.vsix` and inspects it, but
@@ -161,7 +182,10 @@ says `Stone Session limit: 10`, the database's own gems (GcUser, SymbolUser)
 spend some of it, and every GemDB Shell terminal is another. So a closed
 notebook gives its session back (`onDidCloseNotebookDocument`), and a login
 refused with GemStone error 4039, 4041 or 4050 becomes a `SessionLimitError`
-naming what this window holds and which session has been idle longest.
+naming what this window holds and which session has been idle longest. **The
+MCP server spends them too** — the router gem holds one for as long as it runs
+and gives each connected client another — which is why the status view says so
+in that row rather than leaving it to be discovered at a `SessionLimitError`.
 
 `sessionRegistry()` is the map from a session to the UI that owns it, idlest
 first, carrying GemStone's own session serial so a row here can be matched to
@@ -347,6 +371,36 @@ extension ships an extent" — an upgrade finds a database carrying whatever
 Grail was filed into it before, and stamping there would claim an install that
 never happened.
 
+**The MCP router is a logged-in session, so stop it before the stone.**
+`runStop` does, right after `logout` and before the NetLDI (the router forks
+its per-client workers through the listener). Left up, `stopstone` refuses over
+it and *every* ordinary "Stop GemDB" lands on the "Stop Anyway" modal that is
+meant for a notebook someone forgot about — GemDB blocking its own shutdown,
+less visibly than the bug that comment was written for. Stopping the router is
+enough for the workers as well, and that had to be measured rather than
+reasoned about: nothing closes them, they are separate gems, and the idle
+reaper that would eventually collect them is a `GsProcess` inside the router,
+so it dies with it. Measured 2026-09-07 — each worker's
+`System descriptionOfSession:` slot 21 (the client's pid) is the router's own
+pid, so a worker is an RPC gem whose client *is* the router and the engine ends
+it when the router goes; all of them were gone within four seconds.
+`src/__integration__/mcp.test.ts` asserts the session count returns to its
+baseline after a client has connected, so if that ever stops holding a test
+goes red rather than a user's database becoming unstoppable. The baseline is
+not zero: `SymbolGem` and `GcReclaim` hold sessions of their own.
+
+**The MCP payload must be filed in with `--grail`, and that is not cosmetic.**
+The Python toolset (`eval_python`, `compile_python`) is opt-in upstream because
+loading it is not inert — it joins the default tool surface. Without the flag
+GemDB installs cleanly and hands an agent a server that can browse Smalltalk
+and not run Python, which is the wrong half of GemDB. `--no-auth` is the other
+flag, and also a choice rather than a limit: the pinned engine could compile
+`McpAuthRouter`, but nothing in GemDB can start it, so it would be code filed
+into every user's database that nothing can reach. Unlike Grail there is no
+GemDB-specific installer — the payload's own `install.sh` is run, because what
+justified one for Grail was skipping a C compile and there is nothing compiled
+here.
+
 **Grail must be staged to a stable directory.** `installGrail` records Grail's
 own directory _inside the database_, and every session resolves modules relative
 to it. The extension directory is versioned (`gemdb.gemdb-<version>/`), so it
@@ -390,6 +444,8 @@ note below for how the bundle is built and staged.
 | `cliVscode.ts`               | the environment-backed stand-in for `vscode` in that bundle                              |
 | `repl.ts`                    | opening GemDB Shell terminals (on the CLI); running a `.py` file via the CLI             |
 | `cli.ts`                     | generates `<rootPath>/bin/gemdb` and stages the shell bundle beside it                   |
+| `mcp.ts`                     | the MCP server: staging, filing it in, and the detached router gem                       |
+| `mcpRegistration.ts`         | registering it with this editor, and handing the details to other clients                |
 | `statusView.ts`              | the one tree view                                                                        |
 | `gci/`                       | **vendored from Jasper — do not edit**                                                   |
 
@@ -397,6 +453,9 @@ note below for how the bundle is built and staged.
 (`.vscodeignore` keeps them out of the `.vsix`): decisions taken, what was
 measured, and what is still open. Start with
 [`docs/reaching-windows.md`](docs/reaching-windows.md).
+[`docs/mcp-server.md`](docs/mcp-server.md) covers the bundled MCP server —
+what was measured about its gems, and why it registers itself with VS Code and
+refuses to touch any other client's configuration.
 [`docs/demo-rabbit-in-the-hat.md`](docs/demo-rabbit-in-the-hat.md) is the
 five-minute demo of persistence and sessions, with runnable scripts in
 `docs/demo/`; every command and output in it was measured, which is how the

@@ -10,8 +10,11 @@ import { platformKey } from './platform';
  *   db/                                  the one database GemDB manages
  *     conf/  data/  log/  stat/
  *   grail/                               Grail, staged out of the extension
+ *   mcp/                                 the MCP server, staged out of the extension
+ *   bin/                                 the generated `gemdb` command
  *   locks/                               engine lock/monitor files
  *   log/                                 engine-global logs
+ *   mcp-router.json                      the MCP router GemDB forked, if any
  *
  * Grail is *staged* rather than run from inside the extension directory
  * because that directory changes path on every extension update
@@ -129,4 +132,66 @@ export function installedGrailStamp(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Where the MCP server payload is staged, and what its installer runs in.
+ *
+ * Staged out of the extension for two reasons, neither of them Grail's. The
+ * database records nothing about this directory — the payload is `.gs` class
+ * file-outs, and once they are filed in the files on disk are only of interest
+ * to whoever wants to re-run the installer. What makes a stable copy worth
+ * having is that the installer *writes*: `install.sh` leaves `load.out` and a
+ * `.topazini` beside itself, and an extension directory is both versioned and
+ * not ours to litter. The user also gets `run-server.sh` and `stop-server.sh`
+ * at a path that does not move on every update.
+ */
+export function mcpPath(): string {
+  return path.join(rootPath(), 'mcp');
+}
+
+/**
+ * Marker recording which MCP build is filed into the database.
+ *
+ * Inside the payload directory, like Grail's, which means the same ordering
+ * rule applies: stage first, stamp second, because staging replaces the
+ * directory wholesale. Here that ordering is structural rather than something
+ * to remember — the stamp is written only after a successful file-in, and a
+ * file-in needs the payload already on disk.
+ */
+export function mcpStampPath(): string {
+  return path.join(mcpPath(), '.gemdb-mcp-stamp');
+}
+
+/** True when the MCP payload has been copied out of the extension. */
+export function mcpStagedOnDisk(): boolean {
+  return fs.existsSync(path.join(mcpPath(), 'MCP_VERSION'));
+}
+
+/** True when the MCP classes have been filed into the database. */
+export function mcpInstalled(): boolean {
+  return fs.existsSync(mcpStampPath());
+}
+
+/** The MCP build currently installed in the database, or undefined. */
+export function installedMcpStamp(): string | undefined {
+  try {
+    return fs.readFileSync(mcpStampPath(), 'utf8').trim();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * What GemDB knows about the MCP router it forked: its port, its gem session
+ * id and its host pid.
+ *
+ * Outside `mcp/` deliberately. Staging replaces that directory wholesale, and
+ * a running router must survive an update that restages the payload — losing
+ * the pid would leave a gem holding the port with nothing able to name it.
+ * Beside the root path's other bookkeeping instead, and rewritten on every
+ * fork.
+ */
+export function mcpRouterStatePath(): string {
+  return path.join(rootPath(), 'mcp-router.json');
 }

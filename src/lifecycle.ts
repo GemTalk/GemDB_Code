@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as vscode from 'vscode';
-import { engineVersion, reinstallPythonOnUpdate, rootPath } from './config';
+import { engineVersion, mcpEnabled, reinstallPythonOnUpdate, rootPath } from './config';
 import { writeCliScripts } from './cli';
 import { createDatabase, removeDatabase } from './database';
 import { Progress, installEngine, removeEngine } from './engine';
@@ -14,6 +14,17 @@ import {
   bundledGrailStamp,
 } from './grail';
 import { errorMessage, log, logStep, showLog } from './log';
+import {
+  bundledMcpStamp,
+  installMcp,
+  isMcpRunning,
+  mcpLabel,
+  mcpNeedsUpdate,
+  recordMcpInstalled,
+  stageMcp,
+  startMcpServer,
+  stopMcpServer,
+} from './mcp';
 import { ensureOsConfigured } from './osConfig';
 import {
   databaseExists,
@@ -22,6 +33,7 @@ import {
   grailInstalled,
   grailPath,
   grailStagedOnDisk,
+  mcpPath,
 } from './paths';
 import {
   findNetldi,
@@ -318,6 +330,8 @@ export async function ensureRunning(extensionPath: string): Promise<boolean> {
           await installGrail(extensionPath, progress);
           recordGrailInstalled(extensionPath);
         }
+
+        await ensureMcpServing(extensionPath, progress);
         return true;
       } catch (e) {
         reportFailure('Starting GemDB', e);
@@ -325,6 +339,72 @@ export async function ensureRunning(extensionPath: string): Promise<boolean> {
       }
     },
   );
+}
+
+/**
+ * Bring the MCP server up alongside the database.
+ *
+ * Called from inside `ensureRunning`, after Grail, so that "the database is
+ * running" and "an agent can reach it" are the same state. That is the whole
+ * design: a user who has connected a client once should never have to think
+ * about a second thing to start, and an agent's first tool call should bring
+ * the database up the way a notebook's first cell does.
+ *
+ * A failure here does NOT fail `ensureRunning`, and that asymmetry is
+ * deliberate. Every other step on this path is something the user's own work
+ * needs — no database, no notebook. The MCP server is a door for something
+ * else, and a router that cannot start (a port taken by another program, a
+ * file-in that failed) must not be the reason a notebook cell will not run.
+ * So it reports itself to the log and the status view and gets out of the way.
+ *
+ * Installing is separate from running, as with Grail: the classes are filed
+ * into the database once per payload build, and the router is forked whenever
+ * one is not already listening.
+ */
+async function ensureMcpServing(
+  extensionPath: string,
+  progress?: vscode.Progress<{ message?: string }>,
+): Promise<boolean> {
+  if (!mcpEnabled()) return false;
+  if (!bundledMcpStamp(extensionPath)) {
+    // A build without the payload is a packaging fault, but not one worth a
+    // dialog: the rest of GemDB works, and the MCP row says what is missing.
+    log('This build of GemDB ships no MCP server payload, so there is none to run.');
+    return false;
+  }
+
+  try {
+    if (mcpNeedsUpdate(extensionPath)) {
+      const stamp = bundledMcpStamp(extensionPath);
+      log(`Installing the MCP server ${mcpLabel(stamp)} into the database.`);
+      progress?.report({ message: 'Installing the MCP server…' });
+      stageMcp(extensionPath);
+      await installMcp(extensionPath, progress);
+      recordMcpInstalled(extensionPath);
+    }
+    progress?.report({ message: 'Starting the MCP server…' });
+    return await startMcpServer();
+  } catch (e) {
+    log(`The MCP server did not start: ${errorMessage(e)}`);
+    return false;
+  }
+}
+
+/**
+ * Everything an MCP client needs, on demand.
+ *
+ * This is what VS Code calls through `resolveMcpServerDefinition` when it is
+ * about to start the server, and what the "Register" command calls before it
+ * hands out a URL. It goes through `ensureRunning` rather than starting the
+ * router directly, because an MCP server with no database behind it is a URL
+ * that answers every tool call with a login failure.
+ */
+export async function ensureMcpRunning(extensionPath: string): Promise<boolean> {
+  if (!(await ensureRunning(extensionPath))) return false;
+  // `ensureRunning` starts it when it is enabled, so this is the report rather
+  // than a second attempt — except where the database was already up and the
+  // router had been stopped by hand, which `ensureMcpServing` handles above.
+  return isMcpRunning();
 }
 
 /** Start whichever of the two processes is not already up. */
@@ -355,6 +435,15 @@ async function startProcesses(progress?: vscode.Progress<{ message?: string }>):
 export interface StopWorld {
   /** Drop GemDB's own GCI session. It is a login like any other, and stopstone counts it. */
   logout: () => void;
+  /**
+   * Stop the MCP server's router gem, if GemDB started one.
+   *
+   * A step of its own rather than part of `logout` because it is a different
+   * kind of thing: not a session this process holds, but a detached gem this
+   * machine is running, which may have been started by another window or
+   * before the editor was last closed.
+   */
+  stopMcpServer: () => Promise<void>;
   stoneUp: () => boolean;
   listenerUp: () => boolean;
   stopStone: (force: boolean) => Promise<void>;
@@ -369,6 +458,14 @@ export async function runStop(world: StopWorld): Promise<void> {
   // Ours goes first. A notebook that has run a cell leaves a session open, and
   // stopstone will refuse on account of it — GemDB blocking its own shutdown.
   world.logout();
+
+  // Then the MCP server, for exactly the same reason and more so: its router
+  // gem holds a session for as long as it runs, and each connected client
+  // holds another. Left up, every ordinary "Stop GemDB" would be refused and
+  // land on the modal meant for a notebook someone forgot about — GemDB
+  // blocking its own shutdown again, less visibly. Before the listener,
+  // because the router forks its worker gems through the NetLDI.
+  await world.stopMcpServer();
 
   // Then the listener, so nothing new can connect to a database on its way
   // down. This is also why a refusal below has to be repaired: at that point
@@ -421,6 +518,7 @@ export async function stop(): Promise<void> {
           // Every session this window holds: the notebooks' and each REPL's.
           // All of them are logins stopstone would refuse over.
           logout: logoutAll,
+          stopMcpServer,
           stoneUp: () => isRunning(),
           listenerUp: () => isListening(),
           stopStone,
@@ -523,6 +621,8 @@ export async function uninstall(): Promise<void> {
     removeEngine(engineVersion());
     fs.rmSync(grailPath(), { recursive: true, force: true });
     log(`Removed Grail at ${grailPath()}`);
+    fs.rmSync(mcpPath(), { recursive: true, force: true });
+    log(`Removed the MCP server at ${mcpPath()}`);
     if (choice === 'Remove everything, including my data') removeDatabase();
     else log(`Kept the database at ${databasePath()}`);
     void vscode.window.showInformationMessage('GemDB removed.');

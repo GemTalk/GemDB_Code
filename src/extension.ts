@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import {
+  ensureMcpRunning,
   ensureRunning,
   install,
   isInstalled,
@@ -22,6 +23,8 @@ import {
   notebookOwnerForUri,
   resetActiveNotebook,
 } from './notebook';
+import { startMcpServer, stopMcpServer } from './mcp';
+import { confirmMcpEnabled, registerMcpProvider, registerWithClient } from './mcpRegistration';
 import { configureSharedMemory, ensureOsConfigured, isSharedMemoryConfigured } from './osConfig';
 import { isSupportedPlatform, setContext } from './platform';
 import { isRunning } from './processes';
@@ -49,6 +52,15 @@ export function activate(context: vscode.ExtensionContext): void {
   // kernel picker explains itself, rather than silently offering nothing.
   const notebooks = new GemDbNotebookController(extensionPath);
   context.subscriptions.push(notebooks);
+
+  // The MCP server is offered to this editor for free: VS Code has an API for
+  // it, so an agent running here finds GemDB without the user configuring
+  // anything. Registered before the platform gate for the same reason the
+  // kernel is — the definition is inert until the editor asks to start it, and
+  // the resolve hook is where an unsupported platform gets its answer.
+  context.subscriptions.push(
+    registerMcpProvider(extensionPath, () => ensureMcpRunning(extensionPath)),
+  );
 
   // A closed notebook gives its session back. Sessions are scarce — the
   // database allows ten at once, and its own gems spend some of that — so a
@@ -160,6 +172,33 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand('gemdb.newNotebook', () => newNotebook()),
     vscode.commands.registerCommand('gemdb.resetNotebook', () => resetActiveNotebook()),
+    vscode.commands.registerCommand('gemdb.registerMcpClient', async () => {
+      // `registerWithClient` asks first when the server is switched off, which
+      // is the default — so the order here matters: consent, then start the
+      // database, then hand over the address. Starting first would bring a
+      // database up for someone who is about to decline.
+      //
+      // Starting before handing the address over rather than after, because a
+      // user who has just been given a URL will paste it into a client within
+      // the minute, and a client's first connection failing is the worst
+      // possible first impression of a server that only needed starting.
+      if (await confirmMcpEnabled()) {
+        await ensureMcpRunning(extensionPath);
+        await registerWithClient();
+      }
+      status.refresh();
+    }),
+    vscode.commands.registerCommand(
+      'gemdb.restartMcpServer',
+      // The port and read-only settings are baked into the router when it is
+      // forked — it keeps no committed configuration — so changing either
+      // takes a restart. This is that, rather than asking the user to stop and
+      // start the whole database.
+      refreshing(async () => {
+        await stopMcpServer();
+        await startMcpServer();
+      }),
+    ),
     vscode.commands.registerCommand('gemdb.showLog', () => showLog()),
     vscode.commands.registerCommand(
       'gemdb.configureSharedMemory',
@@ -175,6 +214,11 @@ export function activate(context: vscode.ExtensionContext): void {
         event.affectsConfiguration('gemdb.rootPath') ||
         event.affectsConfiguration('gemdb.engineVersion')
       ) {
+        // The MCP payload is staged under the root path and the router GemDB
+        // forked is recorded there, so a new root path means GemDB no longer
+        // knows about the router still holding the old port. Say so rather
+        // than leaving an orphan nothing will report.
+        log('The root path changed. An MCP server started under the old one is no longer tracked.');
         // Every notebook's session is bound to the old database too.
         logoutAll();
         // And the `gemdb` on the PATH of new terminals is the old root's.
