@@ -45,6 +45,10 @@ function makeWorld(options: {
 
   const world: StopWorld = {
     logout: () => calls.push('logout'),
+    stopMcpServer: () => {
+      calls.push('stopMcpServer');
+      return Promise.resolve();
+    },
     stoneUp: () => stoneUp,
     listenerUp: () => listenerUp,
     stopStone: (force: boolean) => {
@@ -83,7 +87,24 @@ describe('runStop', () => {
   it('drops GemDB’s own session first, and stops the listener before the stone', async () => {
     const { calls, world } = makeWorld({});
     await runStop(world);
-    expect(calls).toEqual(['logout', 'stopNetldi', 'stopStone(false)']);
+    expect(calls).toEqual(['logout', 'stopMcpServer', 'stopNetldi', 'stopStone(false)']);
+  });
+
+  // The MCP server's router gem is a logged-in session, so leaving it up would
+  // make stopstone refuse and put the "Stop Anyway" modal in front of every
+  // ordinary stop. Before the listener, too: the router forks its per-client
+  // worker gems through the NetLDI.
+  it('stops the MCP server before the listener and the stone', async () => {
+    const { calls, world } = makeWorld({});
+    await runStop(world);
+    expect(calls.indexOf('stopMcpServer')).toBeLessThan(calls.indexOf('stopNetldi'));
+    expect(calls.indexOf('stopMcpServer')).toBeLessThan(calls.indexOf('stopStone(false)'));
+  });
+
+  it('stops the MCP server even when the database is already down', async () => {
+    const { calls, world } = makeWorld({ stoneUp: false, listenerUp: false });
+    await runStop(world);
+    expect(calls).toContain('stopMcpServer');
   });
 
   it('never forces without being asked', async () => {
@@ -97,6 +118,7 @@ describe('runStop', () => {
     await runStop(world);
     expect(calls).toEqual([
       'logout',
+      'stopMcpServer',
       'stopNetldi',
       'stopStone(false)',
       'confirmForce',
@@ -109,6 +131,7 @@ describe('runStop', () => {
     await runStop(world);
     expect(calls).toEqual([
       'logout',
+      'stopMcpServer',
       'stopNetldi',
       'stopStone(false)',
       'confirmForce',
@@ -119,20 +142,20 @@ describe('runStop', () => {
   it('does not offer to force a stone that went down during the timeout', async () => {
     const { calls, world } = makeWorld({ stoneStopsLate: true });
     await runStop(world);
-    expect(calls).toEqual(['logout', 'stopNetldi', 'stopStone(false)']);
+    expect(calls).toEqual(['logout', 'stopMcpServer', 'stopNetldi', 'stopStone(false)']);
     expect(calls).not.toContain('confirmForce');
   });
 
   it('asks nothing of a database that is already down', async () => {
     const { calls, world } = makeWorld({ stoneUp: false, listenerUp: false });
     await runStop(world);
-    expect(calls).toEqual(['logout']);
+    expect(calls).toEqual(['logout', 'stopMcpServer']);
   });
 
   it('still clears a listener left behind by a stone that is already down', async () => {
     const { calls, world } = makeWorld({ stoneUp: false, listenerUp: true });
     await runStop(world);
-    expect(calls).toEqual(['logout', 'stopNetldi']);
+    expect(calls).toEqual(['logout', 'stopMcpServer', 'stopNetldi']);
   });
 });
 

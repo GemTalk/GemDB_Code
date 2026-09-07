@@ -97,6 +97,52 @@ in a terminal. History, line editing, a Ctrl+C that interrupts the running code
 `exit()` or Ctrl+D to leave: identical in both places, because it is one
 program.
 
+## Connecting an AI agent
+
+GemDB includes an **MCP server**, so an AI agent can query and change your
+database directly — list what is stored, run Python against it, write and
+commit. It starts and stops with the database, listens on `127.0.0.1` only,
+and needs no configuration in VS Code: the server appears in this editor's MCP
+list on its own, and the first tool call starts the database if it is not
+already running.
+
+**It is off until you turn it on.** Run **GemDB: Connect an AI Agent to GemDB**
+and say yes, or set `gemdb.mcp.enabled`. The reason is in the second bullet
+below, and it is a real limitation rather than a formality.
+
+For an agent outside VS Code, run **GemDB: Connect an AI Agent to GemDB**. Pick
+the client and GemDB copies the exact command or JSON it needs — for Claude
+Code, for example:
+
+```sh
+claude mcp add --transport http gemdb http://127.0.0.1:50390/mcp
+```
+
+GemDB does not edit those configuration files for you. They are yours, they
+persist, and they are outside anything GemDB would clean up — the same reason
+it asks rather than edits your shell profile.
+
+Two things worth knowing:
+
+- **Each connected client gets its own database session**, so agents never see
+  each other's uncommitted work. Sessions are limited, though, and the server
+  itself holds one — so an agent competes with your notebooks and shells for
+  them. The **AI agent access** row in the GemDB panel shows what is connected.
+- **A client that disconnects badly keeps its session for up to 30 minutes**,
+  and reconnecting counts as a new client. So an agent that repeatedly crashes
+  and retries, or a window reloaded many times in quick succession, can use up
+  every session your database allows and leave you unable to log in until they
+  are released. Stopping GemDB — or **GemDB: Restart the MCP Server** — frees
+  them immediately. This is why the server is off by default; the fix belongs
+  in the MCP server itself, which is the only thing that knows how many
+  sessions it has opened.
+- **A connected agent can change and commit data**, because running Python in
+  your database is most of the point. Set `gemdb.mcp.readOnly` to limit it to
+  browsing and searching.
+- **Each tool call is a clean slate.** Python variables do not survive between
+  calls, and neither does an uncommitted change — so an agent has to commit in
+  the same call that writes.
+
 ## What GemDB is not
 
 GemDB is deliberately small. It manages exactly one database, with a fixed
@@ -155,6 +201,7 @@ Everything GemDB creates is under one directory, `~/GemDB` by default
 | `GemStone64Bit<version>-<platform>/` | the database engine, as downloaded |
 | `db/` | your database — the only irreplaceable part |
 | `grail/` | the Python runtime library and native shim |
+| `mcp/` | the MCP server, and the scripts to run it by hand |
 | `locks/`, `log/` | engine bookkeeping |
 
 The default is `~/GemDB` rather than `~/Documents/GemDB` on purpose: `~/Documents`
@@ -168,6 +215,9 @@ database extent out from under the engine will corrupt it.
 | `gemdb.rootPath` | `~/GemDB` | where GemDB keeps everything |
 | `gemdb.engineVersion` | *(empty)* | override the pinned engine version; for development against unreleased builds |
 | `gemdb.reinstallPythonOnUpdate` | `true` | refresh Python support in your database when a GemDB update ships a newer one |
+| `gemdb.mcp.enabled` | `false` | run the MCP server, so AI agents can reach your database |
+| `gemdb.mcp.port` | `50390` | the port it listens on, always on `127.0.0.1` |
+| `gemdb.mcp.readOnly` | `false` | refuse every tool that would change the database |
 
 ## Building it
 

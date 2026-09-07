@@ -92,6 +92,9 @@ REQUIRED=(
   "extension/grail/scripts/grail.tpz|the Grail scripts the installer drives"
   "extension/node_modules/koffi/build/koffi/$KOFFI_KEY/koffi.node|the native FFI addon for $TARGET"
   "extension/resources/install-grail.sh|the installer the extension runs"
+  "extension/mcp/MCP_VERSION|the MCP server payload"
+  "extension/mcp/install.sh|the MCP installer the extension runs"
+  "extension/mcp/src/core/McpRouter.gs|the MCP front end the extension forks"
 )
 
 # Platform-specific extras: the OS-configuration script this target's users are
@@ -156,13 +159,16 @@ check_absent '^extension/src/' "the sources are build inputs, not payload"
 check_absent '\.map$' "source maps belong in a debug build, not a release"
 check_absent '^extension/grail/\.git' "a whole Grail clone would ship"
 check_absent '^extension/grail/\.topazini' "stray topaz credentials"
+check_absent '^extension/mcp/\.git' "a whole mcp_server clone would ship"
+check_absent '^extension/mcp/\.topazini' "stray topaz credentials"
+check_absent '^extension/mcp/.*\.out$' "a file-in log from a previous install"
 
 size_mb=$(( $(wc -c <"$VSIX") / 1024 / 1024 ))
 echo "$(basename "$VSIX"): $(wc -l <<<"$LISTING" | tr -d ' ') files, ${size_mb} MB"
 
 if [ "$missing" -ne 0 ] || [ "$unwanted" -ne 0 ]; then
   echo "ERROR: $missing required path(s) missing, $unwanted unwanted group(s) present." >&2
-  [ "$missing" -eq 0 ] || echo "       A missing artifact usually means 'npm run bundle:grail' was not run on $PLATFORM_KEY, or 'npm run bundle:extent' was never run." >&2
+  [ "$missing" -eq 0 ] || echo "       A missing artifact usually means 'npm run bundle:grail' was not run on $PLATFORM_KEY, or 'npm run bundle:mcp' / 'npm run bundle:extent' was never run." >&2
   exit 1
 fi
 

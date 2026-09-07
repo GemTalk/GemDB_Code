@@ -9,6 +9,11 @@ out/
 # rather than committed.
 grail/
 
+# The MCP server payload is a build artifact of scripts/bundle-mcp.sh. Unlike
+# Grail's it carries nothing compiled, so it is the same on every platform --
+# but it is still the mcp_server repository's code, not this one's.
+mcp/
+
 # The preloaded extent is a build artifact of scripts/bundle-extent.sh.
 extent/
 

@@ -32,6 +32,14 @@ grail/**/*.o
 grail/**/*.out
 grail/.git/**
 
+# The MCP payload ships as bundle-mcp.sh assembled it. Belt-and-braces against
+# a stale mcp/ left behind by an older bundle, and against the two files the
+# installer writes beside itself once it has run under the root path -- neither
+# belongs in a published artifact, and .topazini is credentials.
+mcp/**/*.out
+mcp/.topazini
+mcp/.git/**
+
 # A build-time leftover from bundle-extent.sh: it names the scratch `gemdbbuild`
 # stone, which does not exist on a user's machine. Our .tpz files set their own
 # user/stone *after* any .topazini runs, so it cannot hijack a login — but a

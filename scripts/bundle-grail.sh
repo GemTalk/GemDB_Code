@@ -72,7 +72,7 @@ fi
 # Obtain the Grail sources.
 # ---------------------------------------------------------------------------
 WORKDIR=""
-cleanup() { [ -n "$WORKDIR" ] && rm -rf "$WORKDIR"; }
+cleanup() { [ -n "$WORKDIR" ] && rm -rf "$WORKDIR"; return 0; }
 trap cleanup EXIT
 
 if [ -n "${GRAIL_SRC:-}" ]; then

@@ -44,20 +44,43 @@
         "gemdb.rootPath": {
           "type": "string",
           "default": "~/GemDB",
-          "markdownDescription": "Directory that holds the GemDB database engine and your database. Deliberately **not** under `~/Documents`, which is often synced to iCloud — syncing a live database extent will corrupt it."
+          "markdownDescription": "Directory that holds the GemDB database engine and your database. Deliberately **not** under `~/Documents`, which is often synced to iCloud \u2014 syncing a live database extent will corrupt it."
         },
         "gemdb.engineVersion": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Advanced: override the pinned database engine version (e.g. `3.7.5`). Leave empty to use the version this release of GemDB Code was built and tested against. A version that is not published in the public catalog cannot be downloaded — it must already be present under the root path."
+          "markdownDescription": "Advanced: override the pinned database engine version (e.g. `3.7.5`). Leave empty to use the version this release of GemDB Code was built and tested against. A version that is not published in the public catalog cannot be downloaded \u2014 it must already be present under the root path."
         },
         "gemdb.reinstallPythonOnUpdate": {
           "type": "boolean",
           "default": true,
           "description": "When a GemDB Code update ships a newer Python execution engine, reinstall it into your database automatically the next time GemDB Code starts."
+        },
+        "gemdb.mcp.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Run GemDB's **MCP server**, so AI agents can query and change your database. It starts and stops with the database, listens on `127.0.0.1` only, and is registered with this editor automatically. Run **GemDB: Connect an AI Agent to GemDB** for the configuration other clients need.\n\n**Off by default while a session-accounting limitation is fixed upstream.** Each connected client is given its own database session, and one is not released until the client disconnects cleanly or 30 minutes pass \u2014 so a client that repeatedly reconnects or crashes can use up the limited number of sessions the database allows, and lock you out of it until they are reaped. Turn this on if you want agent access now; the GemDB panel shows what is connected."
+        },
+        "gemdb.mcp.port": {
+          "type": "number",
+          "default": 50390,
+          "minimum": 1,
+          "maximum": 65535,
+          "markdownDescription": "Port the MCP server listens on, always bound to `127.0.0.1`. Deliberately not `8000` \u2014 that is what most development servers take, and the MCP server refuses a port already in use. Changing this needs **GemDB: Restart the MCP Server**, and every client configured with the old URL has to be updated."
+        },
+        "gemdb.mcp.readOnly": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Hide and refuse every tool that changes the database, so a connected agent can browse and search but not modify or commit. Off by default: running Python in your database is most of why you would connect an agent to it. Changing this needs **GemDB: Restart the MCP Server**."
         }
       }
     },
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "gemdbMcpProvider",
+        "label": "GemDB"
+      }
+    ],
     "viewsContainers": {
       "activitybar": [
         {
@@ -144,6 +167,18 @@
         "category": "GemDB"
       },
       {
+        "command": "gemdb.registerMcpClient",
+        "title": "Connect an AI Agent to GemDB",
+        "category": "GemDB",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "gemdb.restartMcpServer",
+        "title": "Restart the MCP Server",
+        "category": "GemDB",
+        "icon": "$(debug-restart)"
+      },
+      {
         "command": "gemdb.showLog",
         "title": "Show Log",
         "category": "GemDB",
@@ -188,6 +223,11 @@
           "group": "navigation@4"
         },
         {
+          "command": "gemdb.registerMcpClient",
+          "when": "view == gemdbStatus && gemdb.installed",
+          "group": "1_gemdb@0"
+        },
+        {
           "command": "gemdb.showLog",
           "when": "view == gemdbStatus",
           "group": "1_gemdb@1"
@@ -201,6 +241,11 @@
           "command": "gemdb.uninstall",
           "when": "view == gemdbStatus && gemdb.installed",
           "group": "9_danger@1"
+        },
+        {
+          "command": "gemdb.restartMcpServer",
+          "when": "view == gemdbStatus && gemdb.running",
+          "group": "1_gemdb@3"
         }
       ],
       "editor/title/run": [
@@ -226,7 +271,7 @@
           {
             "id": "install",
             "title": "Setup happens on its own",
-            "description": "GemDB Code downloads the database engine, creates your database, and asks once for the one operating-system change it needs. If you cancelled that, pick it up here — it resumes rather than starting over.\n[Set Up GemDB](command:gemdb.install)",
+            "description": "GemDB Code downloads the database engine, creates your database, and asks once for the one operating-system change it needs. If you cancelled that, pick it up here \u2014 it resumes rather than starting over.\n[Set Up GemDB](command:gemdb.install)",
             "media": {
               "markdown": "resources/walkthrough/install.md"
             },
@@ -237,7 +282,7 @@
           {
             "id": "repl",
             "title": "Run your first Python",
-            "description": "Open a Python prompt that runs inside the database. GemDB Code starts the database for you — there's nothing to press first.\n[Open GemDB Shell](command:gemdb.openRepl)",
+            "description": "Open a Python prompt that runs inside the database. GemDB Code starts the database for you \u2014 there's nothing to press first.\n[Open GemDB Shell](command:gemdb.openRepl)",
             "media": {
               "markdown": "resources/walkthrough/repl.md"
             },
@@ -284,6 +329,7 @@
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.mts",
     "bundle:grail": "./scripts/bundle-grail.sh",
+    "bundle:mcp": "./scripts/bundle-mcp.sh",
     "bundle:extent": "./scripts/bundle-extent.sh",
     "//package": "Platform-specific builds: each .vsix carries the CPython shim for one platform, so the Marketplace offers each machine only the build that can work on it. `package` builds the target matching this machine; `package:all` needs every platform's shim staged in grail/prebuilt (see CONTRIBUTING.md).",
     "package": "scripts/package.sh",
