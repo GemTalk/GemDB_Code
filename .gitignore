@@ -1,5 +1,10 @@
 node_modules/
 out/
+
+# Python bytecode, from running the demo scripts under docs/demo/ with a
+# plain CPython (which `underwriting.py` deliberately supports).
+__pycache__/
+*.pyc
 *.vsix
 *.tsbuildinfo
 .DS_Store
