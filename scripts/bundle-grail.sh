@@ -72,6 +72,9 @@ fi
 # Obtain the Grail sources.
 # ---------------------------------------------------------------------------
 WORKDIR=""
+# `return 0` because this is the EXIT trap, so its status becomes the script's.
+# On the GRAIL_SRC path WORKDIR stays empty, the test is false, and the trap
+# handed back 1 from a build that had in fact succeeded.
 cleanup() { [ -n "$WORKDIR" ] && rm -rf "$WORKDIR"; return 0; }
 trap cleanup EXIT
 
