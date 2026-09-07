@@ -460,6 +460,20 @@ refuses to touch any other client's configuration.
 five-minute demo of persistence and sessions, with runnable scripts in
 `docs/demo/`; every command and output in it was measured, which is how the
 `runPath` gap below was found.
+[`docs/demo-brain-freeze-insurance.md`](docs/demo-brain-freeze-insurance.md)
+is the longer one — a Flask app that lives in the database, with its scripts
+in `docs/demo/brain-freeze/`. Its four findings are the ones to read before
+building a second application on this: committing after the imports is what
+keeps class identity stable across sessions (aborting instead breaks
+`isinstance` for records written seconds earlier by identical source);
+*calling* a function for the first time dirties the session, because Grail
+compiles it then, so a transaction block needs a commit immediately before
+it and the resulting `PendingChangesError` names no cause; a schema change
+keeps `isinstance` but leaves older records without the new attribute, so
+optional fields must be read with `getattr`; and an exception in a Flask view
+is invisible unless the app registers its own `Exception` handler, because
+Flask logs with `exc_info=` and Grail's `logging` is a stub that raises on
+it.
 
 **`gemdb file.py` starts with a dirty session, so `gemdb.transaction()` cannot
 be a script's first statement.** Measured 2026-08-23 against the payload of
