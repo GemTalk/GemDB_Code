@@ -4,7 +4,7 @@
 
 Creates three quotes, three policyholders, three policies and seventeen
 claims: the exact dataset `verify.py` prints in
-[the write-up](../../demo-brain-freeze-insurance.md), with the same ids, the
+[the write-up](README.md), with the same ids, the
 same premiums, and all nine adjudication rules exercised at least once.  Run
 it against a store this demo has never touched -- it refuses one that already
 holds records, because the ids come from counters that only ever count up.

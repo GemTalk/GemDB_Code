@@ -196,8 +196,8 @@ them, and listed in the panel.
 ### Documentation
 
 - **A five-minute demo of persistence and sessions.**
-  [`docs/demo-rabbit-in-the-hat.md`](docs/demo-rabbit-in-the-hat.md), with
-  runnable scripts in `docs/demo/`: put an object in the database in one
+  [`docs/demo/rabbit-in-the-hat/`](docs/demo/rabbit-in-the-hat/), with
+  runnable scripts beside it: put an object in the database in one
   process, exit, and take it back out in another. Every command and output in
   it was measured rather than written from memory, which is how the `runPath`
   gap below was found.
