@@ -465,12 +465,17 @@ the integration suite could have noticed.
 [`docs/demo/rabbit-in-the-hat/`](docs/demo/rabbit-in-the-hat/) is the
 five-minute demo of persistence and sessions; every command and output in it
 was measured, which is how the `runPath` gap below was found.
-[`docs/demo/brain-freeze/`](docs/demo/brain-freeze/) is the longer one — a
-Flask app that lives in the database, with its requirements beside it in
-[`PRD.md`](docs/demo/brain-freeze/PRD.md) and the order to run it in under
-"Reproducing this". Per that PRD (FR-1.1, FR-8.2) it is eventually its own
-public repo rather than ours, which is the other reason each demo is a
-directory that can travel. Its five findings are
+Brain Freeze Insurance was the longer one — a Flask app that lives in the
+database. Per its PRD (FR-1.1, FR-8.2) it was always going to be its own
+public repo rather than ours, and it now is:
+[GemTalk/brain-freeze](https://github.com/GemTalk/brain-freeze), which also
+covers the notebook, the MCP surface and the schema change that the version
+here never did. The version that lived here is committed at
+[`c9c261a`](https://github.com/GemTalk/GemDB_Code/tree/c9c261ac017fd7831cd29aa71b79da4ee8c1ed9b/docs/demo/brain-freeze),
+and is worth keeping in mind for one reason: it measured Grail `46c2a68`, and
+two of the findings below do not reproduce on `c875e56` — see the note after
+them. That it was a directory able to travel is the other reason each demo is
+one. Its five findings are
 the ones to read before building a second application on this: committing
 after the imports is what keeps class identity stable across sessions
 (aborting instead breaks `isinstance` for records written seconds earlier by
@@ -496,6 +501,19 @@ Grail #847 (`sys.path`), #848 (`sys.stdout`/`sys.stderr` are None), #849 (no
 `__traceback__`), #850 (`sys.argv` is topaz's), #851 (compiling is a write,
 including the dirty session below) — so a workaround here can be retired
 against an issue rather than rediscovered.
+
+Two of those five were measured on Grail `46c2a68` and **do not reproduce on
+`c875e56`**, which is worth knowing before relying on them. A schema change no
+longer keeps `isinstance`: a record written before the change fails
+`isinstance` against the edited class, not merely `type(x) is C`. Reading
+optional fields with `getattr` is still right, but a class check has to use
+`type(obj).__name__`. And a first call to a never-compiled function no longer
+dirties the session — what dirties it is running the code at all, which every
+notebook cell and every `gemdb file.py` does, so the advice to commit before a
+transaction stands for a different reason than the one given above. Both are
+reproducible either way, and
+[GemTalk/brain-freeze](https://github.com/GemTalk/brain-freeze) carries
+scripts that print which behaviour the Grail in front of you has.
 
 **`gemdb file.py` starts with a dirty session, so `gemdb.transaction()` cannot
 be a script's first statement.** Measured 2026-08-23 against the payload of
