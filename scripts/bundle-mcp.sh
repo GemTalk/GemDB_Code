@@ -55,14 +55,30 @@ echo "MCP server commit: $MCP_COMMIT ($MCP_DESCRIBE)"
 # has no counterpart here. So these paths are named by src/mcp.ts, and if the
 # repository reorganizes that has to fail at package time, where someone is
 # watching, rather than on a user's first run.
-REQUIRED=(
-    install.sh
-    gs-env.sh
+#
+# ENTRYPOINTS is ENTRY POINTS ONLY: the scripts something OUTSIDE the payload
+# names. What those scripts in turn source is deliberately absent, because it
+# is derived below rather than listed. An earlier version of this file kept a
+# list here and a SECOND, different list in the copy loop, and checked only
+# this one; session-lifetime.sh was in neither, so every .vsix shipped a
+# run-server.sh that sourced a file the payload did not contain and died on
+# the user's first run -- taking MCP_MAX_SESSIONS, the session cap, with it.
+# A list that has to be kept in step with another list is the defect; the only
+# durable fix is to have one list, and to derive the rest from the payload.
+ENTRYPOINTS=(
+    install.sh      # src/mcp.ts runs this to file the classes in
+    run-server.sh   # staged at a stable path for the user to run
+    stop-server.sh  # ditto, and named by run-server.sh's own advice
+)
+# Loaders inside the wholesale src/ copy that src/mcp.ts's install path drives.
+# Not entry points in the shell sense, so no closure applies -- what THEY read
+# is checked by the `input` scan further down.
+REQUIRED_GS=(
     src/core/load.gs
     src/tests/load.gs
     src/grail/load.gs
 )
-for item in "${REQUIRED[@]}"; do
+for item in "${ENTRYPOINTS[@]}" "${REQUIRED_GS[@]}"; do
     if [ ! -e "$SRC/$item" ]; then
         echo "ERROR: mcp_server no longer provides $item -- GemDB's installer needs it." >&2
         exit 1
@@ -81,14 +97,101 @@ mkdir -p "$DEST"
 # list of subdirectories silently omits whatever is added next.
 cp -R "$SRC/src" "$DEST/src"
 
-# The shell scripts GemDB drives, plus the two the user may want at a stable
-# path of their own (run-server.sh / stop-server.sh) once the payload is staged
-# under the root path. gs-env.sh is sourced by all of them.
-for item in install.sh gs-env.sh run-server.sh stop-server.sh load.gs LICENSE README.md; do
+# Documents and the top-level loader. Carried for the reader, not driven, so
+# there is nothing to derive from them; load.gs's own `input` targets are
+# covered by the scan below.
+for item in load.gs LICENSE README.md; do
     if [ -e "$SRC/$item" ]; then cp "$SRC/$item" "$DEST/$item"; fi
 done
+
+# The shell scripts: the entry points, then the transitive closure of whatever
+# those scripts source or run, until the set stops growing. gs-env.sh and
+# session-lifetime.sh arrive this way rather than by being named -- which is
+# the whole point, since the second of those is what nobody remembered to name.
+#
+# sourced_scripts matches COMMAND POSITION only -- `. ./x.sh`, `source ./x.sh`,
+# a bare or env-prefixed `./x.sh` invocation. So the `./stop-server.sh` inside
+# run-server.sh's advice-to-the-user string is not one of these. That is the
+# difference between this scan and the wider one after it, and it is deliberate:
+# this one decides what BELONGS in the payload, that one decides whether the
+# payload keeps the promises it makes.
+sourced_scripts() {
+    sed -nE \
+        -e 's#^[[:space:]]*(\.|source)[[:space:]]+"?\./([A-Za-z0-9_.-]+\.sh)"?([[:space:]].*)?$#\2#p' \
+        -e 's#^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(exec[[:space:]]+)?\./([A-Za-z0-9_.-]+\.sh)([[:space:]].*)?$#\3#p' \
+        "$@"
+}
+
+echo "Staging the entry points and everything they reach"
+for item in "${ENTRYPOINTS[@]}"; do
+    cp "$SRC/$item" "$DEST/$item"
+    echo "  $item (entry point)"
+done
+ADDED=1
+while [ "$ADDED" -ne 0 ]; do
+    ADDED=0
+    while IFS= read -r ref; do
+        [ -n "$ref" ] || continue
+        [ -e "$DEST/$ref" ] && continue
+        # Absent upstream too: not something this loop can fix, and silence
+        # here would be the original bug again. Leave it to the check below,
+        # which reports it by name and fails the build.
+        [ -e "$SRC/$ref" ] || continue
+        cp "$SRC/$ref" "$DEST/$ref"
+        echo "  $ref (sourced by the payload)"
+        ADDED=$((ADDED + 1))
+    done < <(sourced_scripts "$DEST"/*.sh | sort -u)
+done
+
 chmod 0755 "$DEST"/*.sh
 find "$DEST" \( -name '*.out' -o -name '.topazini' \) -delete 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# Verify every sibling script the payload names is present.
+# ---------------------------------------------------------------------------
+# The `input` scan below does this for the Smalltalk half and has since day
+# one; this is the shell half, which did not exist and should have. The scan
+# is deliberately WIDER than the closure above: it takes every `./<name>.sh`
+# appearing anywhere in a staged script, comments and message strings included.
+#
+# That width is the point, not an accident. run-server.sh tells the user, in an
+# error it prints, to run `./stop-server.sh`; the manual at the head of the
+# same file points at `./session-lifetime.sh` for how to choose MCP_MAX_SESSIONS.
+# A payload that names a script it does not contain is lying to whoever reads
+# it, whether the reference is executed or merely printed. And because this
+# scan is wider than the one that decides the copying, it can genuinely fail:
+# a script that references something upstream does not provide, or names a
+# sibling in prose only, stops the build here rather than shipping.
+#
+# Only the payload root is scanned, because that is where `./` unambiguously
+# resolves -- the flat set of scripts a user or src/mcp.ts runs in place.
+echo "Checking that every './*.sh' the payload names is present"
+SH_CHECKED=0
+SH_MISSING=0
+while IFS= read -r target; do
+    SH_CHECKED=$((SH_CHECKED + 1))
+    if [ ! -e "$DEST/$target" ]; then
+        echo "  MISSING: $target" >&2
+        SH_MISSING=$((SH_MISSING + 1))
+    fi
+done < <(grep -ohE '\./[A-Za-z0-9_.-]+\.sh' "$DEST"/*.sh | sed 's|^\./||' | sort -u)
+
+if [ "$SH_MISSING" -ne 0 ]; then
+    echo "ERROR: $SH_MISSING script(s) named by the payload are not in it." >&2
+    echo "  Either mcp_server no longer provides them, or a staged script names" >&2
+    echo "  a sibling in prose that nothing sources. Do NOT paper over this by" >&2
+    echo "  adding names to a list -- fix the reference or widen ENTRYPOINTS." >&2
+    exit 1
+fi
+# Same guard as the `input` scan's: a regex that matches nothing would report
+# success for a payload it never looked at. Today the staged scripts name
+# gs-env.sh, session-lifetime.sh and stop-server.sh between them.
+if [ "$SH_CHECKED" -lt 3 ]; then
+    echo "ERROR: only $SH_CHECKED './*.sh' references found; the payload's scripts name more." >&2
+    echo "  The scan above is not matching -- fix it rather than trusting this build." >&2
+    exit 1
+fi
+echo "  $SH_CHECKED referenced scripts, all present"
 
 # ---------------------------------------------------------------------------
 # Verify every file the loaders read is present.

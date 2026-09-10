@@ -229,8 +229,9 @@ jobs:
 
       # Clones mcp_server's default branch unless a ref is given, so this leg
       # is the early warning for an mcp_server change that breaks GemDB's
-      # installer too — bundle-mcp.sh verifies the scripts src/mcp.ts drives
-      # and every file the loaders `input`. The payload carries nothing
+      # installer too — bundle-mcp.sh verifies the scripts src/mcp.ts drives,
+      # every sibling script those scripts name, and every file the loaders
+      # `input`. The payload carries nothing
       # compiled, so unlike the Grail one it is identical on all three legs;
       # it is built per leg anyway because each leg packages its own .vsix.
       - name: Build the MCP server payload
