@@ -44,12 +44,12 @@
         "gemdb.rootPath": {
           "type": "string",
           "default": "~/GemDB",
-          "markdownDescription": "Directory that holds the GemDB database engine and your database. Deliberately **not** under `~/Documents`, which is often synced to iCloud \u2014 syncing a live database extent will corrupt it."
+          "markdownDescription": "Directory that holds the GemDB database engine and your database. Deliberately **not** under `~/Documents`, which is often synced to iCloud — syncing a live database extent will corrupt it."
         },
         "gemdb.engineVersion": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Advanced: override the pinned database engine version (e.g. `3.7.5`). Leave empty to use the version this release of GemDB Code was built and tested against. A version that is not published in the public catalog cannot be downloaded \u2014 it must already be present under the root path."
+          "markdownDescription": "Advanced: override the pinned database engine version (e.g. `3.7.5`). Leave empty to use the version this release of GemDB Code was built and tested against. A version that is not published in the public catalog cannot be downloaded — it must already be present under the root path."
         },
         "gemdb.reinstallPythonOnUpdate": {
           "type": "boolean",
@@ -59,14 +59,14 @@
         "gemdb.mcp.enabled": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Run GemDB's **MCP server**, so AI agents can query and change your database. It starts and stops with the database, listens on `127.0.0.1` only, and is registered with this editor automatically. Run **GemDB: Connect an AI Agent to GemDB** for the configuration other clients need.\n\n**Off by default while a session-accounting limitation is fixed upstream.** Each connected client is given its own database session, and one is not released until the client disconnects cleanly or 30 minutes pass \u2014 so a client that repeatedly reconnects or crashes can use up the limited number of sessions the database allows, and lock you out of it until they are reaped. Turn this on if you want agent access now; the GemDB panel shows what is connected."
+          "markdownDescription": "Run GemDB's **MCP server**, so AI agents can query and change your database. It starts and stops with the database, listens on `127.0.0.1` only, and is registered with this editor automatically. Run **GemDB: Connect an AI Agent to GemDB** for the configuration other clients need.\n\n**Off by default while a session-accounting limitation is fixed upstream.** Each connected client is given its own database session, and one is not released until the client disconnects cleanly or 30 minutes pass — so a client that repeatedly reconnects or crashes can use up the limited number of sessions the database allows, and lock you out of it until they are reaped. Turn this on if you want agent access now; the GemDB panel shows what is connected."
         },
         "gemdb.mcp.port": {
           "type": "number",
           "default": 50390,
           "minimum": 1,
           "maximum": 65535,
-          "markdownDescription": "Port the MCP server listens on, always bound to `127.0.0.1`. Deliberately not `8000` \u2014 that is what most development servers take, and the MCP server refuses a port already in use. Changing this needs **GemDB: Restart the MCP Server**, and every client configured with the old URL has to be updated."
+          "markdownDescription": "Port the MCP server listens on, always bound to `127.0.0.1`. Deliberately not `8000` — that is what most development servers take, and the MCP server refuses a port already in use. Changing this needs **GemDB: Restart the MCP Server**, and every client configured with the old URL has to be updated."
         },
         "gemdb.mcp.readOnly": {
           "type": "boolean",
@@ -271,7 +271,7 @@
           {
             "id": "install",
             "title": "Setup happens on its own",
-            "description": "GemDB Code downloads the database engine, creates your database, and asks once for the one operating-system change it needs. If you cancelled that, pick it up here \u2014 it resumes rather than starting over.\n[Set Up GemDB](command:gemdb.install)",
+            "description": "GemDB Code downloads the database engine, creates your database, and asks once for the one operating-system change it needs. If you cancelled that, pick it up here — it resumes rather than starting over.\n[Set Up GemDB](command:gemdb.install)",
             "media": {
               "markdown": "resources/walkthrough/install.md"
             },
@@ -282,7 +282,7 @@
           {
             "id": "repl",
             "title": "Run your first Python",
-            "description": "Open a Python prompt that runs inside the database. GemDB Code starts the database for you \u2014 there's nothing to press first.\n[Open GemDB Shell](command:gemdb.openRepl)",
+            "description": "Open a Python prompt that runs inside the database. GemDB Code starts the database for you — there's nothing to press first.\n[Open GemDB Shell](command:gemdb.openRepl)",
             "media": {
               "markdown": "resources/walkthrough/repl.md"
             },
@@ -347,6 +347,7 @@
     "@eslint/js": "^9.19.0",
     "@types/node": "^22.15",
     "@types/vscode": "^1.101.0",
+    "@vscode/extension-telemetry": "^1.5.2",
     "@vscode/vsce": "^3.7.1",
     "esbuild": "^0.28.1",
     "eslint": "^10.0.0",
