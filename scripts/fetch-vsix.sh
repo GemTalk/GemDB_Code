@@ -81,11 +81,17 @@ echo "Ready in dist/ — $(ls "$DIST"/*.vsix | wc -l | tr -d ' ') packages at ve
 ls -1sh "$DIST"/*.vsix | sed 's/^/  /'
 cat <<EOF
 
-Install the one for this machine and run it once, then publish both registries:
+Install the one for this machine and run it once.
 
-  npx vsce publish --skip-duplicate --packagePath dist/*.vsix
-  npx ovsx publish --skip-duplicate --packagePath dist/*.vsix
+Then publish -- normally by dispatching the Release workflow (Actions -> Release
+-> Run workflow) against main, which does everything below and tags, releases
+and verifies as well. These commands are the fallback for when that is not
+available:
 
---skip-duplicate makes a re-run after a Marketplace timeout safe: targets that
-already published are skipped instead of failing the whole command.
+  npm run publish:vsce
+  npm run publish:ovsx
+
+Both go through scripts/publish-to-registry.sh, one package at a time, so a
+re-run after a partial failure skips what already landed instead of failing on
+it -- and so one target failing does not leave the other two unattempted.
 EOF

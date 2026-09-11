@@ -334,11 +334,12 @@
     "//package": "Platform-specific builds: each .vsix carries the CPython shim for one platform, so the Marketplace offers each machine only the build that can work on it. `package` builds the target matching this machine; `package:all` needs every platform's shim staged in grail/prebuilt (see CONTRIBUTING.md).",
     "package": "scripts/package.sh",
     "package:all": "scripts/package.sh --all",
-    "//publish": "Publishes the packages CI built and tested, collected into dist/ by `npm run release:fetch`. Never repackages: no single machine can build all three shims, so a local rebuild would be a different artifact from the one that passed.",
+    "//publish": "The release pipeline (.github/workflows/release.yml) is how a release is published; these are the manual fallback and what it is built from. Both publish the packages CI built and tested, collected into dist/ by `npm run release:fetch`. Neither repackages: no single machine can build all three shims, so a local rebuild would be a different artifact from the one that passed.",
     "release:fetch": "scripts/fetch-vsix.sh",
+    "release:notes": "scripts/changelog-section.sh",
     "publish": "npm run publish:vsce && npm run publish:ovsx",
-    "publish:vsce": "vsce publish --skip-duplicate --packagePath dist/*.vsix",
-    "publish:ovsx": "ovsx publish --skip-duplicate --packagePath dist/*.vsix"
+    "publish:vsce": "scripts/publish-to-registry.sh marketplace dist/gemdb-darwin-arm64-*.vsix dist/gemdb-linux-x64-*.vsix dist/gemdb-linux-arm64-*.vsix",
+    "publish:ovsx": "scripts/publish-to-registry.sh openvsx dist/gemdb-darwin-arm64-*.vsix dist/gemdb-linux-x64-*.vsix dist/gemdb-linux-arm64-*.vsix"
   },
   "dependencies": {
     "koffi": "^2.15.1"

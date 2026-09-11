@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Three of Grail's own development scripts no longer ship inside the
+  extension.** `topazini`, `new_worktree.sh` and `create_claude_users.gs` each
+  carried a login for a database that exists only on a Grail developer's
+  machine, and nothing in GemDB ever read them. The password is GemStone's
+  published default, so nothing you have is any less safe than it was — but a
+  credentials file has no business in a published package, and a release now
+  refuses to publish one.
+
 ### Added
 
 - **An MCP server, so an AI agent can use your database.** GemDB now bundles
