@@ -1,12 +1,10 @@
 /**
  * Just enough of the editor API to unit-test the parts of GemDB that only
- * touch it to read a setting.
- *
- * Most of this extension is inseparable from the editor and is not worth
- * faking. The pieces worth testing — path resolution, the setup lock — reach
- * `vscode` only to read a setting or write a log line, so that is all this
- * provides. Anything else stays deliberately absent: a test that needs more
- * than this is a test that should be exercising something else.
+ * touch it to read a setting — plus, since `activate()` is now under test too,
+ * the handful of surfaces it reaches at activation time: registering
+ * commands, a status bar item, a tree view, and the three `workspace.on*`
+ * listeners it wires up. Anything else stays deliberately absent: a test that
+ * needs more than this is a test that should be exercising something else.
  */
 
 const settings = new Map<string, unknown>();
@@ -23,7 +21,35 @@ export function __resetSettings(): void {
   settings.clear();
   __log.length = 0;
   __controllers.length = 0;
+  __commands.clear();
 }
+
+/** Command ids registered so far, so a test can assert on them or invoke one. */
+export const __commands = new Map<string, (...args: unknown[]) => unknown>();
+
+export class Disposable {
+  constructor(private readonly callOnDispose: () => void) {}
+  dispose(): void {
+    this.callOnDispose();
+  }
+}
+
+export interface FakeStatusBarItem {
+  text: string;
+  tooltip: unknown;
+  command: string | undefined;
+  name: string | undefined;
+  show(): void;
+  hide(): void;
+  dispose(): void;
+}
+
+export const StatusBarAlignment = { Left: 1, Right: 2 } as const;
+
+export const UIKind = { Desktop: 1, Web: 2 } as const;
+
+/** Two-line insurance: nothing here reads `env` today, but `activate()` does. */
+export const env = { remoteName: undefined as string | undefined, uiKind: UIKind.Desktop };
 
 export const window = {
   createOutputChannel(_name: string) {
@@ -32,6 +58,33 @@ export const window = {
       show: () => {},
       dispose: () => {},
     };
+  },
+  createStatusBarItem(_alignment?: unknown, _priority?: number): FakeStatusBarItem {
+    return {
+      text: '',
+      tooltip: undefined,
+      command: undefined,
+      name: undefined,
+      show: () => {},
+      hide: () => {},
+      dispose: () => {},
+    };
+  },
+  registerTreeDataProvider(_viewId: string, _provider: unknown): Disposable {
+    return new Disposable(() => {});
+  },
+  onDidChangeWindowState(_listener: (state: { focused: boolean }) => void): Disposable {
+    return new Disposable(() => {});
+  },
+};
+
+export const commands = {
+  registerCommand(id: string, callback: (...args: unknown[]) => unknown): Disposable {
+    __commands.set(id, callback);
+    return new Disposable(() => __commands.delete(id));
+  },
+  executeCommand(id: string, ...args: unknown[]): unknown {
+    return __commands.get(id)?.(...args);
   },
 };
 
@@ -170,5 +223,18 @@ export const workspace = {
         return (value as T) ?? fallback;
       },
     };
+  },
+  onDidCloseNotebookDocument(_listener: (notebook: unknown) => void): Disposable {
+    return new Disposable(() => {});
+  },
+  onDidRenameFiles(
+    _listener: (event: { files: { oldUri: unknown; newUri: unknown }[] }) => void,
+  ): Disposable {
+    return new Disposable(() => {});
+  },
+  onDidChangeConfiguration(
+    _listener: (event: { affectsConfiguration(section: string): boolean }) => void,
+  ): Disposable {
+    return new Disposable(() => {});
   },
 };
