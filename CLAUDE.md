@@ -20,6 +20,7 @@ npm run bundle:grail       # assemble the Grail payload (needs a C toolchain)
 npm run bundle:mcp         # assemble the MCP server payload (needs nothing)
 npm run bundle:extent      # build the preloaded extent (needs an engine + shared memory)
 npm run package            # .vsix
+npm run hooks:uninstall    # remove the local git hooks npm install added
 scripts/install-engine.sh  # download + extract the pinned engine, no editor involved
 scripts/check-vsix.sh      # assert a packaged .vsix carries what an install needs
 ```

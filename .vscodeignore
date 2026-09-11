@@ -10,6 +10,7 @@ vitest*.mts
 .prettierrc.json
 .prettierignore
 eslint.config.mjs
+lefthook.yml
 CLAUDE.md
 CONTRIBUTING.md
 # Design notes for contributors. README.md and CHANGELOG.md do ship — they
