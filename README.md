@@ -19,6 +19,12 @@ gemdb.root["routes"] = load_routes()
 gemdb.commit()
 ```
 
+## Privacy
+
+GemDB sends minimal, non-identifying usage events, governed by VS Code's
+`telemetry.telemetryLevel` setting. See [USAGE_DATA.md](USAGE_DATA.md) for
+what is and isn't collected.
+
 ## Getting started
 
 Install the extension. There is no second step.
