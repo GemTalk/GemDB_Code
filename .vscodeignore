@@ -46,6 +46,28 @@ mcp/.git/**
 # stray credentials file has no business in a published artifact.
 grail/.topazini
 
+# The same rule, applied to Grail's own development scripts. `bundle-grail.sh`
+# copies `scripts/` wholesale — deliberately, because Grail decides what its
+# source tree contains — and these three carry credentials while being no part
+# of what GemDB installs. `topazini` is the same file as the one above under
+# another name: a topaz init file logging in as DataCurator/swordfish against a
+# stone called `gs64stone`, which does not exist on a user's machine. The other
+# two set up Grail's own development users and worktrees.
+#
+# Nothing in GemDB reads any of them: `resources/install-grail.sh` writes its
+# own `.topazini` and drives named scripts, and the only mentions anywhere in
+# the payload are comments in `check_topazini_user.gs`. `check-vsix.sh` asserts
+# all three stay out.
+#
+# Grail's install scripts DO carry `set user SystemUser pass swordfish`, and
+# those stay: they are what the installer runs, the password is GemStone's
+# published default for a fresh extent, and dropping them would break the
+# install. The line drawn here is a credentials file that ships for no reason,
+# not every appearance of the default password.
+grail/scripts/topazini
+grail/scripts/new_worktree.sh
+grail/scripts/create_claude_users.gs
+
 # koffi's own documentation and changelog — 100+ markdown files nothing reads.
 node_modules/koffi/doc/**
 node_modules/koffi/CHANGELOG.md

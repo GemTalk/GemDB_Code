@@ -155,9 +155,28 @@ Grail PR lands. Prove it in the meantime with `workflow_dispatch` and its
 `grail-ref` input, which becomes `GRAIL_REF` for `bundle-grail.sh`.
 `bundle:mcp` does the same for the MCP server, with an `mcp-ref` input.
 
-Releases are deliberately not automated: publishing stays a developer's act
-from a Mac, per CONTRIBUTING.md. CI packages a `.vsix` and inspects it, but
-never publishes one.
+CI never publishes. `.github/workflows/release.yml` does, and it is dispatched
+by hand, holds at a required-reviewer gate, and **builds nothing** — it
+publishes the `.vsix` files CI uploaded for that exact commit. That is not a
+shortcut: no runner can compile all three shims, and `bundle:grail` clones
+Grail's default branch, so a rebuild at release time would ship a payload
+nothing tested under a version number that says otherwise. Artifact retention
+on `main` is 90 days for the same reason — those uploads are the only copies
+that exist.
+
+Its order follows one rule: **publishing is the only irreversible step**, since
+both registries are immutable per `(publisher, name, version, targetPlatform)`.
+So everything recoverable happens first — collect, check, scan, approve — and
+the GitHub Release is created before either registry sees a file, so both
+publish jobs send bytes fetched from an immutable asset. Two consequences worth
+knowing before editing it: a check that can run without a checkout belongs in
+`validate`, and one that needs the tree belongs in `collect`, which is the
+first job with one and the last point before a human is asked to approve
+anything. And `scripts/publish-to-registry.sh` decides what a registry's answer
+*means* — `--skip-duplicate` mishandles an uploaded-but-inactive package, which
+is exactly the state a re-run meets — so it is covered by
+`publishToRegistry.test.ts` rather than discovered during a release, where the
+first signal would be a red job on a version number that can never be reused.
 
 ## The things that are easy to get wrong
 

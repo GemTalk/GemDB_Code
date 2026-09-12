@@ -71,8 +71,11 @@ pull request lands. To prove it before then, run the workflow manually
 (Actions → CI → Run workflow) and give the `grail-ref` input the Grail branch;
 it becomes `GRAIL_REF` for `bundle-grail.sh`.
 
-Neither job publishes anything. Releases stay a deliberate act from a
-developer's Mac, for the reason in the release steps below.
+Neither job publishes anything. Publishing is
+[`.github/workflows/release.yml`](.github/workflows/release.yml), dispatched by
+hand and held at a required-reviewer gate — and it builds nothing, because the
+packages it publishes are the ones this workflow uploaded. See
+[Publishing a release](#publishing-a-release).
 
 ## The two build artifacts
 
@@ -128,9 +131,9 @@ ls grail/prebuilt/     # expect the directories for the targets you are packagin
 `bundle:grail` on that platform so its shim is staged, *then* widen
 `isSupportedPlatform()` and the three lists above. Widening the gate without the
 shim produces a build that installs fine and fails at the first `import` — the
-bug that predicate exists to prevent. Multiple targets are published as separate
-`.vsix` files from the same source tree (`vsce publish --target darwin-arm64`,
-then `--target linux-x64`, and so on).
+bug that predicate exists to prevent. Each target is published as its own
+`.vsix`, one `vsce publish --packagePath` per package, so the Marketplace can
+serve each machine only the build that works on it.
 
 `bundle:extent` creates a scratch database, files Grail into it, and stages the
 result as `extent/gemdb.dbf`. Unlike the shim, the extent is portable across
@@ -140,77 +143,226 @@ falling back to filing Grail in on first use.
 ## Publishing a release
 
 GemDB Code is published to both the **VS Code Marketplace** and **Open VSX**,
-under the same `gemtalksystems` publisher as Jasper.
+under the same `gemtalksystems` publisher as Jasper, as three platform-specific
+packages.
 
-**Pre-flight — check the Marketplace token before you touch anything else:**
+A release is two steps: a **release pull request** you write, and the
+**Release workflow** you dispatch. The split is on what needs judgement.
+Promoting `[Unreleased]` to a dated section, and sweeping `main` for changes
+that never wrote a changelog entry, are editorial calls. Everything after that
+is mechanical, and the mechanical half is where the mistakes that cost a
+version number live.
+
+### 1. The release pull request
 
 ```sh
-npx @vscode/vsce verify-pat gemtalksystems
+npm version <X.Y.Z> --no-git-tag-version
 ```
 
-Azure DevOps personal access tokens expire (one year at most), and the failure
-is a bare `401` from the publish step — after the version is bumped, the
-changelog promoted, the commit made, the tag cut and CI run. That happened on
-1.1.0: everything up to publishing was correct and the release still stopped
-dead, half-published, needing a token only a human could issue. This check costs
-a second and moves that discovery to before the first commit. Reissue with
-`vsce login` (see [Credentials](#credentials)) if it fails.
+That bumps `package.json` and the two root fields in `package-lock.json`
+atomically. Don't hand-edit these or find-and-replace the version across the
+lockfile: the version string can collide with an unrelated dependency's own
+version elsewhere in the file and corrupt that entry.
 
-1. `npm version <X.Y.Z> --no-git-tag-version` — bumps `package.json` and the two
-   root fields in `package-lock.json` atomically. Don't hand-edit these or
-   find-and-replace the version across the lockfile: the version string can
-   collide with an unrelated dependency's own version elsewhere in the file and
-   corrupt that entry. Then promote `[Unreleased]` in `CHANGELOG.md` to a dated
-   `[X.Y.Z]` heading and update the link definitions at the bottom.
-2. `npm run lint && npm run format:check && npm run typecheck && npm run typecheck:strict && npm test`
-3. Commit the version + changelog changes (e.g. `Release X.Y.Z: <summary>`).
-4. `git tag -a vX.Y.Z -m "Release X.Y.Z"` — annotated tag, on the release commit.
-5. `git push origin main` and let CI build the three packages. Each
-   `integration` leg packages its own target, checks it, and uploads it as a
-   `vsix-<target>` artifact. **No machine can build all three itself** — a
-   shim only compiles on the platform it targets — so this is where the release
-   artifacts come from, not from a local rebuild.
-6. `npm run release:fetch` — downloads that run's three packages into `dist/`
-   and re-runs `check-vsix.sh` on each. With no argument it insists on a
-   successful run for **your HEAD commit** and refuses artifacts whose version
-   disagrees with `package.json`; publishing an older run's packages under a new
-   version number is the mistake it exists to catch. Pass a run id to override.
-7. **Install `dist/gemdb-darwin-arm64-X.Y.Z.vsix` and run it once** before
-   publishing. The automated check proves the payload is present, not that it
-   works, and only running it exercises the shim against the engine. For the
-   platforms you cannot run, CI's integration suite did exactly that — started a
-   real database and imported Python through the shim it had just compiled —
-   which is the closest thing to a first run a machine you do not own can give
-   you.
-8. `npm run publish` — `vsce` then `ovsx`, both publishing the **downloaded**
-   packages (`--packagePath dist/*.vsix`), so what reaches the Marketplace is
-   byte-for-byte what CI tested. Both use `--skip-duplicate`, so if the Azure
-   DevOps Gallery API times out mid-way (it happens), simply re-run: the targets
-   that already landed are skipped instead of failing the command.
-9. `git push origin vX.Y.Z` — the tag does not piggyback on the branch push.
+Then promote `[Unreleased]` in `CHANGELOG.md` to a dated `## [X.Y.Z] -
+YYYY-MM-DD` heading, leave `[Unreleased]` empty, and update the link
+definitions at the bottom. `npm run release:notes X.Y.Z` prints exactly the
+text that will become the GitHub Release notes, which is the cheapest way to
+see the section the way a reader will.
 
-> **Tokens.** `vsce` reads `VSCE_PAT` and `ovsx` reads `OVSX_PAT`. Prefer
-> supplying them for the one command that needs them rather than exporting them
-> from a shell profile: `vsce`'s own `--help` prints the value of `VSCE_PAT` as
-> the default for `--pat`, so an exported token ends up in help output, terminal
-> scrollback, and anything capturing it.
+Open it as an ordinary pull request and let CI run. **The CI run on the merge
+commit is where the release's packages come from**, so it has to be green for
+the commit you are going to publish — not merely for the branch.
+
+### 2. The Release workflow
+
+Actions → **Release** → *Run workflow*, against `main`, with the version. Tick
+**dry-run** the first time: it runs validate → collect → scan, creates nothing
+and publishes nothing, and costs a couple of minutes.
+
+```
+validate ──▶ collect ──▶ scan ──▶ gate ──▶ release ──┬──▶ publish-vsce ──┐
+                                                     │                   ├──▶ verify
+                                                     └──▶ publish-ovsx ──┘
+```
+
+The order is the design, and it follows one rule: **publishing to a registry is
+the only irreversible step**. Both registries are immutable per
+`(publisher, name, version, targetPlatform)` — even deleting a version leaves
+the identity reserved — so a botched publish burns `X.Y.Z` permanently and the
+recovery is always `X.Y.Z+1`, never a retry. Everything cheap and repeatable
+therefore happens first.
+
+**`collect` does not build.** This is the one way the pipeline differs from
+what you would write for an ordinary extension, and it is not a shortcut. No
+runner can produce GemDB's three packages: the CPython shim only compiles on
+the architecture it targets. And `bundle:grail` clones Grail's *default
+branch*, so a rebuild at release time would assemble a payload from whatever
+Grail is today rather than from what CI tested — a different artifact wearing
+the same version number. So `collect` downloads the `vsix-<target>` artifacts
+from the CI run for that exact commit and re-runs `check-vsix.sh` on each. It
+is `scripts/fetch-vsix.sh` as a job, and it enforces the rule this repo has
+followed by hand since 1.2.0.
+
+**The reviewer approves artifacts, not a promise.** `gate` is a do-nothing job
+whose entire content is the `release-approval` environment, and it sits *after*
+the packages have been collected, checked and scanned. The credentialed
+environments wrap only the two publish jobs, so approving a release does not
+hand anything else a token.
+
+**The GitHub Release is the source of the bytes.** `release` tags the commit,
+attaches all three packages, and both publish jobs download *those files* and
+publish them with `--packagePath`. What CI built, what the Release carries and
+what each registry serves are the same objects.
+
+**The two registries are independent**, and so are the three targets within
+each. Separate jobs per registry, each holding only its own token; and
+`scripts/publish-to-registry.sh` publishes one package at a time, so a failure
+on `linux-arm64` neither hides the `darwin-arm64` result nor leaves
+`linux-x64` unattempted. It also classifies the outcome: a package that is
+already up — including the "already published, but currently isn't active"
+spelling that `ovsx --skip-duplicate` mishandles — counts as success, so a
+re-run after a partial failure finishes the release instead of failing on the
+half that landed.
+
+**`verify` reports and does not gate.** By the time it runs, the tag, the
+Release and all six uploads exist. `scripts/await-published-version.sh` waits
+for three targets on two registries to become queryable, which takes anywhere
+from a couple of minutes to some tens of minutes. Nothing depends on it, so a
+slow registry is a signal to go and look rather than a broken release.
+
+### What the workflow refuses to do
+
+`validate` checks nothing out — every check is an API read, and the files it
+inspects are data, never executed. It requires: the repository is
+`GemTalk/GemDB_Code`; the dispatch is from the default branch; `package.json`
+is at the requested version; `CHANGELOG.md` has a dated `## [X.Y.Z] -
+YYYY-MM-DD` section **and an empty `[Unreleased]`**; no `vX.Y.Z` tag exists;
+the **newest** `ci-complete` on that exact commit concluded `success`; and a
+CI run for that commit **still holds all three packages**.
+
+That last one is the check most likely to stop you, and the fix is not in this
+repository. CI keeps a release's packages for 90 days (7 for a branch or a
+dispatch); past that, re-run CI on the release commit — Actions → CI → that
+run → *Re-run all jobs* — and dispatch again once it is green.
+
+`collect` then adds the check `validate` cannot make. With no checkout,
+`validate` can only ask whether a dated heading exists; rendering the notes is
+a stricter question, because `changelog-section.sh` also requires the section
+to have a body. So `collect` runs the real script and throws the output away.
+Without that, a dated but empty section passes validation, survives the scan,
+is approved at the gate, gets tagged — and fails on the step *after* the tag,
+which is the one failure in this pipeline that leaves cleanup behind.
+
+The release deliberately does not re-run lint, the typechecks or either test
+suite. CI already ran them on that commit, including the integration suite
+against a real database on each of the three architectures, which is a stronger
+gate than one run here could be.
+
+### The secret scan
+
+Open VSX runs a gitleaks-based scan **server-side, after accepting the
+upload**, with no way to allow a false positive — and by then the version
+number is spent. Jasper has been rejected that way twice, each time failing
+only the Open VSX half after the Marketplace had already published. `scan`
+unzips each package and scans **its contents**, with the rules and the reasoning
+in [`.gitleaks.toml`](.gitleaks.toml).
+
+Scanning the package rather than the working tree matters more here than
+almost anywhere: `out/`, `grail/`, `mcp/` and `extent/` are all gitignored
+build artifacts, so nearly everything GemDB ships is invisible to a scan of
+git.
+
+Two things in that config are worth a reviewer's eye. `extent/gemdb.dbf` is
+allowlisted by path, because it carries key material that is the vendor's and
+is in every GemStone extent — verified against the engine's own
+`bin/extent0.dbf`. And `gemstone-password-literal` is a custom rule restating
+what Open VSX runs and gitleaks' defaults do not; it is what caught the two
+Grail development scripts this repo used to ship, which are now excluded from
+the package rather than allowlisted.
+
+### Before the first real run
+
+**The workflow is not safe until step 2 exists.** GitHub creates a referenced
+environment implicitly with no protection rules, so without required reviewers
+the `gate` job approves itself.
+
+1. Three **environments**, so none holds more privilege than its job needs:
+   `release-approval` (**no secrets**), `release-vsce` (`VSCE_PAT` only),
+   `release-ovsx` (`OVSX_PAT` only).
+2. **Required reviewers** and **prevent self-review** on `release-approval`.
+3. A **deployment branch policy** restricting all three to `main` — the
+   backstop that does not depend on the workflow's own checks being right.
+4. Each token as an **environment** secret, not a repository secret.
+
+This is governance as much as configuration: **the repository stores no
+third-party secrets today**, only the automatic `GITHUB_TOKEN`. These would be
+the first, and each is one person's identity acting for the organization. Note
+also that Azure DevOps **retires global PATs on 1 December 2026**, after which
+Marketplace PAT publishing stops working and this needs `vsce publish --oidc`
+(`id-token: write` plus a policy registered on the registry).
+
+### If something goes wrong
+
+- **Before `release`** — nothing has happened. Fix and dispatch again.
+- **A publish job failed** — read `scripts/publish-to-registry.sh`'s verdict
+  first. `already-published` and `awaiting-activation` are successes. A genuine
+  failure means that target's identity may or may not be spent; check the
+  registry's own page, and **do not republish the same version**. Use
+  *Re-run failed jobs*, never *Re-run all jobs* — the latter fails on the
+  artifact name by design, because a re-run must not be able to substitute
+  different bytes for the ones that were approved.
+- **`verify` timed out** — the release is done. A registry is either still
+  activating a package or has rejected it, and the public API answers the same
+  404 for both; go and look at the registry.
+
+### The manual fallback
+
+Still supported, and still the only route if GitHub Actions is unavailable. It
+is the same sequence by hand:
+
+```sh
+npx @vscode/vsce verify-pat gemtalksystems   # check the token FIRST
+npm run release:fetch                        # CI's packages -> dist/, each re-checked
+# install dist/gemdb-darwin-arm64-X.Y.Z.vsix and run it once
+npm run publish:vsce
+npm run publish:ovsx
+git tag -a vX.Y.Z -m "Release X.Y.Z" && git push origin vX.Y.Z
+```
+
+`verify-pat` first is not ceremony. Azure DevOps tokens expire after at most a
+year and the failure is a bare `401` from the publish step — which on 1.1.0
+arrived after the version was bumped, the changelog promoted, the commit made,
+the tag cut and CI run, stopping the release dead and half-published, needing a
+token only a human could issue. The pipeline runs the same check for the same
+reason.
+
+`release:fetch` with no argument insists on a successful run for **your HEAD
+commit** and refuses artifacts whose version disagrees with `package.json`;
+publishing an older run's packages under a new version number is the mistake it
+exists to catch. Pass a run id to override.
+
+**Install one and run it once.** The automated checks prove the payload is
+present, not that it works, and only running it exercises the shim against the
+engine. For the platforms you cannot run, CI's integration suite did exactly
+that — started a real database and imported Python through the shim it had just
+compiled.
 
 ### Credentials
 
-You must be logged in with Personal Access Tokens for both registries:
+The pipeline reads `VSCE_PAT` and `OVSX_PAT` from the two publish environments.
+For the manual fallback you need them locally:
 
 ```sh
 npx @vscode/vsce login gemtalksystems                # VS Code Marketplace
 npx ovsx create-namespace gemtalksystems -p <token>  # Open VSX (one-time; already done)
 ```
 
-`ovsx publish` reads `OVSX_PAT` from the environment (or a stored token). The
-Marketplace token is an Azure DevOps PAT with **Marketplace → Manage** scope,
-issued from the organization that owns the publisher.
-
-Reissuing one (User settings → Personal access tokens in Azure DevOps) has two
-settings that must be right, and getting either wrong produces the same
-uninformative `401` as an expired token:
+The Marketplace token is an Azure DevOps PAT with **Marketplace → Manage**
+scope, issued from the organization that owns the publisher. Reissuing one
+(User settings → Personal access tokens in Azure DevOps) has two settings that
+must be right, and getting either wrong produces the same uninformative `401`
+as an expired token:
 
 - **Scopes: Marketplace → Manage.** Acquire and Publish alone are not enough.
 - **Organization: All accessible organizations.** A token scoped to a single
@@ -221,8 +373,8 @@ Then `npx @vscode/vsce login gemtalksystems` to store it in the keychain, and
 `verify-pat` to confirm before relying on it.
 
 Keep both out of your shell profile. `vsce login` stores the Marketplace token
-in the OS keychain, which is the safer place for it, and a token needed only for
-`ovsx` can be supplied for that one command:
+in the OS keychain, which is the safer place for it, and a token needed only
+for `ovsx` can be supplied for that one command:
 
 ```sh
 OVSX_PAT="$(security find-generic-password -s ovsx-pat -w)" npm run publish:ovsx

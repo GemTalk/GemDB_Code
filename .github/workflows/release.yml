@@ -1,0 +1,668 @@
+name: Release
+
+# Manual publish pipeline. It deliberately does NOT bump the version or write
+# the changelog: promoting `[Unreleased]` to a dated `[X.Y.Z]` section, and
+# sweeping `main` for changes that never wrote an entry, are editorial calls.
+# Those land as an ordinary release PR, and this workflow then publishes a
+# commit that is already on main and already green.
+#
+# It also does not BUILD anything, and that is the one place this departs from
+# an ordinary extension's release workflow. GemDB ships three platform-specific
+# packages whose CPython shim can only be compiled on the architecture it
+# targets, so no single runner can produce the set — and `bundle:grail` clones
+# Grail's default branch, so a rebuild here would assemble a payload from
+# whatever Grail is today rather than from what CI tested. The packages
+# therefore come from the CI run for this exact commit, which built each one on
+# a runner of its own architecture, checked it, and uploaded it. This is
+# `scripts/fetch-vsix.sh` as a job; CONTRIBUTING.md has kept the same rule for
+# the manual path since 1.2.0.
+#
+# The job order is chosen around what can be undone. Publishing to a registry
+# is the only irreversible step here: both registries are immutable per
+# (publisher, name, version, targetPlatform), and even deleting a version
+# leaves the identity reserved — so a botched publish burns X.Y.Z permanently
+# and the only way forward is X.Y.Z+1. Everything recoverable happens first,
+# and the GitHub Release is created BEFORE either registry sees a file, so the
+# bytes each registry receives come from an immutable Release asset rather than
+# from a download that could be repeated differently.
+#
+# See CONTRIBUTING.md, "Publishing a release", for the whole procedure —
+# including the one-time repository setup this workflow is not safe without.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish, e.g. 1.5.0. Must match package.json on main.'
+        required: true
+        type: string
+      dry-run:
+        description: 'Run every check, collect the packages and scan them, but create no release and publish nothing.'
+        required: false
+        default: false
+        type: boolean
+
+# Nothing is granted by default: each job below asks for exactly what it needs,
+# so a job added later cannot quietly inherit access it was never given.
+permissions: {}
+
+# Never let two releases interleave: they would race on the same tag and the
+# same registry identities. Queue instead of cancelling — a cancelled run that
+# had already uploaded to one registry is worse than a delayed one.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  # One list, used by every job that walks the targets, so a fourth target
+  # cannot be published by one job and forgotten by another. Kept in step with
+  # `isSupportedPlatform()` in src/platform.ts, the `package:*` scripts in
+  # package.json, and the `case` in scripts/check-vsix.sh — the four places
+  # CONTRIBUTING.md says must agree.
+  TARGETS: darwin-arm64 linux-x64 linux-arm64
+
+jobs:
+  # Everything checkable without a credential, a checkout or a download, so an
+  # obvious mistake fails in seconds rather than after a reviewer has been asked
+  # to approve something.
+  validate:
+    name: Validate
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
+      # Reading the CI run for this commit and listing its artifacts. Nothing
+      # is downloaded in this job; `collect` does that.
+      actions: read
+    outputs:
+      ci-run-id: ${{ steps.ci-run.outputs.id }}
+    # zizmor(template-injection): bind the dispatch input to an env var
+    # instead of interpolating ${{ }} directly into a run script
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # This job checks nothing out. Every check is made over the API, and the
+      # two files it inspects are treated as data — jq and grep, never
+      # executed — so no repository code runs on this runner at all. Reading
+      # the content of a commit is safe; running it is not.
+      #
+      # There is deliberately no `ref` input. The workflow always publishes the
+      # tip of the default branch it was dispatched against, which is the only
+      # thing the checks below can meaningfully assert about. An input naming an
+      # arbitrary commit would turn the later checkouts into privileged
+      # checkouts of dispatcher-chosen code.
+      - name: Validate the version string
+        run: |
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "error: version must be X.Y.Z (got '$VERSION')." >&2
+            exit 1
+          fi
+
+      # A fork holding its own secrets could otherwise dispatch this workflow
+      # and publish under the real publisher's name.
+      - name: Require the canonical repository
+        run: |
+          if [ "$GITHUB_REPOSITORY" != "GemTalk/GemDB_Code" ]; then
+            echo "error: this workflow publishes as 'gemtalksystems' and must only run in" >&2
+            echo "GemTalk/GemDB_Code (running in $GITHUB_REPOSITORY)." >&2
+            exit 1
+          fi
+
+      - name: Require the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/${DEFAULT_BRANCH}" ]; then
+            echo "error: dispatch this workflow against ${DEFAULT_BRANCH}, not ${GITHUB_REF}." >&2
+            echo "Only a commit on ${DEFAULT_BRANCH} has been through CI as a released commit." >&2
+            exit 1
+          fi
+          echo "Releasing ${GITHUB_SHA} from ${GITHUB_REF}."
+
+      - name: Require the tag to be free
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v${VERSION}" >/dev/null 2>&1; then
+            echo "error: tag v$VERSION already exists — $VERSION looks released." >&2
+            exit 1
+          fi
+
+      - name: Require package.json to be at the requested version
+        run: |
+          actual=$(gh api "repos/${GITHUB_REPOSITORY}/contents/package.json?ref=${GITHUB_SHA}" \
+            -H "Accept: application/vnd.github.raw" | jq -r .version)
+          if [ "$actual" != "$VERSION" ]; then
+            echo "error: package.json is at $actual, but $VERSION was requested." >&2
+            echo "Either publish $actual, or merge the bump to $VERSION first." >&2
+            exit 1
+          fi
+
+      # Two separate mistakes, so two separate checks: a missing dated section
+      # means the changelog was never promoted, and a non-empty [Unreleased]
+      # means it was only half promoted — which ships release notes that omit
+      # real changes, and reads to a user as though those changes are still
+      # unreleased.
+      - name: Require a promoted changelog section
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/contents/CHANGELOG.md?ref=${GITHUB_SHA}" \
+            -H "Accept: application/vnd.github.raw" > /tmp/CHANGELOG.md
+
+          # Dots are regex metacharacters, and the version reaches here as a
+          # literal; escape them so 1.4.0 cannot match 1_4_0.
+          esc=$(printf '%s' "$VERSION" | sed 's/\./\\./g')
+          if ! grep -Eq "^## \[$esc\] - [0-9]{4}-[0-9]{2}-[0-9]{2}" /tmp/CHANGELOG.md; then
+            echo "error: CHANGELOG.md has no dated '## [$VERSION] - <date>' section at $GITHUB_SHA." >&2
+            echo "Promote the [Unreleased] section and merge that before releasing." >&2
+            exit 1
+          fi
+
+          leftover=$(awk '
+              /^## \[Unreleased\]/ { inside = 1; next }
+              /^## \[/            { inside = 0 }
+              inside && NF        { print }
+          ' /tmp/CHANGELOG.md)
+          if [ -n "$leftover" ]; then
+            echo "error: [Unreleased] still has entries at $GITHUB_SHA:" >&2
+            printf '%s\n' "$leftover" | head -5 >&2
+            echo "Promote them into [$VERSION], or move them out deliberately, before releasing." >&2
+            exit 1
+          fi
+          echo "CHANGELOG.md has a dated [$VERSION] section and an empty [Unreleased]."
+
+      # The release deliberately does not re-run lint, the typechecks or either
+      # test suite. CI already ran them on this commit — including the
+      # integration suite against a real database on each of the three
+      # architectures — which is a stronger gate than one run here could be.
+      # What matters is that it actually passed.
+      - name: Require ci-complete to have passed on this commit
+        run: |
+          # A commit can carry several ci-complete runs, because a failed run
+          # can be retried. Order is not guaranteed, so sort by start time and
+          # read the newest: taking an arbitrary one risks reading a stale
+          # success for a commit whose latest run failed.
+          conclusion=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
+            --paginate --jq '.check_runs[] | select(.name == "ci-complete") | [.started_at, .conclusion] | @tsv' |
+            sort -r | head -1 | cut -f2)
+          if [ -z "$conclusion" ]; then
+            echo "error: no ci-complete check run found for $GITHUB_SHA." >&2
+            echo "CI may still be running, or this commit never went through it." >&2
+            exit 1
+          fi
+          if [ "$conclusion" != "success" ]; then
+            echo "error: ci-complete concluded '$conclusion' for $GITHUB_SHA, not success." >&2
+            exit 1
+          fi
+          echo "ci-complete passed on $GITHUB_SHA."
+
+      # The packages this release publishes already exist, and this is where
+      # they are. Resolved here rather than in `collect` so that "CI's artifacts
+      # have expired" is reported before a reviewer is asked to approve
+      # anything — it is a re-run of CI, not a fix to this workflow, and it is
+      # the one failure a release is likely to meet weeks after the fact.
+      - name: Locate the CI run that built this commit's packages
+        id: ci-run
+        run: |
+          # Newest successful CI run for this exact commit that still has all
+          # three packages. "Still has" is the operative half: artifacts expire,
+          # and an expired one is listed with `"expired": true` rather than
+          # vanishing, so a naive name check would find three artifacts and
+          # then fail to download them.
+          candidates=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${GITHUB_SHA}&status=success&per_page=50" \
+            --jq '.workflow_runs[] | select(.name == "CI") | [.created_at, .id] | @tsv' |
+            sort -r | cut -f2)
+
+          if [ -z "$candidates" ]; then
+            echo "error: no successful CI run found for $GITHUB_SHA." >&2
+            exit 1
+          fi
+
+          run_id=""
+          for candidate in $candidates; do
+            missing=""
+            for target in $TARGETS; do
+              # shellcheck disable=SC2016  # $n is a jq variable, not a shell one
+              have=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${candidate}/artifacts" \
+                --paginate --jq \
+                --arg n "vsix-${target}" \
+                '[.artifacts[] | select(.name == $n and .expired == false)] | length')
+              [ "$have" -gt 0 ] || missing="$missing vsix-${target}"
+            done
+            if [ -z "$missing" ]; then
+              run_id="$candidate"
+              break
+            fi
+            echo "  run $candidate is missing or has expired:$missing"
+          done
+
+          if [ -z "$run_id" ]; then
+            echo >&2
+            echo "error: no CI run for $GITHUB_SHA still holds all three packages." >&2
+            echo >&2
+            echo "CI keeps a release's packages for 90 days (7 for a branch or a dispatch)." >&2
+            echo "Re-run CI on this commit — Actions -> CI -> the run for this SHA -> Re-run" >&2
+            echo "all jobs — and dispatch this workflow again once it is green. Building the" >&2
+            echo "packages here instead is not an option: the CPython shim only compiles on" >&2
+            echo "the architecture it targets, and bundle:grail would pick up whatever Grail" >&2
+            echo "is today rather than what this commit was tested against." >&2
+            exit 1
+          fi
+
+          echo "id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "Packages come from CI run $run_id."
+
+  # Brings down the artifacts every later job uses, and re-checks each one
+  # rather than trusting that CI did. Nothing here is irreversible, so it runs
+  # before the approval gate: a reviewer should be approving real packages that
+  # have been collected and scanned, not a promise.
+  collect:
+    name: Collect the packages
+    needs: validate
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    env:
+      VERSION: ${{ inputs.version }}
+      CI_RUN_ID: ${{ needs.validate.outputs.ci-run-id }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # zizmor(unpinned-uses): actions must be pinned to a commit SHA, not a
+      # mutable tag like @v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # zizmor(artipacked): checkout must not persist the token past this
+          # job. Nothing here pushes; the Release is made through the API.
+          persist-credentials: false
+
+      # `validate` runs before this and has no checkout, so it can only ask the
+      # API whether a dated heading exists. That is a weaker question than the
+      # one that matters: `release` renders the notes with this script, and the
+      # script also requires the section to have a body. A dated but empty
+      # section satisfies validate, passes the scan, is approved at the gate,
+      # gets tagged -- and only then fails, one step after the tag. Running the
+      # real script here, in the first job that has a checkout, moves that whole
+      # class of failure to before anything irreversible has happened.
+      - name: Require the release notes to render
+        run: bash scripts/changelog-section.sh "$VERSION" > /dev/null
+
+      - name: Download this commit's packages from CI
+        run: |
+          mkdir -p dist
+          gh run download "$CI_RUN_ID" --repo "$GITHUB_REPOSITORY" --pattern 'vsix-*' --dir dist
+          # gh unpacks each artifact into dist/<artifact-name>/. Flatten, so the
+          # rest of this workflow deals in three files rather than three
+          # directories — the same move scripts/fetch-vsix.sh makes.
+          find dist -mindepth 2 -name '*.vsix' -exec mv {} dist/ \;
+          find dist -mindepth 1 -type d -empty -delete
+          ls -l dist
+
+      # `check-vsix.sh` needs nothing but `unzip`, which is why there is no
+      # `npm ci` in this job.
+      - name: Check every package
+        run: |
+          fail=0
+          for target in $TARGETS; do
+            vsix="dist/gemdb-${target}-${VERSION}.vsix"
+            if [ ! -f "$vsix" ]; then
+              echo "  MISSING: $(basename "$vsix")" >&2
+              # A version mismatch is the likely cause and the dangerous one:
+              # an older run's artifacts package an older version, and
+              # publishing those ships the wrong code under the new number.
+              other=$(find dist -name "gemdb-${target}-*.vsix" | head -1)
+              [ -n "$other" ] && echo "           (the run built $(basename "$other"), but $VERSION was requested)" >&2
+              fail=1
+              continue
+            fi
+            scripts/check-vsix.sh "$vsix"
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "error: CI run $CI_RUN_ID did not produce a package for every target at $VERSION." >&2
+            exit 1
+          fi
+
+      - name: Upload the packages
+        # zizmor(unpinned-uses): actions must be pinned to a commit SHA, not a
+        # mutable tag like @v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gemdb-${{ inputs.version }}-vsix
+          path: dist/*.vsix
+          if-no-files-found: error
+          # `overwrite` is deliberately left at its default (false), and that is
+          # load-bearing. Artifacts are scoped to the run, not the attempt, so
+          # "Re-run all jobs" finds this name taken and fails here with 409
+          # Conflict — which is what we want, because the alternative is a
+          # re-run silently replacing the artifact with different bytes than the
+          # ones a reviewer approved and a Release may already carry.
+          # Use "Re-run failed jobs", never "Re-run all jobs".
+
+  # Scans the packages before anything can be uploaded. Open VSX runs its own
+  # gitleaks-based scan server-side AFTER accepting an upload, with no way to
+  # allow a false positive — and by then the version number is spent. Jasper
+  # has been rejected that way twice. Catching it here costs a re-dispatch;
+  # catching it there costs a version.
+  #
+  # It scans all three rather than one, because they are not the same file:
+  # each carries its own compiled shim, and .vscodeignore is one static file
+  # applied to whatever the tree holds at package time.
+  scan:
+    name: Secret scan
+    needs: collect
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ inputs.version }}
+      # Pinned, with the checksum published alongside that release, because
+      # this is a security control: an unpinned scanner is one supply-chain
+      # step away from being a scanner that finds nothing.
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      # zizmor(unpinned-uses): actions must be pinned to a commit SHA, not a
+      # mutable tag like @v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Only .gitleaks.toml is needed from the tree; nothing here runs it.
+          persist-credentials: false
+
+      - name: Download the packages
+        # zizmor(unpinned-uses): actions must be pinned to a commit SHA, not a
+        # mutable tag like @v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gemdb-${{ inputs.version }}-vsix
+          path: dist
+
+      - name: Install gitleaks
+        run: |
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL -o gitleaks.tar.gz "$url"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar xzf gitleaks.tar.gz gitleaks
+          ./gitleaks version
+
+      - name: Scan every package
+        run: |
+          # The scan target is the UNZIPPED package, not the working tree. For
+          # GemDB the tree is barely worth scanning: out/, grail/, mcp/ and
+          # extent/ are all gitignored build artifacts, so almost everything
+          # that ships is invisible to a scan of git.
+          fail=0
+          for target in $TARGETS; do
+            vsix="dist/gemdb-${target}-${VERSION}.vsix"
+            echo "== $target"
+            rm -rf "contents-${target}"
+            mkdir -p "contents-${target}"
+            unzip -q "$vsix" -d "contents-${target}"
+            ./gitleaks dir "contents-${target}" \
+              --config .gitleaks.toml \
+              --no-banner \
+              --redact \
+              --report-format json \
+              --report-path "gitleaks-${target}.json" || fail=1
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo >&2
+            echo "error: a package carries something a secret scanner flags." >&2
+            echo "Do not allowlist it without reading .gitleaks.toml first: the rule that" >&2
+            echo "fires is the one that predicts Open VSX's own verdict, and the answer is" >&2
+            echo "usually to stop shipping the file." >&2
+            exit 1
+          fi
+          echo "All three packages scanned clean."
+
+      - name: Upload the scan reports
+        if: failure()
+        # zizmor(unpinned-uses): actions must be pinned to a commit SHA, not a
+        # mutable tag like @v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gitleaks-reports-${{ inputs.version }}
+          path: gitleaks-*.json
+          if-no-files-found: warn
+
+  # Deliberately empty. Its entire purpose is to hold the run at the
+  # `release-approval` environment until a required reviewer approves, with
+  # three checked packages and a clean scan already in hand to look at.
+  #
+  # Everything below this line is irreversible. The registries are immutable per
+  # (publisher, name, version, targetPlatform), so a publish that goes wrong
+  # burns this version number for good — there is no retry, only the next
+  # version.
+  #
+  # This environment must hold NO secrets: the registry tokens live on the two
+  # publish environments instead, so approving a release does not hand anything
+  # else a credential.
+  gate:
+    name: Release approval
+    needs: [collect, scan]
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    environment: release-approval
+    permissions: {}
+    steps:
+      # zizmor(template-injection): bind the actor to an env var rather than
+      # interpolating ${{ }} into the run block
+      - env:
+          ACTOR: ${{ github.actor }}
+        run: echo "Approved by ${ACTOR}."
+
+  # The GitHub Release is created before either registry is touched, and is the
+  # source of the bytes both of them receive. That ordering is the whole point:
+  # the cheap, repeatable step goes first, so a registry failure later leaves a
+  # tag and a Release describing exactly what was attempted, rather than a
+  # published version with no record of it anywhere in the repository.
+  release:
+    name: Create the GitHub Release
+    needs: gate
+    if: ${{ !inputs.dry-run }}
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # zizmor(unpinned-uses): actions must be pinned to a commit SHA, not a
+      # mutable tag like @v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # zizmor(artipacked): checkout must not persist the token past this
+          # job. The tag is created through the API rather than pushed.
+          persist-credentials: false
+
+      - name: Download the packages
+        # zizmor(unpinned-uses): actions must be pinned to a commit SHA, not a
+        # mutable tag like @v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gemdb-${{ inputs.version }}-vsix
+          path: dist
+
+      - name: Tag the release
+        run: |
+          # Annotated, matching the tags CONTRIBUTING.md has always asked for:
+          # the API needs the tag object created before the ref that points to
+          # it.
+          tag_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/tags" \
+            -f tag="v${VERSION}" \
+            -f message="Release ${VERSION}" \
+            -f object="${GITHUB_SHA}" \
+            -f type=commit \
+            --jq .sha)
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/tags/v${VERSION}" \
+            -f sha="${tag_sha}" > /dev/null
+          echo "Tagged v${VERSION} at ${GITHUB_SHA}."
+
+      - name: Publish the Release with all three packages attached
+        run: |
+          # Draft first, attach, then publish. That is GitHub's documented
+          # sequence for immutable releases: the assets and the tag are locked
+          # at the moment the release stops being a draft. Creating it non-draft
+          # and uploading afterwards would leave a window where the release
+          # exists without the files the publish jobs are about to fetch.
+          bash scripts/changelog-section.sh "$VERSION" > release-notes.md
+          gh release create "v${VERSION}" \
+            --draft \
+            --title "${VERSION}" \
+            --notes-file release-notes.md \
+            --verify-tag \
+            dist/*.vsix
+          gh release edit "v${VERSION}" --draft=false
+          echo "Released v${VERSION} with $(find dist -name '*.vsix' | wc -l | tr -d ' ') packages attached."
+
+  # The two registries are published independently and neither waits for the
+  # other. Sequential steps in one job — which is what `npm run publish` does
+  # locally — mean a Marketplace failure silently skips Open VSX entirely. Split
+  # like this, one registry failing leaves the other published and the failed
+  # half can be retried on its own with "Re-run failed jobs".
+  publish-vsce:
+    name: Publish to the VS Code Marketplace
+    needs: release
+    if: ${{ !inputs.dry-run }}
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    environment: release-vsce
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # zizmor(unpinned-uses): actions must be pinned to a commit SHA, not a
+      # mutable tag like @v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # zizmor(unpinned-uses): actions must be pinned to a commit SHA, not a
+      # mutable tag like @v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+      # The CLI comes from the lockfile rather than from `npx` reaching the
+      # network, so the version that publishes a release is the version the
+      # repo pinned and CI has been exercising.
+      - run: npm ci
+
+      # Azure DevOps personal access tokens expire, and the failure is a bare
+      # 401 from the publish step. CONTRIBUTING.md has asked for this check
+      # first since 1.1.0, where everything up to publishing was correct and the
+      # release still stopped dead, half-published, needing a token only a human
+      # could issue.
+      - name: Verify the token
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx --no-install @vscode/vsce verify-pat gemtalksystems
+
+      # Exactly the bytes attached to the Release — never a re-download from CI.
+      # This is the property the manual runbook could not have: the files
+      # inspected on the Release and the files each registry serves are the same
+      # objects.
+      - name: Download the packages from the Release
+        run: |
+          mkdir -p dist
+          gh release download "v${VERSION}" --pattern '*.vsix' --dir dist
+
+      - name: Publish
+        timeout-minutes: 15
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          # Named in a fixed order rather than globbed, so a missing package is
+          # a failure here instead of a quietly shorter release.
+          packages=""
+          for target in $TARGETS; do
+            packages="$packages dist/gemdb-${target}-${VERSION}.vsix"
+          done
+          # shellcheck disable=SC2086
+          bash scripts/publish-to-registry.sh marketplace $packages
+
+  publish-ovsx:
+    name: Publish to Open VSX
+    needs: release
+    if: ${{ !inputs.dry-run }}
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    environment: release-ovsx
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # zizmor(unpinned-uses): actions must be pinned to a commit SHA, not a
+      # mutable tag like @v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # zizmor(unpinned-uses): actions must be pinned to a commit SHA, not a
+      # mutable tag like @v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+      - run: npm ci
+
+      - name: Verify the token
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx --no-install ovsx verify-pat gemtalksystems
+
+      - name: Download the packages from the Release
+        run: |
+          mkdir -p dist
+          gh release download "v${VERSION}" --pattern '*.vsix' --dir dist
+
+      - name: Publish
+        timeout-minutes: 15
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          packages=""
+          for target in $TARGETS; do
+            packages="$packages dist/gemdb-${target}-${VERSION}.vsix"
+          done
+          # shellcheck disable=SC2086
+          bash scripts/publish-to-registry.sh openvsx $packages
+
+  # Reports, and does not gate. By the time this runs the tag, the Release and
+  # every upload already exist, so there is nothing left for a failure here to
+  # protect — it can only tell you a registry is slower than the budget, or
+  # that one target did not land. Nothing depends on this job, so a red result
+  # is a signal to go and look, not a broken release.
+  verify:
+    name: Verify both registries
+    needs: [publish-vsce, publish-ovsx]
+    if: ${{ !inputs.dry-run }}
+    timeout-minutes: 40
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      # zizmor(unpinned-uses): actions must be pinned to a commit SHA, not a
+      # mutable tag like @v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # zizmor(unpinned-uses): actions must be pinned to a commit SHA, not a
+      # mutable tag like @v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+      - run: npm ci
+
+      # Six things have to become visible: three targets on each of two
+      # registries.
+      - name: Wait for both registries to serve every target
+        run: bash scripts/await-published-version.sh "$VERSION"

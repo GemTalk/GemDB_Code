@@ -24,8 +24,10 @@ name: CI
 # .vsix, so publishing does not need three developer machines.
 #
 # What is deliberately NOT here: no @vscode/test-electron leg (see CLAUDE.md),
-# and no publish. Releases stay a deliberate act from a developer's machine,
-# per CONTRIBUTING.md.
+# and no publish. Publishing lives in release.yml, which is dispatched by hand,
+# holds at a required-reviewer gate, and builds nothing — it publishes the
+# packages this workflow uploaded, because they are the ones that were tested
+# and no single machine can rebuild the set.
 
 # Triggers. `pull_request` is the primary gate and the only trigger that gives
 # fork PRs any checks at all. `push` is narrowed to main so a commit that lands
@@ -295,14 +297,23 @@ jobs:
       # The shim, the extent and the bundles are what a release ships, and this
       # is the machine that can build this target's shim. Keeping the .vsix
       # means a release can be assembled from CI artifacts rather than from
-      # three developer machines.
+      # three developer machines. The Release workflow does exactly that: it
+      # builds nothing, and publishes the packages this step uploaded.
       - name: Upload the .vsix
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: vsix-${{ matrix.target }}
           path: '*.vsix'
           if-no-files-found: error
-          retention-days: 7
+          # 90 days on main, 7 everywhere else. These are the only copies of a
+          # release's packages that exist — nothing can rebuild them, because a
+          # shim compiles only on the architecture it targets and bundle:grail
+          # would pick up a newer Grail — so an expiry between merging a release
+          # commit and dispatching the Release workflow means re-running CI, and
+          # a week is easily less than the gap between "merged" and "shipped".
+          # A branch or a dispatch keeps the old week: those runs are read
+          # within hours and there are far more of them.
+          retention-days: ${{ github.event_name == 'push' && 90 || 7 }}
 
       # Database logs live under the fixture's temporary root, which is thrown
       # away with the runner — so collect them while they exist. Only on
