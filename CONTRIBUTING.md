@@ -246,6 +246,14 @@ repository. CI keeps a release's packages for 90 days (7 for a branch or a
 dispatch); past that, re-run CI on the release commit — Actions → CI → that
 run → *Re-run all jobs* — and dispatch again once it is green.
 
+`collect` then adds the check `validate` cannot make. With no checkout,
+`validate` can only ask whether a dated heading exists; rendering the notes is
+a stricter question, because `changelog-section.sh` also requires the section
+to have a body. So `collect` runs the real script and throws the output away.
+Without that, a dated but empty section passes validation, survives the scan,
+is approved at the gate, gets tagged — and fails on the step *after* the tag,
+which is the one failure in this pipeline that leaves cleanup behind.
+
 The release deliberately does not re-run lint, the typechecks or either test
 suite. CI already ran them on that commit, including the integration suite
 against a real database on each of the three architectures, which is a stronger
