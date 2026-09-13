@@ -401,7 +401,11 @@ async function ensureReadOnlyUser(): Promise<boolean> {
   const probe = [
     topazLogin(),
     'printit',
-    `(AllUsers userWithId: ${smalltalkString(READ_ONLY_USER)}) isNil`,
+    // `userWithId:` RAISES LookupError 2015 for a user that is not there, so
+    // the absent case — the only one that has anything to do — would arrive as
+    // an inconclusive probe and provision nothing. `userWithId:ifAbsent:` is
+    // the lookup that answers.
+    `(AllUsers userWithId: ${smalltalkString(READ_ONLY_USER)} ifAbsent: [nil]) isNil`,
     "  ifTrue: ['GEMDB_RO_USER=absent']",
     "  ifFalse: ['GEMDB_RO_USER=present']",
     '%',
@@ -411,11 +415,20 @@ async function ensureReadOnlyUser(): Promise<boolean> {
 
   try {
     const answer = await runTopaz(probe, 'Check for the read-only MCP user');
-    if (answer.includes('GEMDB_RO_USER=present')) return true;
+    // Only a RESULT line counts, which topaz frames as `[oop size:n Class]
+    // text`. Searching the whole output cannot work: topaz echoes the script
+    // before running it, so the answer always contains this probe's own
+    // source and therefore BOTH spellings of the marker. Reading it that way
+    // answered "present" whatever the image said, so a missing user was never
+    // provisioned and every session open then failed in the router with
+    // LookupError 2015 — measured 2026-09-13, and the reason the integration
+    // test starts from a database that has never had the user.
+    const verdict = /^\[[^\]]*\]\s*GEMDB_RO_USER=(present|absent)\s*$/m.exec(answer)?.[1];
+    if (verdict === 'present') return true;
     // An inconclusive probe is not an absent user. Provisioning on the
     // strength of a login that failed would drop and recreate a user that is
     // serving a running router.
-    if (!answer.includes('GEMDB_RO_USER=absent')) {
+    if (verdict !== 'absent') {
       log('Could not tell whether the read-only MCP user exists; leaving it alone.');
       return false;
     }

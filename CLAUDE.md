@@ -465,7 +465,11 @@ worker gem logs in as, and the payload's `setup-read-only-user.sh` provisions
 in turn. `ensureReadOnlyUser` probes for that user and runs the script only if
 it is missing, because **re-running the script drops and recreates the user**,
 which is upstream's way to change a privilege set and exactly the wrong thing
-to do to a router serving with it. A failure to provision refuses to start the
+to do to a router serving with it. That probe reads topaz's **result line**,
+not its output: topaz echoes a script before running it, so searching the whole
+answer for a marker finds the probe's own source and both spellings with it —
+which answered "present" whatever the image held, provisioned nothing, and left
+every session open failing in the router with LookupError 2015. A failure to provision refuses to start the
 server rather than forking a read-write one: a user who asked for read-only and
 silently got read-write has no way to tell. Say what it bounds and no more —
 an agent still reads everything, and still spends a session.
