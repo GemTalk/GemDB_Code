@@ -20,7 +20,7 @@ or, with no editor in the loop, by:
 scripts/install-engine.sh   # -> ~/GemDB/GemStone64Bit<pinned>-<platform>
 ```
 
-It installs to the one path `bundle:grail`, `bundle:extent` and the integration
+It installs to the one path `bundle:grail`, `test:extent` and the integration
 fixture all look for, reuses an archive it has already downloaded, and leaves an
 engine that is already there alone.
 
@@ -54,7 +54,7 @@ request, on pushes to `main`, and on demand. Two jobs:
 | Job | Where | What it covers |
 | --- | --- | --- |
 | `checks` | Linux, ~2 min | lint, format, both typechecks, the unit suite, and that `vsce` can still package |
-| `integration` | one leg per shipped target — `macos-15`, `ubuntu-latest`, `ubuntu-24.04-arm`; ~3 min each, in parallel | installs the pinned engine, raises shared memory, builds the Grail payload and the shipped extent, runs the integration suite, then packages that target's `.vsix` and checks what is inside it |
+| `integration` | one leg per shipped target — `macos-15`, `ubuntu-latest`, `ubuntu-24.04-arm`; ~3 min each, in parallel | installs the pinned engine, raises shared memory, builds the Grail payload and the extent the suite starts from, runs the integration suite, then packages that target's `.vsix` and checks what is inside it |
 
 Every target is built and tested on a machine of its own architecture, because
 the CPython shim can only be compiled where it runs. Each leg uploads its
@@ -85,7 +85,7 @@ rebuilt when cutting a release**:
 
 ```sh
 npm run bundle:grail    # -> grail/        (needs a C toolchain)
-npm run bundle:extent   # -> extent/       (needs an engine + shared memory)
+npm run bundle:mcp      # -> mcp/          (needs nothing)
 ```
 
 `bundle:grail` clones [Grail](https://github.com/GemTalk/Grail), compiles its
@@ -135,10 +135,12 @@ bug that predicate exists to prevent. Each target is published as its own
 `.vsix`, one `vsce publish --packagePath` per package, so the Marketplace can
 serve each machine only the build that works on it.
 
-`bundle:extent` creates a scratch database, files Grail into it, and stages the
-result as `extent/gemdb.dbf`. Unlike the shim, the extent is portable across
-platforms — build it once per release. A `.vsix` built without it still works,
-falling back to filing Grail in on first use.
+No extent ships. Grail is filed into whatever database the user already has,
+which costs minutes on a first run and is the only way an update can reach a
+database that holds data. `npm run test:extent` builds a prepared extent for
+the **integration suite** at `.test-extent/gemdb.dbf`, so those tests do not
+pay that cost once per file; it is not a release artifact and never enters a
+`.vsix`.
 
 ## Publishing a release
 
@@ -269,17 +271,15 @@ unzips each package and scans **its contents**, with the rules and the reasoning
 in [`.gitleaks.toml`](.gitleaks.toml).
 
 Scanning the package rather than the working tree matters more here than
-almost anywhere: `out/`, `grail/`, `mcp/` and `extent/` are all gitignored
-build artifacts, so nearly everything GemDB ships is invisible to a scan of
-git.
+almost anywhere: `out/`, `grail/` and `mcp/` are all gitignored build
+artifacts, so nearly everything GemDB ships is invisible to a scan of git.
 
-Two things in that config are worth a reviewer's eye. `extent/gemdb.dbf` is
-allowlisted by path, because it carries key material that is the vendor's and
-is in every GemStone extent — verified against the engine's own
-`bin/extent0.dbf`. And `gemstone-password-literal` is a custom rule restating
-what Open VSX runs and gitleaks' defaults do not; it is what caught the two
-Grail development scripts this repo used to ship, which are now excluded from
-the package rather than allowlisted.
+One thing in that config is worth a reviewer's eye: `gemstone-password-literal`
+is a custom rule restating what Open VSX runs and gitleaks' defaults do not. It
+is what caught the two Grail development scripts this repo used to ship, which
+are now excluded from the package rather than allowlisted. (A second entry, a
+path allowlist for the shipped extent, is gone — GemDB ships no extent, so the
+key material every GemStone extent carries is no longer in the package.)
 
 ### Before the first real run
 
@@ -395,7 +395,7 @@ dominated by a few things that **must** be there:
 | `out/extension.js` | the extension bundle |
 | `out/gemdb-shell.js` | the GemDB Shell, staged to `<rootPath>/bin` at run time |
 | `grail/` | the Python runtime, plus a compiled shim per supported platform |
-| `extent/gemdb.dbf` | the preloaded database — portable, so one file serves every target |
+| `mcp/` | the MCP server payload, filed into the database when the feature is enabled |
 | `resources/setSharedMemory*.sh` | what the `sudo` prompt runs; Linux packages also need `setRemoveIPC.sh` |
 | `node_modules/koffi/` | the native FFI addon; it is a runtime `dependency`, not bundled, because it loads its own platform binary at run time |
 

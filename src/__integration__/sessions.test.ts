@@ -1,12 +1,9 @@
-import * as fs from 'fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createDatabase } from '../database';
 import { stageGrail } from '../grail';
-import { bundledExtentPath } from '../paths';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
 import { isErrorResult, renameOwner, runPython } from '../pythonQueries';
 import { SessionOwner, cacheNameFor, execute, logoutAll, sessionRegistry } from '../session';
-import { Fixture, makeFixture } from './fixture';
+import { createDatabaseWithPython, Fixture, haveTestExtent, makeFixture } from './fixture';
 
 /**
  * A session per notebook, and what that buys.
@@ -21,7 +18,7 @@ import { Fixture, makeFixture } from './fixture';
  */
 
 const ext = process.cwd();
-const havePreloaded = fs.existsSync(bundledExtentPath(ext));
+const haveExtent = haveTestExtent();
 
 const notebook = (name: string): SessionOwner => ({
   key: `file:///${name}.ipynb`,
@@ -35,10 +32,10 @@ const B = notebook('two');
 let fixture: Fixture | undefined;
 
 beforeAll(async () => {
-  if (!havePreloaded) return;
+  if (!haveExtent) return;
   fixture = makeFixture();
   if (!fixture) return;
-  createDatabase(fixture.engine, ext);
+  createDatabaseWithPython(fixture);
   stageGrail(ext);
   await startStone();
   await startNetldi();
@@ -63,7 +60,7 @@ function canMakeFixture(): boolean {
   return true;
 }
 
-describe.skipIf(!havePreloaded || !canMakeFixture())('a session per notebook', () => {
+describe.skipIf(!haveExtent || !canMakeFixture())('a session per notebook', () => {
   it('logs in a separate session for each notebook', async () => {
     await runPython('1', A);
     await runPython('1', B);

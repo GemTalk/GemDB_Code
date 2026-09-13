@@ -49,7 +49,7 @@
         "gemdb.engineVersion": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Advanced: override the pinned database engine version (e.g. `3.7.5`). Leave empty to use the version this release of GemDB Code was built and tested against. A version that is not published in the public catalog cannot be downloaded \u2014 it must already be present under the root path."
+          "markdownDescription": "Advanced: override the pinned database engine version (e.g. `4.0.0.Alpha1`). Leave empty to use the version this release of GemDB Code was built and tested against. A version that is not published at dl.gemdb.com cannot be downloaded \u2014 it must already be present under the root path."
         },
         "gemdb.reinstallPythonOnUpdate": {
           "type": "boolean",
@@ -330,7 +330,7 @@
     "test:integration": "vitest run --config vitest.integration.config.mts",
     "bundle:grail": "./scripts/bundle-grail.sh",
     "bundle:mcp": "./scripts/bundle-mcp.sh",
-    "bundle:extent": "./scripts/bundle-extent.sh",
+    "test:extent": "./scripts/build-test-extent.sh",
     "//package": "Platform-specific builds: each .vsix carries the CPython shim for one platform, so the Marketplace offers each machine only the build that can work on it. `package` builds the target matching this machine; `package:all` needs every platform's shim staged in grail/prebuilt (see CONTRIBUTING.md).",
     "package": "scripts/package.sh",
     "package:all": "scripts/package.sh --all",

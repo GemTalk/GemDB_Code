@@ -225,7 +225,7 @@ run
 | args ofs target status statusFile label |
 "No canonical-modules flag is set here; see cli.ts. Grail retired that
 flag once warm binding became its only path -- what is warm is now
-decided by what has been committed, which is what the shipped extent
+decided by what has been committed, which is what installing Grail
 already provides -- and the send became a doesNotUnderstand that killed
 every file run at this line."
 args := System commandLineArguments.

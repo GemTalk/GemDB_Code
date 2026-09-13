@@ -1,8 +1,6 @@
-import * as fs from 'fs';
 import * as http from 'http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mcpPort } from '../config';
-import { createDatabase } from '../database';
 import { stageGrail } from '../grail';
 import {
   bundledMcpStamp,
@@ -15,10 +13,10 @@ import {
   startMcpServer,
   stopMcpServer,
 } from '../mcp';
-import { bundledExtentPath, mcpInstalled, mcpStagedOnDisk } from '../paths';
+import { mcpInstalled, mcpStagedOnDisk } from '../paths';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
 import { execute, logoutAll } from '../session';
-import { Fixture, makeFixture } from './fixture';
+import { createDatabaseWithPython, Fixture, haveTestExtent, makeFixture } from './fixture';
 
 /**
  * The MCP server, filed into a real database and answering real requests.
@@ -31,27 +29,27 @@ import { Fixture, makeFixture } from './fixture';
  * per-client worker gems down with it — is a claim about the engine's RPC
  * semantics that no unit test can check.
  *
- * Built on the shipped extent rather than a Grail file-in, so it costs seconds
- * rather than minutes: the whole point of the preloaded extent is a database
+ * Built on the suite's prepared extent rather than a Grail file-in, so it costs
+ * seconds rather than minutes: the point of that extent is a database
  * that already has Python in it.
  */
 
 const ext = process.cwd();
 
 // Both are build artifacts, gitignored, absent from a fresh checkout:
-// `npm run bundle:mcp` and `npm run bundle:extent`. CI asserts both are
+// `npm run bundle:mcp` and `npm run test:extent`. CI asserts both are
 // present rather than trusting a green run — see the workflow's "Confirm the
 // suite has something to run against" step.
 const havePayload = bundledMcpStamp(ext) !== undefined;
-const havePreloaded = fs.existsSync(bundledExtentPath(ext));
+const haveExtent = haveTestExtent();
 
 let fixture: Fixture | undefined;
 
 beforeAll(async () => {
-  if (!havePayload || !havePreloaded) return;
+  if (!havePayload || !haveExtent) return;
   fixture = makeFixture();
   if (!fixture) return;
-  createDatabase(fixture.engine, ext);
+  createDatabaseWithPython(fixture);
   // Grail's files on disk, because the router's worker gems inherit the
   // NetLDI's environment and resolve Python modules through GRAIL_DIR.
   stageGrail(ext);
@@ -146,7 +144,7 @@ function canMakeFixture(): boolean {
   return probe !== undefined;
 }
 
-describe.skipIf(!havePayload || !havePreloaded || !canMakeFixture())(
+describe.skipIf(!havePayload || !haveExtent || !canMakeFixture())(
   'the MCP server in a real database',
   () => {
     let clientSession: string | undefined;

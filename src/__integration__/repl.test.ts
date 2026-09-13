@@ -3,11 +3,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cliPath } from '../cli';
-import { createDatabase } from '../database';
 import { bundledGrailStamp, stageGrail } from '../grail';
-import { bundledExtentPath } from '../paths';
 import { isRunning, stopNetldi, stopStone } from '../processes';
-import { Fixture, makeFixture } from './fixture';
+import { createDatabaseWithPython, Fixture, haveTestExtent, makeFixture } from './fixture';
 
 /**
  * The GemDB Shell, run the way a user runs it: `gemdb` with no arguments, on a
@@ -21,14 +19,14 @@ import { Fixture, makeFixture } from './fixture';
  * the stone and the listener a session needs) is the shell's own first job,
  * and this is where that is proven.
  *
- * Uses the preloaded extent, like cli.test.ts, and additionally needs the
+ * Uses the suite's prepared extent, like cli.test.ts, and additionally needs the
  * shell bundle — a checkout that has not run `npm run bundle` skips.
  */
 
 const ext = process.cwd();
 const ready =
   bundledGrailStamp(ext) !== undefined &&
-  fs.existsSync(bundledExtentPath(ext)) &&
+  haveTestExtent() &&
   fs.existsSync(path.join(ext, 'out', 'gemdb-shell.js'));
 
 let fixture: Fixture | undefined;
@@ -83,7 +81,7 @@ beforeAll(() => {
   if (!ready) return;
   fixture = makeFixture();
   if (!fixture) return;
-  createDatabase(fixture.engine, ext); // the preloaded extent — Python included
+  createDatabaseWithPython(fixture); // Python already filed in — see testExtentPath
   stageGrail(ext); // stages Grail, the CLI, and the shell bundle
 });
 

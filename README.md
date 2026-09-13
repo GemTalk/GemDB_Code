@@ -168,7 +168,7 @@ process.
 | macOS, Apple Silicon | Supported |
 | Linux, x86-64 | Supported |
 | Linux, ARM64 | Supported |
-| macOS, Intel | Not planned — see below |
+| macOS, Intel | Not supported — see below |
 | Windows | Further out — see below |
 
 The limit is one specific thing, not a general lack of portability: GemDB ships
@@ -179,11 +179,12 @@ published per-platform and simply is not offered where it cannot work. Every
 supported platform above is built and tested on a machine of that architecture
 on each change.
 
-Intel Macs are the gap, and an honest one: the database engine is published for
-them, and the code handles them, but nobody here has an Intel Mac to build and
-test that library on. If you want one, say so in an
-[issue](https://github.com/GemTalk/GemDB_Code/issues) — it is a build we do not
-currently have a machine for, not a port.
+Intel Macs are not supported, and will not be. Until recently the only thing
+missing was a machine to compile that native library on — the engine itself was
+published for Intel macOS. As of GemStone 4.0 it is not: the three builds
+published are Apple Silicon macOS, Linux x86-64 and Linux ARM64, and there is
+no Intel macOS engine for GemDB to install. Use the Apple Silicon build, or
+Linux.
 
 Windows is the exception that is genuinely further out. The engine and GemDB's
 native components both need a Unix environment, so reaching Windows means
@@ -224,13 +225,10 @@ database extent out from under the engine will corrupt it.
 ```sh
 npm install
 npm run bundle:grail    # assemble the Python payload (needs a C toolchain)
-npm run bundle:extent   # build the preloaded database (needs an engine + shared memory)
+npm run bundle:mcp      # assemble the MCP server payload
 npm run bundle          # compile the extension
 npm run package         # produce the .vsix
 ```
-
-Two build artifacts make the shipped extension self-sufficient, and both are
-gitignored rather than committed.
 
 `bundle:grail` clones [Grail](https://github.com/GemTalk/Grail) — the Python
 implementation that runs inside the database — compiles its CPython shim
@@ -238,18 +236,16 @@ against the pinned engine, and stages the result under `grail/`. The compiled
 shim is specific to **both** the platform and the engine version, so a full
 release runs that script once per supported platform against the same working
 tree; each run adds its own `grail/prebuilt/<platform>/` and leaves the others
-alone.
+alone. It is gitignored rather than committed, and because it is a snapshot,
+"the latest Python support" means "what was latest when the extension was
+packaged" — re-run it when cutting a release.
 
-`bundle:extent` then creates a scratch database, files Python support into it,
-and stages the result as `extent/gemdb.dbf`. Every user's database begins as a
-copy of that file, so the file-in runs once here rather than on each user's
-machine. Unlike the shim, the extent is portable across platforms — build it
-once per release.
-
-Because both are snapshots, "the latest Python support" means "what was latest
-when the extension was packaged". Re-run both when cutting a release; a `.vsix`
-built without `bundle:extent` still works, but falls back to filing Python
-support in on first use.
+Python support is *installed into* your database rather than shipped as a
+prepared one. That costs a few minutes on the first run, and it is what lets an
+update reach a database you already have data in: there is no other way to
+upgrade Python support in place. The integration suite builds a prepared extent
+for itself (`npm run test:extent`) so it does not pay that cost per test file,
+but nothing in a release ships one.
 
 ## Licence
 

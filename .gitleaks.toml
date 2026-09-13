@@ -10,44 +10,36 @@
 # ourselves, before anything is uploaded, turns that into a re-dispatch.
 #
 # The scan target is the UNZIPPED .vsix, not the working tree. The tree
-# simultaneously misses what ships — `out/*.js`, `grail/`, `mcp/` and
-# `extent/gemdb.dbf` are all in the package and none of them is in git — and
-# floods on what does not. For GemDB the first half is nearly the whole payload,
-# which is why scanning git would be close to scanning nothing.
+# simultaneously misses what ships — `out/*.js`, `grail/` and `mcp/` are all in
+# the package and none of them is in git — and floods on what does not. For
+# GemDB the first half is nearly the whole payload, which is why scanning git
+# would be close to scanning nothing.
 #
 # Measured over the real 1.4.0 package on 2026-09-11, 128 MB in 2.3 seconds:
-# the default rules find 13 hits, every one of them inside `extent/gemdb.dbf`.
-# Nothing else in the package trips them.
+# the default rules found 13 hits, every one of them inside the shipped extent.
+# That package no longer exists — GemDB stopped shipping an extent — so the
+# expected result is now zero, which is worth re-measuring on the first 4.0
+# package rather than assumed.
 
 [extend]
 useDefault = true
 
 # ---------------------------------------------------------------------------
-# The shipped database
+# The shipped database: there is no longer one
 # ---------------------------------------------------------------------------
-# `extent/gemdb.dbf` is the preloaded database, and it carries key material
-# GemDB neither wrote nor can remove: `examplePrivateKeyAsPem`, an RSA private
-# key commented "Private key for the ssh test server at
-# ssh-test.gemtalksystems.com", plus an OPENSSH key beside it. Verified to come
-# from the vendor's stock extent — the engine's own `bin/extent0.dbf` at 3.7.5
-# holds the same four PEM headers — which `scripts/bundle-extent.sh` copies and
-# files Grail into. Every GemStone installation on earth has these; GemDB's
-# only distinction is also putting them in a Marketplace artifact.
+# A path allowlist for `extent/gemdb.dbf` used to live here. GemDB shipped a
+# prepared extent, and every GemStone extent carries key material the vendor
+# put there — `examplePrivateKeyAsPem`, an RSA private key commented "Private
+# key for the ssh test server at ssh-test.gemtalksystems.com", plus an OPENSSH
+# key beside it — which GemDB neither wrote nor could remove. It was
+# allowlisted by path rather than by text, because a text-matched allowlist for
+# an 80 MB binary would have had to name a private key in a public repository.
 #
-# Allowlisted by path across all rules rather than by secret text, because the
-# file is an 80 MB binary database: there are no line numbers to review, the
-# byte offsets move on every rebuild, and a text-matched allowlist would have
-# to name a private key in a public repository to suppress a private key.
-#
-# The cost is stated plainly: a secret filed INTO the database would not be
-# seen here. What goes in is the engine's base image plus Grail, and Grail is
-# scanned in source form in the same package (`grail/`), so this blinds the
-# scan to nothing that is not already covered — but anything new that files
-# third-party material into the extent invalidates that argument and needs
-# this reconsidered rather than extended.
-[[allowlists]]
-description = "The preloaded database, whose key material is the vendor's, in every GemStone extent"
-paths = ['''extent/gemdb\.dbf$''']
+# No extent is shipped now (see CLAUDE.md, "A release ships code to build a
+# database"), so the allowlist is gone with it and the scan is blind to
+# nothing. If a prepared database ever ships again, this is the reasoning to
+# restore — and the question to re-ask, because what justified it was that
+# Grail is scanned in source form in the same package.
 
 # ---------------------------------------------------------------------------
 # The form Open VSX actually rejects
@@ -116,7 +108,6 @@ paths = ['''mcp/src/auth/''']
 #     gone. That is why five releases have passed Open VSX's scan with the
 #     database password in `out/extension.js`, and it is luck rather than
 #     design: it protects the bundle and nothing else.
-#   - The extent is allowlisted, per the reasoning above.
 #
 # That is acceptable because of what this job is FOR. It exists to predict Open
 # VSX's server-side verdict before an upload burns a version number, and Open

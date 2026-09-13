@@ -4,12 +4,12 @@
 # The extension downloads and extracts the engine itself on first activation
 # (src/engine.ts, which is also the only path a user ever takes). This script
 # is the same act for the machines where there is no extension host: CI, and a
-# fresh checkout where `bundle:grail`, `bundle:extent` or `test:integration`
+# fresh checkout where `bundle:grail`, `test:extent` or `test:integration`
 # are wanted before the extension has ever run.
 #
 # It installs to the one place everything else already looks --
 # $HOME/GemDB/GemStone64Bit<pinned>-<platform> -- so nothing downstream needs
-# configuring: bundle-grail.sh, bundle-extent.sh and the integration fixture
+# configuring: bundle-grail.sh, build-test-extent.sh and the integration fixture
 # all default to exactly that path.
 #
 # Idempotent, in two steps. An engine already installed is left alone. An
@@ -35,18 +35,16 @@ ROOT="${GEMDB_ROOT:-$HOME/GemDB}"
 VERSION="$(sed -nE "s/^export const PINNED_ENGINE_VERSION = '(.+)';$/\1/p" "$REPO/src/config.ts")"
 [ -n "$VERSION" ] || { echo "ERROR: could not read PINNED_ENGINE_VERSION from src/config.ts" >&2; exit 1; }
 
-# The catalog's platform keys, matching platformKey() in src/platform.ts. 1.x
-# ships arm64.Darwin only, but the other keys are spelled correctly here for
-# the same reason platform.ts spells them: those platforms are a build away,
-# not a port.
+# The platform keys, matching platformKey() in src/platform.ts. These three are
+# the whole list: they are what dl.gemdb.com publishes an engine for, and what
+# CI builds a Grail shim on.
 #
-# Intel macOS is `i386.Darwin` -- the vendor's historical spelling for a 64-bit
-# x86 build, not a typo. The catalog has no `x86_64.Darwin` at all (that URL
-# 404s), so getting this wrong looks like "no such version" rather than a
-# naming mistake.
+# Intel macOS is deliberately absent and is not coming. No engine is published
+# for it at 4.0 -- the catalog's historical `i386.Darwin` spelling has no
+# counterpart here -- so there is nothing to download even before the question
+# of building its shim arises.
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)  PLATFORM="arm64.Darwin"  ; ARCHIVE_EXT="dmg" ;;
-  Darwin-x86_64) PLATFORM="i386.Darwin"   ; ARCHIVE_EXT="dmg" ;;
   Linux-aarch64) PLATFORM="arm64.Linux"   ; ARCHIVE_EXT="zip" ;;
   Linux-x86_64)  PLATFORM="x86_64.Linux"  ; ARCHIVE_EXT="zip" ;;
   *) echo "ERROR: unsupported platform $(uname -s)-$(uname -m)" >&2; exit 1 ;;
@@ -55,11 +53,12 @@ esac
 DIR_NAME="GemStone64Bit${VERSION}-${PLATFORM}"
 DEST="$ROOT/$DIR_NAME"
 ARCHIVE="$ROOT/${DIR_NAME}.${ARCHIVE_EXT}"
-URL="https://downloads.gemtalksystems.com/platforms/${PLATFORM}/${DIR_NAME}.${ARCHIVE_EXT}"
+# Laid out by version, not by platform -- see CATALOG_BASE in src/engine.ts.
+URL="https://dl.gemdb.com/${VERSION}/${DIR_NAME}.${ARCHIVE_EXT}"
 
 # `sys/stoned` rather than the directory itself: a half-extracted tree is the
 # failure mode worth catching, and it is the same file the integration fixture
-# and bundle-extent.sh probe for.
+# and build-test-extent.sh probe for.
 if [ -x "$DEST/sys/stoned" ]; then
   echo "Engine $VERSION is already installed at $DEST"
   exit 0

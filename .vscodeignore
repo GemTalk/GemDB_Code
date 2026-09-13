@@ -40,8 +40,8 @@ mcp/**/*.out
 mcp/.topazini
 mcp/.git/**
 
-# A build-time leftover from bundle-extent.sh: it names the scratch `gemdbbuild`
-# stone, which does not exist on a user's machine. Our .tpz files set their own
+# A build-time leftover from build-test-extent.sh: it names the scratch
+# `gemdbbuild` stone, which does not exist on a user's machine. Our .tpz files set their own
 # user/stone *after* any .topazini runs, so it cannot hijack a login — but a
 # stray credentials file has no business in a published artifact.
 grail/.topazini

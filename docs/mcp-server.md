@@ -39,7 +39,7 @@ The two flags are the only decisions:
   forgot this flag would install cleanly and quietly hand an agent the wrong
   server.
 - **`--no-auth`** leaves out the OAuth/OIDC front end. The pinned engine
-  (3.7.5) *can* compile it, so this is a choice: `McpAuthRouter` exists for a
+  (4.0.0.Alpha1) *can* compile it, so this is a choice: `McpAuthRouter` exists for a
   port reachable from another host, which is Jasper's territory. Nothing in
   GemDB can start it, so shipping it would file code into every user's database
   that nothing can reach.
@@ -67,7 +67,7 @@ alongside the stone and the NetLDI rather than merely installed:
 This is the real price, and it is worth being blunt about it. The Community
 Edition keyfile GemDB installs says `Stone Session limit: 10`.
 
-Measured on 2026-09-07, on a database created from the shipped extent:
+Measured on 2026-09-07, on a database with Grail already filed in:
 
 | Session | Holder                                  |
 | ------- | --------------------------------------- |
@@ -296,7 +296,8 @@ instead of a recorded pid. Until then the pid bookkeeping in
 [mcp_server#1](https://github.com/GemTalk/mcp_server/issues/1) (James, before
 this note existed) — the measurements are in a comment there.
 
-**Nothing pre-files the payload into the shipped extent.** `bundle-extent.sh`
-files Grail in because that saves minutes; the MCP file-in takes seconds, so it
-happens on first `ensureRunning` instead. If that ever becomes the slow part of
-a first run, the extent is where it belongs.
+**The payload is filed in on first `ensureRunning`, like Grail.** GemDB ships
+no prepared extent — a user's database is theirs, and Grail and the MCP server
+have to be installable into one that already holds data — so both file-ins
+happen on the user's machine. The MCP one takes seconds against Grail's
+minutes, so it was never the part worth pre-baking anyway.
