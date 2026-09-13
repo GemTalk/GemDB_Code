@@ -25,3 +25,7 @@ extent/
 # Release packages downloaded from CI by scripts/fetch-vsix.sh. Built
 # elsewhere, published from here, kept nowhere.
 dist/
+
+# The extent the integration suite starts from, built by
+# scripts/build-test-extent.sh. A TEST artifact: no extent is shipped.
+.test-extent/

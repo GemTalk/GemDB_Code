@@ -291,3 +291,35 @@ describe("the CLI's own words survive", () => {
     expect(stderr).toContain('Internal Server Error (500)');
   });
 });
+
+/**
+ * The one defect in here that no behavioural test on this machine can catch.
+ *
+ * `tee /dev/stderr` reopens whatever fd 2 already refers to, by path. On Linux
+ * that path is /proc/self/fd/2, and opening a SOCKET through it fails with
+ * ENXIO — while macOS's /dev/fd dups the descriptor instead and works. Node
+ * hands a spawned child a socketpair for stderr, not a pipe, so every test
+ * above ran green here and six of them failed on CI with
+ * `tee: /dev/stderr: No such device or address`. With `pipefail` on, the dead
+ * `tee` became the pipeline's status, so every outcome arrived as 1: a clean
+ * publish classified `FAILED`, a distinct status flattened.
+ *
+ * Reading the script is the only way to assert this from macOS, so that is
+ * what this does — narrowly, naming the construct rather than describing the
+ * shape of the fix.
+ */
+describe('what the script may not do to an inherited descriptor', () => {
+  it('never streams by reopening fd 1 or 2 through a path', () => {
+    const source = fs.readFileSync(SCRIPT, 'utf8');
+    const offenders = source
+      .split('\n')
+      .map((line, i) => ({ line, n: i + 1 }))
+      .filter(({ line }) => !line.trim().startsWith('#'))
+      .filter(({ line }) => /\/dev\/(stderr|stdout|fd\/[012])\b/.test(line));
+
+    expect(
+      offenders.map(({ n, line }) => `${n}: ${line.trim()}`),
+      'Use `>(cat >&2)` — a pipe bash owns — rather than reopening the inherited descriptor.',
+    ).toEqual([]);
+  });
+});
