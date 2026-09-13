@@ -435,17 +435,57 @@ baseline after a client has connected, so if that ever stops holding a test
 goes red rather than a user's database becoming unstoppable. The baseline is
 not zero: `SymbolGem` and `GcReclaim` hold sessions of their own.
 
-**The MCP payload must be filed in with `--grail`, and that is not cosmetic.**
-The Python toolset (`eval_python`, `compile_python`) is opt-in upstream because
-loading it is not inert — it joins the default tool surface. Without the flag
-GemDB installs cleanly and hands an agent a server that can browse Smalltalk
-and not run Python, which is the wrong half of GemDB. `--no-auth` is the other
-flag, and also a choice rather than a limit: the pinned engine could compile
-`McpAuthRouter`, but nothing in GemDB can start it, so it would be code filed
-into every user's database that nothing can reach. Unlike Grail there is no
-GemDB-specific installer — the payload's own `install.sh` is run, because what
-justified one for Grail was skipping a C compile and there is nothing compiled
-here.
+**The Python toolset takes two separate acts: file it in, then name it.**
+`--grail` on the payload's `install.sh` is the first — without it the classes
+are not in the image at all. It is **not** sufficient, and believing it was
+cost a red CI run: mcp_server 0.8.0 removed
+`McpServer class>>installedDefaultToolsetNames`, which used to add
+`McpGrailToolset` to the surface whenever `src/grail` was loaded, so **no
+toolset joins the default surface by being present any more**. A router that
+names nothing gets `defaultToolsetNames` — the core seven — and an agent asking
+for `eval_python` is told "Unknown tool". That is a server that browses
+Smalltalk and cannot run Python, which is the wrong half of GemDB.
+
+So `startMcpServer` names it: `r toolsetNames: (McpServer defaultToolsetNames
+copyWith: 'McpGrailToolset')`. Asked of the image rather than spelled out,
+because the core seven are upstream's to change and only the one name GemDB
+chooses belongs here. Alongside it goes `toolsetOptions` carrying
+`grailDirectory` — the toolset reads Grail's `.py` files from disk for
+`get_python_source`, `run_python_tests` and Python tracebacks, and a worker gem
+cannot work out where they are: its working directory is the stone's.
+
+**Read-only is a database user, not a server mode.** `gemdb.mcp.readOnly` once
+set `McpRouter>>readOnly:`, which upstream deleted in 0.9.0 — and was right to:
+`execute_code` evaluates arbitrary Smalltalk, a test body is arbitrary
+Smalltalk, and a tool that compiles can be followed by one that runs, so a list
+of "safe" tools was the appearance of a boundary rather than one. What replaced
+it is enforced in the stone. `workerUserId:` names the GemStone user every
+worker gem logs in as, and the payload's `setup-read-only-user.sh` provisions
+`McpReadOnly`, whose UserProfile disables commits — which covers gems it forks
+in turn. `ensureReadOnlyUser` probes for that user and runs the script only if
+it is missing, because **re-running the script drops and recreates the user**,
+which is upstream's way to change a privilege set and exactly the wrong thing
+to do to a router serving with it. A failure to provision refuses to start the
+server rather than forking a read-write one: a user who asked for read-only and
+silently got read-write has no way to tell. Say what it bounds and no more —
+an agent still reads everything, and still spends a session.
+
+`--no-auth` is the other install flag, and also a choice rather than a limit:
+the pinned engine could compile `McpAuthRouter`, but nothing in GemDB can start
+it, so it would be code filed into every user's database that nothing can
+reach. Unlike Grail there is no GemDB-specific installer — the payload's own
+`install.sh` is run, because what justified one for Grail was skipping a C
+compile and there is nothing compiled here.
+
+**The payload's entry points are a list; everything they source is derived.**
+`ENTRYPOINTS` in `bundle-mcp.sh` names what something *outside* the payload
+runs, and a closure copies whatever those scripts source. A script named only
+in prose is copied by neither, which is why the build also scans every staged
+script for `./*.sh` and fails on a name it cannot find — that is how
+`setup-read-only-user.sh` arriving upstream stopped a build rather than
+shipping a payload whose own error messages pointed at a file it did not
+carry. When that scan fires, the fix is to widen `ENTRYPOINTS` or fix the
+reference, never to add a name to an exclusion list.
 
 **Grail must be staged to a stable directory.** `installGrail` records Grail's
 own directory _inside the database_, and every session resolves modules relative

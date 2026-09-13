@@ -13,6 +13,7 @@ import {
   uninstall,
 } from './lifecycle';
 import { autoStartSuppressed, initAutoStart, suppressAutoStart } from './autoStart';
+import { mcpEnabled, mcpReadOnly } from './config';
 import { cliDirPath, putCliOnPath } from './cli';
 import { withSetupLock } from './lock';
 import { disposeLog, log, showLog } from './log';
@@ -23,7 +24,7 @@ import {
   notebookOwnerForUri,
   resetActiveNotebook,
 } from './notebook';
-import { startMcpServer, stopMcpServer } from './mcp';
+import { isMcpRunning, startMcpServer, stopMcpServer } from './mcp';
 import { confirmMcpEnabled, registerMcpProvider, registerWithClient } from './mcpRegistration';
 import { configureSharedMemory, ensureOsConfigured, isSharedMemoryConfigured } from './osConfig';
 import { isSupportedPlatform, setContext } from './platform';
@@ -199,6 +200,20 @@ export function activate(context: vscode.ExtensionContext): void {
         await startMcpServer();
       }),
     ),
+    vscode.commands.registerCommand(
+      'gemdb.toggleMcpReadOnly',
+      // A switch rather than a second way to edit a setting: it writes
+      // `gemdb.mcp.readOnly` at the global scope, and the configuration
+      // listener below is what restarts the router. Flipping it in the
+      // Settings UI therefore does exactly the same thing, which is the point
+      // — there is one mechanism and two ways to reach it.
+      async () => {
+        const next = !mcpReadOnly();
+        await vscode.workspace
+          .getConfiguration('gemdb')
+          .update('mcp.readOnly', next, vscode.ConfigurationTarget.Global);
+      },
+    ),
     vscode.commands.registerCommand('gemdb.showLog', () => showLog()),
     vscode.commands.registerCommand(
       'gemdb.configureSharedMemory',
@@ -224,6 +239,38 @@ export function activate(context: vscode.ExtensionContext): void {
         // And the `gemdb` on the PATH of new terminals is the old root's.
         if (isSupportedPlatform()) putCliOnPath(context.environmentVariableCollection);
         status.refresh();
+      }
+
+      // Read-only is decided when the router is forked and serialized into the
+      // gem's fork string — the router keeps no committed configuration — so
+      // the setting means nothing until one restarts. Doing it here rather
+      // than leaving it to the next "Start GemDB" is what makes the toggle a
+      // switch: flip it, and the server you are connected to changes.
+      //
+      // Restarting drops the worker gems of any client currently connected.
+      // That is the honest behaviour and the reason it is not softened with a
+      // prompt: a router still serving under the old setting is precisely what
+      // the user just said they did not want, and a client reconnects.
+      if (event.affectsConfiguration('gemdb.mcp.readOnly')) {
+        void (async () => {
+          if (!mcpEnabled() || !(await isMcpRunning())) {
+            status.refresh();
+            return;
+          }
+          log(
+            mcpReadOnly()
+              ? 'Read-only access is on; restarting the MCP server so agent sessions cannot commit.'
+              : 'Read-only access is off; restarting the MCP server so agents can commit again.',
+          );
+          await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: 'Restarting the MCP server' },
+            async () => {
+              await stopMcpServer();
+              await startMcpServer();
+            },
+          );
+          status.refresh();
+        })();
       }
     }),
   );

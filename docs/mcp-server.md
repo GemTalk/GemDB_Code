@@ -267,12 +267,37 @@ The two properties this rests on, both asserted in `mcp.test.ts`:
   in the user's browser cannot reach it by DNS rebinding. A non-loopback
   `Origin` gets 403; an absent one (curl, an SDK client) is allowed.
 
-The tool surface itself is another matter, and it is a deliberate default
-rather than an oversight: the tools run Python and Smalltalk in the database
-and commit the result. That is the entire reason to point an agent at GemDB —
-a read-only server can browse a database the user could already browse in a
+What an agent may *do* is another matter, and it is a deliberate default rather
+than an oversight: the tools run Python and Smalltalk in the database and
+commit the result. That is the entire reason to point an agent at GemDB — a
+server that can only read browses a database the user could already browse in a
 notebook — so `gemdb.mcp.readOnly` is off by default and exists for whoever
-wants the narrower surface.
+wants the narrower promise.
+
+**It is a GemStone user, and that changed under us.** Until mcp_server 0.9.0
+the setting drove `McpRouter>>readOnly:`, which hid and refused the tools that
+write. Upstream deleted that, and the reasoning is worth keeping: `execute_code`
+evaluates arbitrary Smalltalk, a test body is arbitrary Smalltalk, and a tool
+that compiles can be followed by one that runs — so the gate could only ever be
+advisory, and its real danger was *looking* like an access-control boundary in
+the one place that mattered. What replaced it is enforced where it can be, in
+the stone: `workerUserId:` names the GemStone user every worker gem logs in as,
+and `setup-read-only-user.sh` provisions `McpReadOnly`, a user whose
+UserProfile disables commits — which covers gems it forks in turn — and which
+cannot reach the host.
+
+GemDB provisions that user the first time the setting is turned on, and only
+then: re-running the script **drops and recreates** the user, which is
+upstream's documented way to change its privilege set and precisely the wrong
+thing to do to a router that is serving with it. If provisioning fails, the
+server does not start. Forking a read-write router for a user who asked for
+read-only would be a promise broken in the one direction they cannot check.
+
+Two honest limits, both upstream's words and worth repeating wherever this is
+described to a user: it bounds what a session can **change**, not what it can
+**read**, and not how much of the machine it can occupy. A read-only agent
+still sees everything in the database and still spends one of the ten
+sessions.
 
 ## Open, and worth doing
 

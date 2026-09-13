@@ -1,5 +1,6 @@
 import * as http from 'http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { __setSetting } from '../__mocks__/vscode';
 import { mcpPort } from '../config';
 import { stageGrail } from '../grail';
 import {
@@ -280,5 +281,48 @@ describe.skipIf(!havePayload || !haveExtent || !canMakeFixture())(
       const reply = await mcpRequest('initialize', {}, { id: 6 });
       expect(reply.status, reply.raw).toBe(200);
     }, 120_000);
+
+    // `gemdb.mcp.readOnly` promises something specific, and the way it could
+    // fail is the way a user cannot check: a router that forked read-WRITE
+    // while the setting said read-only answers every tool call exactly as it
+    // did before. So this asserts the boundary from the far side — through the
+    // server, as an agent meets it — rather than asserting that GemDB sent the
+    // right Smalltalk.
+    //
+    // Measured by hand first, on 2026-09-13: the worker's own
+    // `System myUserProfile userId` is `McpReadOnly`, and `System commit`
+    // answers TransactionError 2249, "Further commits have been disabled for
+    // this session because: 'This UserProfile is read-only and may not
+    // commit.'" Both halves matter — the identity is what GemDB configures,
+    // and the refusal is what it is FOR.
+    it('runs agent sessions as a user that cannot commit when read-only is on', async () => {
+      __setSetting('gemdb.mcp.readOnly', true);
+      try {
+        await stopMcpServer();
+        // Provisions McpReadOnly on the way through, the first time.
+        expect(await startMcpServer()).toBe(true);
+
+        const opened = await mcpRequest('initialize', {}, { id: 7 });
+        expect(opened.status, opened.raw).toBe(200);
+        const session = opened.sessionId;
+
+        const whoami = await mcpRequest(
+          'tools/call',
+          { name: 'execute_code', arguments: { code: 'System myUserProfile userId' } },
+          { sessionId: session, id: 8 },
+        );
+        expect(whoami.raw).toContain('McpReadOnly');
+
+        const commit = await mcpRequest(
+          'tools/call',
+          { name: 'execute_code', arguments: { code: 'System commit' } },
+          { sessionId: session, id: 9 },
+        );
+        expect(commit.raw).toMatch(/read-only and may not commit/i);
+      } finally {
+        __setSetting('gemdb.mcp.readOnly', false);
+        await stopMcpServer();
+      }
+    }, 180_000);
   },
 );

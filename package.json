@@ -71,7 +71,7 @@
         "gemdb.mcp.readOnly": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Hide and refuse every tool that changes the database, so a connected agent can browse and search but not modify or commit. Off by default: running Python in your database is most of why you would connect an agent to it. Changing this needs **GemDB: Restart the MCP Server**."
+          "markdownDescription": "Run AI agents as a database user that cannot commit, so an agent can read and run code but nothing it does can be made permanent. Off by default: running Python in your database is most of why you would connect an agent to it. Enforced by GemStone rather than by hiding tools \u2014 the first time you turn this on, GemDB creates an `McpReadOnly` user in your database whose profile disables commits. It bounds what an agent can CHANGE, not what it can read or how much of the machine it can use. Changing this restarts the MCP server, which disconnects any connected agent."
         }
       }
     },
@@ -177,6 +177,12 @@
         "title": "Restart the MCP Server",
         "category": "GemDB",
         "icon": "$(debug-restart)"
+      },
+      {
+        "command": "gemdb.toggleMcpReadOnly",
+        "title": "Toggle Read-Only Access for AI Agents",
+        "category": "GemDB",
+        "icon": "$(lock)"
       },
       {
         "command": "gemdb.showLog",
