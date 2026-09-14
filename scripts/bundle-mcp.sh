@@ -3,8 +3,10 @@
 # Build the MCP server payload that ships inside the .vsix.
 #
 # GemDB bundles GemTalk's native GemStone MCP server the same way it bundles
-# Grail: the repository is the source of truth, the payload is a build
-# artifact, and a release carries whatever was current when it was packaged.
+# Grail: the repository is the source of truth and the payload is a build
+# artifact. The commit it bundles is pinned in vendor-pins.sh rather than
+# tracked from upstream's default branch, so bumping it is a deliberate,
+# reviewable change -- see vendor-pins.sh for why.
 #
 # It is a far simpler payload than Grail's. The MCP server is Smalltalk --
 # thirty-odd `.gs` class file-outs plus the loaders that `input` them -- so
@@ -13,18 +15,26 @@
 # not appear per-platform in CI the way bundle-grail.sh does.
 #
 # Usage:
-#   scripts/bundle-mcp.sh                          # clone the default branch
+#   scripts/bundle-mcp.sh                          # clone the pinned commit
 #   MCP_SRC=/path/to/mcp_server scripts/bundle-mcp.sh   # use a local checkout
 #
 # Environment:
 #   MCP_SRC   existing mcp_server checkout to bundle from (default: fresh clone)
-#   MCP_REF   git ref to bundle when cloning (default: the default branch)
+#   MCP_REF   git ref to bundle when cloning -- a branch, a tag, or a full
+#             40-character commit sha (default: PINNED_MCP_REF in
+#             vendor-pins.sh)
 #
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 DEST="$REPO_ROOT/mcp"
 MCP_URL="https://github.com/GemTalk/mcp_server.git"
+
+# The upstream commit this payload is built from, absent an override --
+# PINNED_MCP_REF, defined in vendor-pins.sh.
+[ -f "$REPO_ROOT/vendor-pins.sh" ] || { echo "ERROR: vendor-pins.sh not found at repo root" >&2; exit 1; }
+# shellcheck source=/dev/null
+. "$REPO_ROOT/vendor-pins.sh"
 
 # ---------------------------------------------------------------------------
 # Obtain the sources.
@@ -39,8 +49,28 @@ if [ -n "${MCP_SRC:-}" ]; then
 else
     WORKDIR=$(mktemp -d)
     SRC="$WORKDIR/mcp_server"
-    echo "Cloning the MCP server from $MCP_URL"
-    git clone --depth 1 ${MCP_REF:+--branch "$MCP_REF"} "$MCP_URL" "$SRC"
+    REF="${MCP_REF:-$PINNED_MCP_REF}"
+    echo "Cloning the MCP server from $MCP_URL at $REF"
+    # `git clone --branch` takes a branch or a tag but NOT a bare commit sha,
+    # so a sha needs the long form: an empty repository, then a shallow fetch
+    # of that one commit, which GitHub serves directly for any reachable sha.
+    # This is a fresh build directory, never an existing clone, so the shallow
+    # fetch grafts nothing anyone will keep.
+    if [[ $REF =~ ^[0-9a-f]{40}$ ]]; then
+        git init --quiet "$SRC"
+        git -C "$SRC" remote add origin "$MCP_URL"
+        git -C "$SRC" fetch --depth 1 --quiet origin "$REF"
+        git -C "$SRC" checkout --quiet FETCH_HEAD
+        # A pin that silently resolved to something else would defeat the
+        # point of pinning, so say so rather than bundling the surprise.
+        ACTUAL=$(git -C "$SRC" rev-parse HEAD)
+        if [ "$ACTUAL" != "$REF" ]; then
+            echo "ERROR: asked for mcp_server $REF but got $ACTUAL." >&2
+            exit 1
+        fi
+    else
+        git clone --depth 1 --branch "$REF" "$MCP_URL" "$SRC"
+    fi
 fi
 
 MCP_COMMIT=$(git -C "$SRC" rev-parse --short HEAD 2>/dev/null || echo unknown)

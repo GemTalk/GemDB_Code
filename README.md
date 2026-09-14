@@ -246,8 +246,9 @@ copy of that file, so the file-in runs once here rather than on each user's
 machine. Unlike the shim, the extent is portable across platforms — build it
 once per release.
 
-Because both are snapshots, "the latest Python support" means "what was latest
-when the extension was packaged". Re-run both when cutting a release; a `.vsix`
+Because both are snapshots, "the Python support" means "the Grail commit
+pinned in `vendor-pins.sh` when the extension was packaged" — a fixed commit, not
+whatever was latest upstream. Re-run both when cutting a release; a `.vsix`
 built without `bundle:extent` still works, but falls back to filing Python
 support in on first use.
 
