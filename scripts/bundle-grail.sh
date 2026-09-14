@@ -4,9 +4,9 @@
 #
 # GemDB bundles Grail rather than cloning it at install time so that a new
 # developer needs no C toolchain, no Python headers, and no network access
-# beyond the engine download. The cost is that "latest Grail" means "the Grail
-# that was latest when this extension was packaged" -- so run this as part of
-# cutting a release, not once and forgotten.
+# beyond the engine download. The Grail commit it bundles is pinned in
+# vendor-pins.sh rather than tracked from upstream's default branch, so
+# bumping it is a deliberate, reviewable change -- see vendor-pins.sh for why.
 #
 # The prebuilt shim is specific to BOTH the platform and the engine version it
 # was compiled against, so a full release runs this on each supported platform
@@ -14,12 +14,14 @@
 # on one machine produces a .vsix that works only on that platform.
 #
 # Usage:
-#   scripts/bundle-grail.sh                     # clone Grail's default branch
+#   scripts/bundle-grail.sh                     # clone the pinned commit
 #   GRAIL_SRC=/path/to/Grail scripts/bundle-grail.sh   # use a local checkout
 #
 # Environment:
 #   GRAIL_SRC   existing Grail checkout to bundle from (default: fresh clone)
-#   GRAIL_REF   git ref to bundle when cloning (default: the default branch)
+#   GRAIL_REF   git ref to bundle when cloning -- a branch, a tag, or a full
+#               40-character commit sha (default: PINNED_GRAIL_REF in
+#               vendor-pins.sh)
 #   GEMSTONE    engine to build the shim against (default: the pinned version
 #               under the GemDB root path)
 #
@@ -28,6 +30,12 @@ set -euo pipefail
 REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 DEST="$REPO_ROOT/grail"
 GRAIL_URL="https://github.com/GemTalk/Grail.git"
+
+# The upstream commit this payload is built from, absent an override --
+# PINNED_GRAIL_REF, defined in vendor-pins.sh.
+[ -f "$REPO_ROOT/vendor-pins.sh" ] || { echo "ERROR: vendor-pins.sh not found at repo root" >&2; exit 1; }
+# shellcheck source=/dev/null
+. "$REPO_ROOT/vendor-pins.sh"
 
 # Keep this in step with PINNED_ENGINE_VERSION in src/config.ts. The shim links
 # against $GEMSTONE/lib/gciualib.o, so it is only valid for the version it was
@@ -84,8 +92,28 @@ if [ -n "${GRAIL_SRC:-}" ]; then
 else
     WORKDIR=$(mktemp -d)
     SRC="$WORKDIR/Grail"
-    echo "Cloning Grail from $GRAIL_URL"
-    git clone --depth 1 ${GRAIL_REF:+--branch "$GRAIL_REF"} "$GRAIL_URL" "$SRC"
+    REF="${GRAIL_REF:-$PINNED_GRAIL_REF}"
+    echo "Cloning Grail from $GRAIL_URL at $REF"
+    # `git clone --branch` takes a branch or a tag but NOT a bare commit sha,
+    # so a sha needs the long form: an empty repository, then a shallow fetch
+    # of that one commit, which GitHub serves directly for any reachable sha.
+    # This is a fresh build directory, never an existing clone, so the shallow
+    # fetch grafts nothing anyone will keep.
+    if [[ $REF =~ ^[0-9a-f]{40}$ ]]; then
+        git init --quiet "$SRC"
+        git -C "$SRC" remote add origin "$GRAIL_URL"
+        git -C "$SRC" fetch --depth 1 --quiet origin "$REF"
+        git -C "$SRC" checkout --quiet FETCH_HEAD
+        # A pin that silently resolved to something else would defeat the
+        # point of pinning, so say so rather than bundling the surprise.
+        ACTUAL=$(git -C "$SRC" rev-parse HEAD)
+        if [ "$ACTUAL" != "$REF" ]; then
+            echo "ERROR: asked for Grail $REF but got $ACTUAL." >&2
+            exit 1
+        fi
+    else
+        git clone --depth 1 --branch "$REF" "$GRAIL_URL" "$SRC"
+    fi
 fi
 
 GRAIL_COMMIT=$(git -C "$SRC" rev-parse --short HEAD 2>/dev/null || echo unknown)
