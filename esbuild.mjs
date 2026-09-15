@@ -101,6 +101,26 @@ function assertNoTelemetryInShellBundle(result) {
   }
 }
 
+/**
+ * cliVscode.ts documents itself as deliberately tiny, on the theory that more
+ * of the editor API leaking into the CLI's import graph "reports itself
+ * through the loud failure of a missing export at bundle time". Measured: a
+ * reference to a missing export produces an `import-is-undefined` warning,
+ * and the build succeeds anyway — so without this, that comment is false.
+ * Scoped to that one warning id, and to the shell build only: other warnings
+ * (and the extension build, which has the real `vscode` module) are
+ * unaffected.
+ */
+function assertNoUndefinedShellImports(result) {
+  const undefinedImports = result.warnings.filter((w) => w.id === 'import-is-undefined');
+  if (undefinedImports.length > 0) {
+    throw new Error(
+      'out/gemdb-shell.js references an export cliVscode.ts does not provide. ' +
+        'See the warning above for which one.',
+    );
+  }
+}
+
 if (watch) {
   for (const options of builds) {
     const context = await esbuild.context(options);
@@ -108,13 +128,16 @@ if (watch) {
   }
 } else {
   try {
-    const results = await Promise.all(builds.map((options) => esbuild.build(options)));
-    for (const result of results) assertNoTelemetryInShellBundle(result);
+    const [, shellResult] = await Promise.all(builds.map((options) => esbuild.build(options)));
+    assertNoTelemetryInShellBundle(shellResult);
+    assertNoUndefinedShellImports(shellResult);
   } catch (e) {
     // esbuild has already printed the diagnostics; rethrowing would bury them
     // under a Node stack trace that says nothing extra. An assertion failure
     // above is not an esbuild diagnostic, so it still needs to be seen.
-    if (e instanceof Error && e.message.includes('telemetry.ts')) console.error(e.message);
+    if (e instanceof Error && (e.message.includes('telemetry.ts') || e.message.includes('cliVscode.ts'))) {
+      console.error(e.message);
+    }
     process.exit(1);
   }
 }
