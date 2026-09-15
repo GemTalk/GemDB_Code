@@ -28,10 +28,35 @@ export default tseslint.config(
     // `out/gemdb-shell.js` is bundled from this same `src/`, with `vscode`
     // aliased to cliVscode.ts — there is no extension host there, so nothing
     // would enforce the user's telemetry setting if telemetry.ts entered that
-    // graph. This is an allowlist of one; a module outside the shell graph
-    // that later wants an event gets added deliberately.
-    files: ['src/**/*.ts'],
-    ignores: ['src/extension.ts'],
+    // graph. This denylist names every file that reaches that bundle — the 4
+    // shell-only files plus the 11 shared with the extension host (per
+    // `esbuild --analyze`) — so instrumenting an extension-host-only file
+    // (lifecycle.ts, notebook.ts, mcp.ts, ...) needs no lint edit, while the
+    // case that actually matters still fails at save time. `session.ts` and
+    // `pythonQueries.ts` are in this list on purpose: they are where phase 3's
+    // events (sessionLimitReached, pythonError) would naturally go, and they
+    // stay off-limits to a direct import forever — reachable only through an
+    // injected sink, the move `pyRepl.ts` already makes with its `ReplWorld`
+    // argument. The metafile check in esbuild.mjs is the guard that actually
+    // holds; this one only catches the honest mistake in the editor, so drift
+    // between this list and the real graph is acceptable.
+    files: [
+      // Shell-only
+      'src/cliMain.ts',
+      'src/cliVscode.ts',
+      'src/lineEditor.ts',
+      'src/pyRepl.ts',
+      // Shared between the shell and the extension host
+      'src/config.ts',
+      'src/gci/**/*.ts',
+      'src/gslist.ts',
+      'src/log.ts',
+      'src/paths.ts',
+      'src/platform.ts',
+      'src/processes.ts',
+      'src/pythonQueries.ts',
+      'src/session.ts',
+    ],
     rules: {
       'no-restricted-imports': [
         'error',
@@ -40,10 +65,10 @@ export default tseslint.config(
             {
               group: ['**/telemetry'],
               message:
-                'Only src/extension.ts may import telemetry: it must not reach the ' +
-                'out/gemdb-shell.js bundle, where there is no extension host to ' +
-                "enforce the user's telemetry setting. To add an event, add a " +
-                'report* function in src/telemetry.ts and call it from extension.ts.',
+                'This file reaches out/gemdb-shell.js, where there is no extension ' +
+                "host to enforce the user's telemetry setting. To add an event, add " +
+                'a report* function in src/telemetry.ts and call it from a file ' +
+                'outside the shell graph (extension.ts, lifecycle.ts, ...).',
             },
           ],
         },
