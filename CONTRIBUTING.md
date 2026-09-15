@@ -46,6 +46,27 @@ npm run lint && npm run format:check && npm run typecheck && npm run typecheck:s
 starts a real database, so it is a separate command. It skips itself when no
 engine is installed. See [CLAUDE.md](CLAUDE.md) for what belongs in which.
 
+### Local git hooks
+
+[lefthook](https://github.com/evilmartians/lefthook) hooks come with
+`npm install` — lefthook's own postinstall installs them unless `CI` is set:
+
+- **pre-commit**: `eslint` and `prettier --check` on the staged files under
+  `src/`. Not the typechecks — those are whole-project and belong to CI.
+- **post-checkout** / **post-merge** / **post-rewrite**: warns, without
+  blocking, when `package-lock.json` changed, as a reminder to run
+  `npm install`.
+
+```sh
+npm run hooks:uninstall  # remove them
+npm run hooks:install    # put them back, or pick up changes to lefthook.yml
+```
+
+Note that a later `npm install` re-installs them (`lefthook install -f`).
+Skip them for one commit with `git commit --no-verify`, or `LEFTHOOK=0 git
+commit …`. CI's `checks` job runs the full gate either way, so nothing here
+changes what has to pass.
+
 ## Continuous integration
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every pull
