@@ -1,0 +1,133 @@
+# Gitleaks configuration for the release pipeline's scan of the packaged .vsix.
+#
+# Open VSX runs its own gitleaks-based scan server-side, AFTER accepting an
+# upload, and offers no way to allow a false positive. A hit there leaves the
+# package inactive or rejected — and by then the version number is spent,
+# because both registries are immutable per (publisher, name, version,
+# targetPlatform). Jasper has been bitten twice this way (1.7.6 and 1.8.3, both
+# GemStone's *public* default password), each time failing only the Open VSX
+# half after the Marketplace had already published. Scanning the packages
+# ourselves, before anything is uploaded, turns that into a re-dispatch.
+#
+# The scan target is the UNZIPPED .vsix, not the working tree. The tree
+# simultaneously misses what ships — `out/*.js`, `grail/`, `mcp/` and
+# `extent/gemdb.dbf` are all in the package and none of them is in git — and
+# floods on what does not. For GemDB the first half is nearly the whole payload,
+# which is why scanning git would be close to scanning nothing.
+#
+# Measured over the real 1.4.0 package on 2026-09-11, 128 MB in 2.3 seconds:
+# the default rules find 13 hits, every one of them inside `extent/gemdb.dbf`.
+# Nothing else in the package trips them.
+
+[extend]
+useDefault = true
+
+# ---------------------------------------------------------------------------
+# The shipped database
+# ---------------------------------------------------------------------------
+# `extent/gemdb.dbf` is the preloaded database, and it carries key material
+# GemDB neither wrote nor can remove: `examplePrivateKeyAsPem`, an RSA private
+# key commented "Private key for the ssh test server at
+# ssh-test.gemtalksystems.com", plus an OPENSSH key beside it. Verified to come
+# from the vendor's stock extent — the engine's own `bin/extent0.dbf` at 3.7.5
+# holds the same four PEM headers — which `scripts/bundle-extent.sh` copies and
+# files Grail into. Every GemStone installation on earth has these; GemDB's
+# only distinction is also putting them in a Marketplace artifact.
+#
+# Allowlisted by path across all rules rather than by secret text, because the
+# file is an 80 MB binary database: there are no line numbers to review, the
+# byte offsets move on every rebuild, and a text-matched allowlist would have
+# to name a private key in a public repository to suppress a private key.
+#
+# The cost is stated plainly: a secret filed INTO the database would not be
+# seen here. What goes in is the engine's base image plus Grail, and Grail is
+# scanned in source form in the same package (`grail/`), so this blinds the
+# scan to nothing that is not already covered — but anything new that files
+# third-party material into the extent invalidates that argument and needs
+# this reconsidered rather than extended.
+[[allowlists]]
+description = "The preloaded database, whose key material is the vendor's, in every GemStone extent"
+paths = ['''extent/gemdb\.dbf$''']
+
+# ---------------------------------------------------------------------------
+# The form Open VSX actually rejects
+# ---------------------------------------------------------------------------
+# Restated explicitly because gitleaks' defaults do NOT flag it: a default scan
+# over the real package sails straight past the exact failure this job exists
+# to prevent. Open VSX runs rules the default set does not, and this is the one
+# that has rejected a GemTalk extension.
+#
+# It is not decoration here either. Before the commit that precedes this one,
+# it fired on two files GemDB was shipping — `grail/scripts/new_worktree.sh`
+# (`CLAUDE_PASSWORD='swordfish'`) and `grail/scripts/create_claude_users.gs`.
+# Those are now excluded from the package rather than allowlisted, which is the
+# distinction that keeps this rule worth having.
+[[rules]]
+id = "gemstone-password-literal"
+description = "A `password`-suffixed key assigned a short quoted literal — the form Open VSX's hashicorp-tf-password rule rejects"
+regex = '''(?i)password\w*\s*[:=]\s*["'][A-Za-z0-9]{7,20}["']'''
+tags = ["password", "open-vsx"]
+
+# CPython's and Django's own source, carried verbatim as the Python runtime's
+# standard library. The hits are field *names* and test fixtures —
+# `password1_field_name="password1"`, `PASSWORD_FIELD = "password"`,
+# `KEY_PASSWORD = "somepass"`, `load_cert_chain(..., password="badpass")` —
+# identical in every CPython and Django distribution and not GemDB's to change.
+#
+# Scoped to this one custom rule and to that one directory, so a real key
+# planted in the stdlib tree is still caught by `private-key` and everything
+# else the defaults bring. Deliberately NOT allowlisted by secret text: the
+# literals are ordinary words, and matching on them would suppress the same
+# words anywhere in the package.
+[[allowlists]]
+description = "Password field names and test fixtures in the bundled CPython/Django standard library"
+targetRules = ["gemstone-password-literal"]
+paths = ['''grail/src/python/stdlib/''']
+
+# The MCP server's own auth tests, which create a throwaway user:
+# `AllUsers addNewUserWithId: aUserId password: 'swordfishXYZ'`. Upstream test
+# sources for a code path GemDB deliberately does not file in — the payload is
+# installed with `--no-auth`, because nothing in GemDB can start `McpAuthRouter`
+# (CLAUDE.md, "The MCP payload must be filed in with `--grail`"). So this is
+# test fixture text for classes that never reach a user's database.
+#
+# Allowlisted rather than excluded, unlike the two Grail development scripts
+# this same rule caught. `bundle-mcp.sh` copies `src/` wholesale and then
+# derives the rest of the payload from what the installers source, deliberately,
+# so that a sourced file cannot be left out; pruning a subtree out of that is a
+# different change with a different argument, and it would put `--auth` out of
+# reach of anyone who later makes it startable. Scoped to that one directory and
+# this one rule, so the defaults still apply there in full.
+[[allowlists]]
+description = "Test-fixture credentials in the MCP server's auth tests, which GemDB files in with --no-auth"
+targetRules = ["gemstone-password-literal"]
+paths = ['''mcp/src/auth/''']
+
+# ---------------------------------------------------------------------------
+# What this cannot do
+# ---------------------------------------------------------------------------
+# Stated plainly so the job is not mistaken for a guarantee. gitleaks matches
+# TEXT, not program semantics, so every rule here is defeated by string
+# concatenation — "sword" + "fish" never appears contiguously in a file. Two
+# GemDB-specific blind spots are worth naming on top of that:
+#
+#   - `npm run bundle` minifies, so `DB_PASSWORD = 'swordfish'` reaches the
+#     package as `V="swordfish"`. The identifier a password rule anchors on is
+#     gone. That is why five releases have passed Open VSX's scan with the
+#     database password in `out/extension.js`, and it is luck rather than
+#     design: it protects the bundle and nothing else.
+#   - The extent is allowlisted, per the reasoning above.
+#
+# That is acceptable because of what this job is FOR. It exists to predict Open
+# VSX's server-side verdict before an upload burns a version number, and Open
+# VSX runs the same class of regex scanner over the same package: a secret that
+# evades these rules evades theirs too, so it does not cause the rejection this
+# guards against. The control is calibrated to the failure it is meant to catch
+# — an accidental commit, which is never obfuscated — not to a determined
+# author, which no regex can stop.
+#
+# Deliberate smuggling is a different threat with different defences: code
+# review, CI, and the release-approval gate. Do not answer it by loosening
+# these rules. Each looser rule costs false positives, and a scan that cries
+# wolf is a scan someone eventually disables — strictly worse than one with a
+# known limit.

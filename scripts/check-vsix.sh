@@ -159,6 +159,14 @@ check_absent '^extension/src/' "the sources are build inputs, not payload"
 check_absent '\.map$' "source maps belong in a debug build, not a release"
 check_absent '^extension/grail/\.git' "a whole Grail clone would ship"
 check_absent '^extension/grail/\.topazini' "stray topaz credentials"
+# Grail's own development scripts, excluded in .vscodeignore for the reason
+# given there. Asserted here too because bundle-grail.sh copies `scripts/`
+# wholesale, so the payload regains whatever Grail adds to it -- and a
+# credentials file that ships is exactly what a registry's server-side secret
+# scan rejects an upload for, after the version number is already spent.
+check_absent '^extension/grail/scripts/topazini$' "stray topaz credentials"
+check_absent '^extension/grail/scripts/new_worktree\.sh$' "a Grail development script carrying a password"
+check_absent '^extension/grail/scripts/create_claude_users\.gs$' "a Grail development script carrying a password"
 check_absent '^extension/mcp/\.git' "a whole mcp_server clone would ship"
 check_absent '^extension/mcp/\.topazini' "stray topaz credentials"
 check_absent '^extension/mcp/.*\.out$' "a file-in log from a previous install"
