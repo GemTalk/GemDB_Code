@@ -77,8 +77,29 @@ const builds = [
     outfile: 'out/gemdb-shell.js',
     external: ['koffi'],
     alias: { vscode: './src/cliVscode.ts' },
+    metafile: true,
   },
 ];
+
+/**
+ * telemetry.ts must never reach the shell bundle: there is no extension host
+ * there to enforce the user's telemetry setting (see telemetry.ts). ESLint's
+ * `no-restricted-imports` catches a direct import, but not a rename, a
+ * re-export, or a facade module — this catches all of those, because it
+ * checks the graph esbuild actually built rather than the source text.
+ */
+function assertNoTelemetryInShellBundle(result) {
+  if (!result.metafile) return;
+  const reached = Object.keys(result.metafile.inputs).some((input) =>
+    input.endsWith('src/telemetry.ts'),
+  );
+  if (reached) {
+    throw new Error(
+      'out/gemdb-shell.js pulled in src/telemetry.ts. There is no extension host in the ' +
+        "shell to enforce the user's telemetry setting — this must never ship.",
+    );
+  }
+}
 
 if (watch) {
   for (const options of builds) {
@@ -87,10 +108,13 @@ if (watch) {
   }
 } else {
   try {
-    await Promise.all(builds.map((options) => esbuild.build(options)));
-  } catch {
+    const results = await Promise.all(builds.map((options) => esbuild.build(options)));
+    for (const result of results) assertNoTelemetryInShellBundle(result);
+  } catch (e) {
     // esbuild has already printed the diagnostics; rethrowing would bury them
-    // under a Node stack trace that says nothing extra.
+    // under a Node stack trace that says nothing extra. An assertion failure
+    // above is not an esbuild diagnostic, so it still needs to be seen.
+    if (e instanceof Error && e.message.includes('telemetry.ts')) console.error(e.message);
     process.exit(1);
   }
 }
