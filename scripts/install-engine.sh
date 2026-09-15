@@ -56,6 +56,46 @@ ARCHIVE="$ROOT/${DIR_NAME}.${ARCHIVE_EXT}"
 # Laid out by version, not by platform -- see CATALOG_BASE in src/engine.ts.
 URL="https://dl.gemdb.com/${VERSION}/${DIR_NAME}.${ARCHIVE_EXT}"
 
+# Say which half of "download failed" actually failed.
+#
+# Retries cannot fix a name that does not resolve, and the two look identical
+# in a log: `curl: (6) Could not resolve host` repeated once per attempt reads
+# exactly like a flaky network, so the reflex is to re-run the job. Measured on
+# 2026-09-15, when that reflex cost an hour: dl.gemdb.com resolves from ns1 and
+# answers NXDOMAIN, authoritatively, from ns2.commonhouse.net -- the other
+# nameserver for the zone, whose copy is stale and missing the `dl` record.
+# gemdb.com and www.gemdb.com are on both. So roughly half of the world's
+# resolvers get "no such host", and because the zone's SOA sets the negative
+# cache TTL to 86400, each one holds that answer for up to a DAY. Two CI
+# re-runs four minutes apart failed identically while the Linux legs, on a
+# resolver that had asked ns1, downloaded the same file fine.
+#
+# Nothing in this repository can fix that -- it is the zone's to fix -- but a
+# run that says so costs no one the hour.
+diagnose_download_failure() {
+  # 6 is curl's CURLE_COULDNT_RESOLVE_HOST.
+  [ "${1:-0}" -eq 6 ] || return 0
+  host="${URL#https://}"
+  host="${host%%/*}"
+  {
+    echo
+    echo "That is a DNS failure, not a slow or flaky download: the name"
+    echo "  $host"
+    echo "did not resolve. Re-running will not help if the zone is serving"
+    echo "inconsistent answers -- a negative answer is cached by the resolver,"
+    echo "for as long as the zone's SOA says, regardless of how many times you"
+    echo "ask. Check whether the nameservers agree:"
+    echo
+    echo "  for ns in \$(dig +short \$(echo $host | cut -d. -f2-) NS); do"
+    echo "    echo \"\$ns: \$(dig +short @\$ns $host)\""
+    echo "  done"
+    echo
+    echo "If one answers and another does not, that stale nameserver is the"
+    echo "bug, and every user installing GemDB behind the wrong resolver hits"
+    echo "it too -- src/engine.ts downloads from the same host."
+  } >&2
+}
+
 # `sys/stoned` rather than the directory itself: a half-extracted tree is the
 # failure mode worth catching, and it is the same file the integration fixture
 # and build-test-extent.sh probe for.
@@ -72,8 +112,30 @@ else
   echo "Downloading $URL"
   # Downloaded to a temporary name and renamed on success, so an interrupted
   # run cannot leave a partial file that the next run would happily "reuse".
-  curl --fail --location --retry 3 --retry-delay 5 --no-progress-meter \
-    -o "$ARCHIVE.part" "$URL"
+  #
+  # --retry-all-errors because curl's default retry set is narrow: without it a
+  # 500 from the CDN, a connection reset mid-transfer, or a refused connection
+  # is a hard failure on the first try. --connect-timeout bounds a black-holed
+  # SYN, which otherwise sits for the OS default (~75s on macOS, ~130s on
+  # Linux) before the first retry even begins. Five retries five seconds apart
+  # is ~25s of patience rather than ~15s; the point is not the extra ten
+  # seconds but that every class of transient error now gets them.
+  #
+  # `&& status=0 || status=$?` rather than `if ! curl ...; then status=$?`:
+  # inside the negation the `$?` a `then` branch reads is the NEGATION's, which
+  # is always 0 -- so that spelling both lost the reason for the failure and
+  # made the script exit 0 on a download that never happened. Measured here,
+  # and the same trap is written up in publish-to-registry.sh. A command on the
+  # left of `||` is exempt from errexit, so nothing has to be toggled.
+  curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+    --connect-timeout 20 --no-progress-meter -o "$ARCHIVE.part" "$URL" &&
+    status=0 || status=$?
+  if [ "$status" -ne 0 ]; then
+    rm -f "$ARCHIVE.part"
+    diagnose_download_failure "$status"
+    echo "ERROR: could not download $URL (curl exit $status)." >&2
+    exit "$status"
+  fi
   mv "$ARCHIVE.part" "$ARCHIVE"
 fi
 
