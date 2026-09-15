@@ -154,6 +154,7 @@ if [ -n "$koffi_extra" ]; then
   unwanted=$((unwanted + 1))
 fi
 
+check_absent '^extension/\.test-extent/' "the integration suite's extent, 96 MB a user would never open"
 check_absent '^extension/src/' "the sources are build inputs, not payload"
 check_absent '\.map$' "source maps belong in a debug build, not a release"
 check_absent '^extension/grail/\.git' "a whole Grail clone would ship"

@@ -200,9 +200,10 @@ Baking the engine into a published image inverts that: we become the
 distributor, and a `docker pull` presents nobody with a license. GemTalk owns
 GemStone, so this is a decision GemTalk can make — but it should be a decision,
 with a NOTICE rewrite and probably an acceptance step, not a side effect of
-writing a Dockerfile. (The line is already less absolute than it reads:
-`extent/gemdb.dbf` derives from the engine's own `extent0.dbf` and ships in
-every `.vsix` today.)
+writing a Dockerfile. (The line is already less absolute than it reads: the
+Grail shim links the engine's own `lib/gciualib.o` and ships in every `.vsix`
+today. It used to be a clearer example still — `extent/gemdb.dbf` was a copy of
+the engine's `extent0.dbf` — but GemDB no longer ships an extent.)
 
 **A thin image keeps the posture and most of the prize.** Base OS, Node, our
 scripts; `install-engine.sh` runs on first start into a volume, exactly as the
