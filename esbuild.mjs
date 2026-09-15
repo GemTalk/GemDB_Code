@@ -56,6 +56,13 @@ const common = {
   plugins: [problemMatcherPlugin],
 };
 
+/**
+ * An assertion this file makes about the build, distinct from an esbuild
+ * diagnostic — the catch block below needs to tell the two apart to know
+ * what still needs printing.
+ */
+class BuildAssertionError extends Error {}
+
 const builds = [
   {
     ...common,
@@ -82,21 +89,29 @@ const builds = [
 ];
 
 /**
- * telemetry.ts must never reach the shell bundle: there is no extension host
- * there to enforce the user's telemetry setting (see telemetry.ts). ESLint's
- * `no-restricted-imports` catches a direct import, but not a rename, a
- * re-export, or a facade module — this catches all of those, because it
- * checks the graph esbuild actually built rather than the source text.
+ * Neither telemetry.ts nor the `@vscode/extension-telemetry` package it wraps
+ * may reach the shell bundle: there is no extension host there to enforce the
+ * user's telemetry setting (see telemetry.ts). ESLint's `no-restricted-imports`
+ * catches a direct import of telemetry.ts, but not a rename, a re-export, or a
+ * facade module — checking the graph esbuild actually built catches all of
+ * those. The package check is the ultimate guard: it also catches a file that
+ * imports `@vscode/extension-telemetry` directly, bypassing telemetry.ts
+ * entirely — that package requires `vscode` itself, and constructing its
+ * reporter is exactly what would ship real events with nothing enforcing
+ * consent.
  */
 function assertNoTelemetryInShellBundle(result) {
   if (!result.metafile) return;
-  const reached = Object.keys(result.metafile.inputs).some((input) =>
-    input.endsWith('src/telemetry.ts'),
+  const inputs = Object.keys(result.metafile.inputs);
+  const reachedOwnModule = inputs.some((input) => input.endsWith('src/telemetry.ts'));
+  const reachedPackage = inputs.some((input) =>
+    input.includes('node_modules/@vscode/extension-telemetry/'),
   );
-  if (reached) {
-    throw new Error(
-      'out/gemdb-shell.js pulled in src/telemetry.ts. There is no extension host in the ' +
-        "shell to enforce the user's telemetry setting — this must never ship.",
+  if (reachedOwnModule || reachedPackage) {
+    throw new BuildAssertionError(
+      `out/gemdb-shell.js pulled in ${reachedOwnModule ? 'src/telemetry.ts' : '@vscode/extension-telemetry'}. ` +
+        "There is no extension host in the shell to enforce the user's telemetry setting — " +
+        'this must never ship.',
     );
   }
 }
@@ -114,7 +129,7 @@ function assertNoTelemetryInShellBundle(result) {
 function assertNoUndefinedShellImports(result) {
   const undefinedImports = result.warnings.filter((w) => w.id === 'import-is-undefined');
   if (undefinedImports.length > 0) {
-    throw new Error(
+    throw new BuildAssertionError(
       'out/gemdb-shell.js references an export cliVscode.ts does not provide. ' +
         'See the warning above for which one.',
     );
@@ -133,11 +148,9 @@ if (watch) {
     assertNoUndefinedShellImports(shellResult);
   } catch (e) {
     // esbuild has already printed the diagnostics; rethrowing would bury them
-    // under a Node stack trace that says nothing extra. An assertion failure
-    // above is not an esbuild diagnostic, so it still needs to be seen.
-    if (e instanceof Error && (e.message.includes('telemetry.ts') || e.message.includes('cliVscode.ts'))) {
-      console.error(e.message);
-    }
+    // under a Node stack trace that says nothing extra. A BuildAssertionError
+    // is not an esbuild diagnostic, so it still needs to be seen.
+    if (e instanceof BuildAssertionError) console.error(e.message);
     process.exit(1);
   }
 }
