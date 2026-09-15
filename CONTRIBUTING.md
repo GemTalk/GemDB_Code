@@ -46,6 +46,27 @@ npm run lint && npm run format:check && npm run typecheck && npm run typecheck:s
 starts a real database, so it is a separate command. It skips itself when no
 engine is installed. See [CLAUDE.md](CLAUDE.md) for what belongs in which.
 
+### Local git hooks
+
+[lefthook](https://github.com/evilmartians/lefthook) hooks come with
+`npm install` — lefthook's own postinstall installs them unless `CI` is set:
+
+- **pre-commit**: `eslint` and `prettier --check` on the staged files under
+  `src/`. Not the typechecks — those are whole-project and belong to CI.
+- **post-checkout** / **post-merge** / **post-rewrite**: warns, without
+  blocking, when `package-lock.json` changed, as a reminder to run
+  `npm install`.
+
+```sh
+npm run hooks:uninstall  # remove them
+npm run hooks:install    # put them back, or pick up changes to lefthook.yml
+```
+
+Note that a later `npm install` re-installs them (`lefthook install -f`).
+Skip them for one commit with `git commit --no-verify`, or `LEFTHOOK=0 git
+commit …`. CI's `checks` job runs the full gate either way, so nothing here
+changes what has to pass.
+
 ## Continuous integration
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every pull
@@ -65,11 +86,16 @@ Require the `ci-complete` check in branch protection rather than the two job
 names — it exists so the names above can change without reconfiguring the
 branch.
 
-The integration job builds the Grail payload from **Grail's default branch**, so
-a change here that depends on unmerged Grail work will be red until that Grail
-pull request lands. To prove it before then, run the workflow manually
-(Actions → CI → Run workflow) and give the `grail-ref` input the Grail branch;
-it becomes `GRAIL_REF` for `bundle-grail.sh`.
+The integration job builds the Grail and MCP server payloads from the commits
+**pinned in `vendor-pins.sh`**, not from either upstream's default branch — so a
+`.vsix` is reproducible from its GemDB sha, at the cost of no longer being an
+early warning for upstream breakage. A change here that depends on unmerged
+Grail or mcp_server work will be red until that pull request lands and the pin
+is bumped. To prove it before then, run the workflow manually (Actions → CI →
+Run workflow) and give the `grail-ref` and/or `mcp-ref` input the branch in
+question; they become `GRAIL_REF`/`MCP_REF` for `bundle-grail.sh` and
+`bundle-mcp.sh`. Bumping a pin itself is a one-line `vendor-pins.sh` PR whose CI run
+is the proof the new upstream commit works.
 
 Neither job publishes anything. Publishing is
 [`.github/workflows/release.yml`](.github/workflows/release.yml), dispatched by
@@ -88,11 +114,12 @@ npm run bundle:grail    # -> grail/        (needs a C toolchain)
 npm run bundle:extent   # -> extent/       (needs an engine + shared memory)
 ```
 
-`bundle:grail` clones [Grail](https://github.com/GemTalk/Grail), compiles its
-CPython shim against the **pinned** engine version, and stages the result. The
-shim links `$GEMSTONE/lib/gciualib.o`, so it is valid only for the platform
-**and** engine version it was built against — a mismatch installs cleanly and
-then fails at `import`.
+`bundle:grail` clones the [Grail](https://github.com/GemTalk/Grail) commit
+pinned in `vendor-pins.sh`, compiles its CPython shim against the engine version
+pinned separately as `PINNED_ENGINE_VERSION` in `src/config.ts`, and stages the
+result. The shim links `$GEMSTONE/lib/gciualib.o`, so it is valid only for the
+platform **and** engine version it was built against — a mismatch installs
+cleanly and then fails at `import`.
 
 Each run of `bundle:grail` adds its own `grail/prebuilt/<platform>/` and leaves
 the others alone, which is what lets one tree carry every target's shim. A
