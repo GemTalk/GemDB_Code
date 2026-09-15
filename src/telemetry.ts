@@ -16,6 +16,19 @@ import { TelemetryReporter } from '@vscode/extension-telemetry';
  * 2. **Never `sendDangerousTelemetryEvent`** or its siblings. They bypass the
  *    user's preference by design, for CI. Shipping one is a Marketplace
  *    violation.
+ * 3. **No event may be emitted per cell, per print, or per keystroke.** A user
+ *    exploring data runs hundreds of cells. The shape instead is a
+ *    once-per-window `first*` event for funnel membership plus one aggregated
+ *    `sessionSummary` carrying counts as measures. There is no
+ *    `sessionSummary` event yet, so do not build the counter machinery ahead
+ *    of it; when it lands, this module should expose `count*()` functions
+ *    that mutate in-memory state while only `reportSessionSummary()` sends,
+ *    so this rule holds by construction rather than by discipline.
+ *
+ *    `deactivate()` is best-effort — VS Code allows it limited time and it
+ *    never runs on a crash — so a `sessionSummary` event must be sent
+ *    *before* `context.subscriptions` are disposed, since disposing the
+ *    reporter is what flushes queued events.
  */
 
 // Not a secret — a connection string only says where events land.
