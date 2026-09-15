@@ -1,8 +1,7 @@
-import * as fs from 'fs';
 import * as http from 'http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { __setSetting } from '../__mocks__/vscode';
 import { mcpPort } from '../config';
-import { createDatabase } from '../database';
 import { stageGrail } from '../grail';
 import {
   bundledMcpStamp,
@@ -15,10 +14,10 @@ import {
   startMcpServer,
   stopMcpServer,
 } from '../mcp';
-import { bundledExtentPath, mcpInstalled, mcpStagedOnDisk } from '../paths';
+import { mcpInstalled, mcpStagedOnDisk } from '../paths';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
 import { execute, logoutAll } from '../session';
-import { Fixture, makeFixture } from './fixture';
+import { createDatabaseWithPython, Fixture, haveTestExtent, makeFixture } from './fixture';
 
 /**
  * The MCP server, filed into a real database and answering real requests.
@@ -31,27 +30,27 @@ import { Fixture, makeFixture } from './fixture';
  * per-client worker gems down with it — is a claim about the engine's RPC
  * semantics that no unit test can check.
  *
- * Built on the shipped extent rather than a Grail file-in, so it costs seconds
- * rather than minutes: the whole point of the preloaded extent is a database
+ * Built on the suite's prepared extent rather than a Grail file-in, so it costs
+ * seconds rather than minutes: the point of that extent is a database
  * that already has Python in it.
  */
 
 const ext = process.cwd();
 
 // Both are build artifacts, gitignored, absent from a fresh checkout:
-// `npm run bundle:mcp` and `npm run bundle:extent`. CI asserts both are
+// `npm run bundle:mcp` and `npm run test:extent`. CI asserts both are
 // present rather than trusting a green run — see the workflow's "Confirm the
 // suite has something to run against" step.
 const havePayload = bundledMcpStamp(ext) !== undefined;
-const havePreloaded = fs.existsSync(bundledExtentPath(ext));
+const haveExtent = haveTestExtent();
 
 let fixture: Fixture | undefined;
 
 beforeAll(async () => {
-  if (!havePayload || !havePreloaded) return;
+  if (!havePayload || !haveExtent) return;
   fixture = makeFixture();
   if (!fixture) return;
-  createDatabase(fixture.engine, ext);
+  createDatabaseWithPython(fixture);
   // Grail's files on disk, because the router's worker gems inherit the
   // NetLDI's environment and resolve Python modules through GRAIL_DIR.
   stageGrail(ext);
@@ -146,7 +145,7 @@ function canMakeFixture(): boolean {
   return probe !== undefined;
 }
 
-describe.skipIf(!havePayload || !havePreloaded || !canMakeFixture())(
+describe.skipIf(!havePayload || !haveExtent || !canMakeFixture())(
   'the MCP server in a real database',
   () => {
     let clientSession: string | undefined;
@@ -282,5 +281,48 @@ describe.skipIf(!havePayload || !havePreloaded || !canMakeFixture())(
       const reply = await mcpRequest('initialize', {}, { id: 6 });
       expect(reply.status, reply.raw).toBe(200);
     }, 120_000);
+
+    // `gemdb.mcp.readOnly` promises something specific, and the way it could
+    // fail is the way a user cannot check: a router that forked read-WRITE
+    // while the setting said read-only answers every tool call exactly as it
+    // did before. So this asserts the boundary from the far side — through the
+    // server, as an agent meets it — rather than asserting that GemDB sent the
+    // right Smalltalk.
+    //
+    // Measured by hand first, on 2026-09-13: the worker's own
+    // `System myUserProfile userId` is `McpReadOnly`, and `System commit`
+    // answers TransactionError 2249, "Further commits have been disabled for
+    // this session because: 'This UserProfile is read-only and may not
+    // commit.'" Both halves matter — the identity is what GemDB configures,
+    // and the refusal is what it is FOR.
+    it('runs agent sessions as a user that cannot commit when read-only is on', async () => {
+      __setSetting('gemdb.mcp.readOnly', true);
+      try {
+        await stopMcpServer();
+        // Provisions McpReadOnly on the way through, the first time.
+        expect(await startMcpServer()).toBe(true);
+
+        const opened = await mcpRequest('initialize', {}, { id: 7 });
+        expect(opened.status, opened.raw).toBe(200);
+        const session = opened.sessionId;
+
+        const whoami = await mcpRequest(
+          'tools/call',
+          { name: 'execute_code', arguments: { code: 'System myUserProfile userId' } },
+          { sessionId: session, id: 8 },
+        );
+        expect(whoami.raw).toContain('McpReadOnly');
+
+        const commit = await mcpRequest(
+          'tools/call',
+          { name: 'execute_code', arguments: { code: 'System commit' } },
+          { sessionId: session, id: 9 },
+        );
+        expect(commit.raw).toMatch(/read-only and may not commit/i);
+      } finally {
+        __setSetting('gemdb.mcp.readOnly', false);
+        await stopMcpServer();
+      }
+    }, 180_000);
   },
 );

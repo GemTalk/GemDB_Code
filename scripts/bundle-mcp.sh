@@ -99,6 +99,13 @@ ENTRYPOINTS=(
     install.sh      # src/mcp.ts runs this to file the classes in
     run-server.sh   # staged at a stable path for the user to run
     stop-server.sh  # ditto, and named by run-server.sh's own advice
+    # Provisions the McpReadOnly user, which is what `gemdb.mcp.readOnly` now
+    # means: mcp_server 0.9.0 replaced the router's `readOnly:` flag with a
+    # GemStone user whose UserProfile disables commits, and this script is what
+    # creates it. src/mcp.ts runs it on demand, so it is an entry point in the
+    # same sense install.sh is -- and nothing SOURCES it, so the closure below
+    # would never have staged it.
+    setup-read-only-user.sh
 )
 # Loaders inside the wholesale src/ copy that src/mcp.ts's install path drives.
 # Not entry points in the shell sense, so no closure applies -- what THEY read

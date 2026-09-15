@@ -18,7 +18,7 @@ npm run test:integration   # a real database in a temp root path; seconds
 npm run bundle             # esbuild -> out/extension.js
 npm run bundle:grail       # assemble the Grail payload (needs a C toolchain)
 npm run bundle:mcp         # assemble the MCP server payload (needs nothing)
-npm run bundle:extent      # build the preloaded extent (needs an engine + shared memory)
+npm run test:extent        # build the extent the integration suite starts from
 npm run package            # .vsix
 npm run hooks:uninstall    # remove the local git hooks npm install added
 scripts/install-engine.sh  # download + extract the pinned engine, no editor involved
@@ -120,7 +120,7 @@ fails badly. It borrows the installed engine by symlink and points
 lock files, the test stone and a real one can both be called `gemdb` and stay
 invisible to each other. It skips itself when no engine is installed.
 
-Download and extraction stay out of both: 210 MB to test an HTTP range request.
+Download and extraction stay out of both: 144 MB to test an HTTP range request.
 
 ## CI
 
@@ -131,7 +131,7 @@ somewhere that cannot possibly host a database is what keeps it that way.
 `integration` runs the whole thing for real, once per shipped target on a
 runner of that architecture: `install-engine.sh`, the shared-memory script for
 that OS under `sudo` (a throwaway machine is the one place raising shared
-memory unattended is uncontroversial), `bundle:grail`, `bundle:extent`,
+memory unattended is uncontroversial), `bundle:grail`, `test:extent`,
 `test:integration`, then `package.sh` for that target — which packages and
 checks in one step. Each leg uploads its `.vsix`, so a release can be assembled
 from CI rather than from three machines. Require `ci-complete` in branch
@@ -140,12 +140,12 @@ protection, not the job names: it fans the matrix in to one check.
 Two things about it are load-bearing:
 
 **A green integration run has to mean the suite ran.** Every integration file
-skips itself when the engine, the payload or the extent is missing — right
+skips itself when the engine, the payload or the test extent is missing — right
 locally, where a fresh checkout should still have a green suite, and dangerous
 in CI, where an artifact that failed to build would report success for a suite
 that executed nothing. The `Confirm the suite has something to run against`
 step asserts those paths instead of trusting the exit code — the engine, the
-payload, the shim, the extent, `out/gemdb-shell.js` (which `repl.test.ts`
+payload, the shim, the test extent, `out/gemdb-shell.js` (which `repl.test.ts`
 needs because it drives the shell as a real process), and the MCP payload.
 Anything new that skips on a missing artifact belongs in that list.
 
@@ -259,14 +259,24 @@ For reporting on sessions, `System descriptionOfSession:` carries what matters
 in slots 5 (last begin/commit/abort), 16 (commits behind this session's view),
 8 (holding the oldest commit record) and 21 (the client's pid, RPC only).
 
-**A release ships a database, not just the code to build one.**
-`scripts/bundle-extent.sh` creates a scratch database, files Grail into it, and
-stages the result as `extent/gemdb.dbf`; `createDatabase` copies that instead of
-the engine's stock `extent0.dbf`, so Python works the moment the files are on
-disk. The engine's extent is still the fallback when the artifact is absent —
-that keeps a fresh checkout working, and keeps the file-in path exercised, which
-is what an in-place Grail upgrade will need. Both are covered:
-`preloaded.test.ts` for the shipped extent, `grail.test.ts` for the file-in.
+**A release ships code to build a database, not a database.** GemDB used to
+ship a prepared `extent/gemdb.dbf` with Grail already filed in, so that Python
+worked the moment the files were on disk. That is gone, and the reason is the
+whole point of the product: this is a *database*. A user's extent accumulates
+their data, so an update cannot replace it — Grail and the MCP server have to
+be installed into whatever is already there and upgraded in place. Shipping a
+prepared extent made the first install fast and made every upgrade afterwards
+take a different, less-exercised path, which is precisely backwards: the path
+that has to keep working for the life of the database is the one that should
+run every time. So `createDatabase` always copies the engine's own
+`bin/extent0.dbf`, and `ensureRunning` files Grail in.
+
+What that costs is minutes of topaz on a first run, worth paying once per user
+and not worth paying once per integration test file — so
+`scripts/build-test-extent.sh` (`npm run test:extent`) builds the same thing as
+a **test** artifact at `.test-extent/gemdb.dbf`, and the tests that need Python
+but are not testing the file-in start from it. `grail.test.ts` still files Grail
+into a stock extent, because that is the path every real install takes.
 
 **The Grail payload is a build artifact, not source.** `grail/` is gitignored and
 produced by `scripts/bundle-grail.sh`, which clones the Grail commit pinned in
@@ -378,6 +388,25 @@ answers bytes, so Grail decodes that one branch with `decodeFromUTF8`, keeping
 the raw line when it is not UTF-8. Both directions are pinned in
 `src/__integration__/cli.test.ts`.
 
+**An engine upgrade orphans the database, and the engine will not say so until
+a login fails.** `assertDatabaseMatchesEngine` in `database.ts` is the guard,
+and it exists because the failure without it looks like success: measured on
+2026-09-11 moving 3.7.5 → 4.0.0.Alpha1, the extent *format* is unchanged
+(`compatibilityLevel: 855` either way), so the new stone **starts** on the old
+repository and `gslist` reports it OK — status bar green, database "running" —
+and then every login fails with GemStone error 4045, "The Gem and dbf versions
+are incompatible". The first notebook cell, the shell and the MCP server all
+break at once with an error naming neither cause nor cure.
+
+There is no upgrade to offer instead: 3.7.5 shipped `bin/upgradeImage`,
+4.0.0.Alpha1 ships none, so converting the image is not something GemDB could
+do on a user's behalf. The guard reads the repository's version with
+`copydbf -i` and refuses, naming both versions and the directory to delete.
+Checked in two places, and both are needed: `prepareFiles`, which is the
+first-install path, and `startProcesses` before the stone starts, because an
+extension update reaches that line without preparing anything — engine
+downloaded, database present, Grail staged, so `isInstalled()` is true.
+
 **Stage Grail before stamping it, and stamp only what this run created.**
 `stageAndRecordGrail` in `grail.ts` owns that order. Reversed, it broke both
 ways at once: on a first install `<rootPath>/grail` does not exist yet, so
@@ -390,12 +419,10 @@ could not have worked regardless — `stageGrail` replaces the directory
 wholesale, stamp included. Neither failure reproduces on a machine that has run
 an earlier version, and the integration suite calls `stageGrail` itself rather
 than going through `prepare`, which is why `src/__tests__/grailStaging.test.ts`
-starts from a root path that does not exist. The condition is equally
-load-bearing: `createDatabase` returns `{created, preloaded}` so the stamp
-follows *this call having made the database from the shipped extent*, not "the
-extension ships an extent" — an upgrade finds a database carrying whatever
-Grail was filed into it before, and stamping there would claim an install that
-never happened.
+starts from a root path that does not exist. Since GemDB stopped shipping an
+extent there is only one answer to *when* the stamp may be written — after a
+successful file-in, by `recordGrailInstalled`, and nowhere else — so staging no
+longer stamps at all and the ordering question has gone with it.
 
 **The MCP router is a logged-in session, so stop it before the stone.**
 `runStop` does, right after `logout` and before the NetLDI (the router forks
@@ -415,17 +442,61 @@ baseline after a client has connected, so if that ever stops holding a test
 goes red rather than a user's database becoming unstoppable. The baseline is
 not zero: `SymbolGem` and `GcReclaim` hold sessions of their own.
 
-**The MCP payload must be filed in with `--grail`, and that is not cosmetic.**
-The Python toolset (`eval_python`, `compile_python`) is opt-in upstream because
-loading it is not inert — it joins the default tool surface. Without the flag
-GemDB installs cleanly and hands an agent a server that can browse Smalltalk
-and not run Python, which is the wrong half of GemDB. `--no-auth` is the other
-flag, and also a choice rather than a limit: the pinned engine could compile
-`McpAuthRouter`, but nothing in GemDB can start it, so it would be code filed
-into every user's database that nothing can reach. Unlike Grail there is no
-GemDB-specific installer — the payload's own `install.sh` is run, because what
-justified one for Grail was skipping a C compile and there is nothing compiled
-here.
+**The Python toolset takes two separate acts: file it in, then name it.**
+`--grail` on the payload's `install.sh` is the first — without it the classes
+are not in the image at all. It is **not** sufficient, and believing it was
+cost a red CI run: mcp_server 0.8.0 removed
+`McpServer class>>installedDefaultToolsetNames`, which used to add
+`McpGrailToolset` to the surface whenever `src/grail` was loaded, so **no
+toolset joins the default surface by being present any more**. A router that
+names nothing gets `defaultToolsetNames` — the core seven — and an agent asking
+for `eval_python` is told "Unknown tool". That is a server that browses
+Smalltalk and cannot run Python, which is the wrong half of GemDB.
+
+So `startMcpServer` names it: `r toolsetNames: (McpServer defaultToolsetNames
+copyWith: 'McpGrailToolset')`. Asked of the image rather than spelled out,
+because the core seven are upstream's to change and only the one name GemDB
+chooses belongs here. Alongside it goes `toolsetOptions` carrying
+`grailDirectory` — the toolset reads Grail's `.py` files from disk for
+`get_python_source`, `run_python_tests` and Python tracebacks, and a worker gem
+cannot work out where they are: its working directory is the stone's.
+
+**Read-only is a database user, not a server mode.** `gemdb.mcp.readOnly` once
+set `McpRouter>>readOnly:`, which upstream deleted in 0.9.0 — and was right to:
+`execute_code` evaluates arbitrary Smalltalk, a test body is arbitrary
+Smalltalk, and a tool that compiles can be followed by one that runs, so a list
+of "safe" tools was the appearance of a boundary rather than one. What replaced
+it is enforced in the stone. `workerUserId:` names the GemStone user every
+worker gem logs in as, and the payload's `setup-read-only-user.sh` provisions
+`McpReadOnly`, whose UserProfile disables commits — which covers gems it forks
+in turn. `ensureReadOnlyUser` probes for that user and runs the script only if
+it is missing, because **re-running the script drops and recreates the user**,
+which is upstream's way to change a privilege set and exactly the wrong thing
+to do to a router serving with it. That probe reads topaz's **result line**,
+not its output: topaz echoes a script before running it, so searching the whole
+answer for a marker finds the probe's own source and both spellings with it —
+which answered "present" whatever the image held, provisioned nothing, and left
+every session open failing in the router with LookupError 2015. A failure to provision refuses to start the
+server rather than forking a read-write one: a user who asked for read-only and
+silently got read-write has no way to tell. Say what it bounds and no more —
+an agent still reads everything, and still spends a session.
+
+`--no-auth` is the other install flag, and also a choice rather than a limit:
+the pinned engine could compile `McpAuthRouter`, but nothing in GemDB can start
+it, so it would be code filed into every user's database that nothing can
+reach. Unlike Grail there is no GemDB-specific installer — the payload's own
+`install.sh` is run, because what justified one for Grail was skipping a C
+compile and there is nothing compiled here.
+
+**The payload's entry points are a list; everything they source is derived.**
+`ENTRYPOINTS` in `bundle-mcp.sh` names what something *outside* the payload
+runs, and a closure copies whatever those scripts source. A script named only
+in prose is copied by neither, which is why the build also scans every staged
+script for `./*.sh` and fails on a name it cannot find — that is how
+`setup-read-only-user.sh` arriving upstream stopped a build rather than
+shipping a payload whose own error messages pointed at a file it did not
+carry. When that scan fires, the fix is to widen `ENTRYPOINTS` or fix the
+reference, never to add a name to an exclusion list.
 
 **Grail must be staged to a stable directory.** `installGrail` records Grail's
 own directory _inside the database_, and every session resolves modules relative
@@ -543,7 +614,12 @@ scripts that print which behaviour the Grail in front of you has.
 
 **`gemdb file.py` starts with a dirty session, so `gemdb.transaction()` cannot
 be a script's first statement.** Measured 2026-08-23 against the payload of
-that date, before Grail retired the canonical-modules flag. Walking the
+that date, before Grail retired the canonical-modules flag. **Not re-measured
+since the move to 4.0.0.Alpha1 and Grail `0319048`**, where the installer's
+last step now deploys `gemdb` — which is exactly what makes the notebook and
+shell sessions clean, and may well have changed this too. The advice below is
+cheap either way (`commit()` or `abort()` first), but treat the finding as
+dated until someone runs it again. Walking the
 preamble one send at a time in a clean session: setting the flag left
 `System needsCommit` false, the `#GrailConsole` store leaves it false, and
 `importlib runPath:` sets it true — twice from clean, so it is `runPath`
@@ -582,13 +658,14 @@ and then fails at the first `import`. CI builds each target's shim on a runner
 of that architecture, which is what makes the gate honest — a shim can only be
 compiled where it runs.
 
-Intel macOS is the deliberate omission, and not for lack of code:
-`platformKey` spells it `i386.Darwin` (the vendor's historical name for the
-64-bit Intel build; there is no `x86_64.Darwin` in the catalog, and that URL
-404s), the engine is published, and every branch handles it. What is missing is
-a machine — Apple Silicon hardware and CI runners cannot build its shim without
-cross-compiling, and a cross-built shim nobody has run is exactly what the gate
-refuses to promise.
+**Intel macOS will not be supported.** It used to be one machine away: the
+3.7.x catalog published an `i386.Darwin` engine (the vendor's historical name
+for the 64-bit Intel build) and only the shim was missing, for want of hardware
+that could compile it natively. At 4.0 the engine itself is gone —
+`dl.gemdb.com` publishes `arm64.Darwin`, `arm64.Linux` and `x86_64.Linux`, and
+nothing for Intel — so there is no build to support even if a machine appeared.
+`platformKey` answers undefined there rather than spelling a key that names
+nothing.
 
 Adding a platform is still two steps in this order: build its shim so
 `grail/prebuilt/<key>/` carries it, then widen the gate. The reverse order is

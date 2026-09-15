@@ -212,7 +212,7 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
           ? `port ${mcp.port} is taken`
           : mcp.running
             ? mcpReadOnly()
-              ? `listening, read-only`
+              ? 'listening, read-only'
               : 'listening'
             : state === 'running'
               ? 'not running'
@@ -224,7 +224,8 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
           : mcp.running
             ? `MCP server ${mcpLabel(installedMcp ?? bundledMcp)} at ${mcpUrl(mcp.port)}.\n\n` +
               (mcpReadOnly()
-                ? 'Read-only: tools that would change the database are hidden and refused.\n\n'
+                ? 'Agent sessions cannot commit: they log in as a database user whose profile ' +
+                  'disables it. They can still read everything.\n\n'
                 : 'Connected agents can run Python and commit.\n\n') +
               'It holds one database session, and gives each connected client another.' +
               (mcpOutdated
@@ -241,6 +242,38 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
         command: {
           command: 'gemdb.registerMcpClient',
           title: 'Connect an AI Agent to GemDB',
+        },
+      });
+
+      // The switch, as its own row rather than a checkbox or an inline button.
+      //
+      // A row states what it is *now* — "can commit" / "cannot commit" — and a
+      // checkbox states only what clicking it would do, which is the wrong way
+      // round for a setting whose whole value is knowing where you stand
+      // before an agent runs. It is also the only shape that fits: a tree item
+      // has no switch widget, so the honest alternatives were a lock icon
+      // whose two states a reader has to learn, or this.
+      //
+      // Worded as what an agent may DO, not as the feature's name. "Read-only:
+      // off" makes the reader negate a negative to work out that agents can
+      // write; "Agents: can commit" says it outright, which matters most in
+      // the state that carries risk.
+      rows.push({
+        label: 'Agent write access',
+        description: mcpReadOnly() ? 'cannot commit' : 'can commit',
+        tooltip: mcpReadOnly()
+          ? `Agent sessions log in as the ${'McpReadOnly'} database user, whose profile disables ` +
+            'commits — so nothing an agent does can be made permanent, including from code it ' +
+            'compiles and runs.\n\nIt can still READ everything, and still spends a database ' +
+            'session.\n\nClick to let agents commit again.'
+          : 'Agent sessions can change your database and commit.\n\nClick to make them ' +
+            'read-only: their worker gems log in as a database user that cannot commit. The ' +
+            'first time, GemDB creates that user.\n\nEither way the MCP server restarts, which ' +
+            'disconnects any agent currently connected.',
+        icon: mcpReadOnly() ? new vscode.ThemeIcon('lock') : new vscode.ThemeIcon('unlock'),
+        command: {
+          command: 'gemdb.toggleMcpReadOnly',
+          title: 'Toggle Read-Only Access for AI Agents',
         },
       });
     }

@@ -22,20 +22,35 @@ export interface EngineProcess {
  *
  * A data row is `{status} {version} {owner} {pid} {port} {date} {type} {name}`:
  *
- *     OK           3.7.5     jfoster      72271 59317 Aug 08 18:38 Stone   gemdb
- *     exe deleted  3.7.5     jfoster      72287 59327 Aug 08 18:38 Netldi  gemdbldi
+ *     OK           4.0.0.Alpha jfoster      56970 65107 Sep 11 16:46 Stone   gemdb
+ *     exe deleted  4.0.0.Alpha jfoster      56992 65112 Sep 11 16:46 Netldi  gemdbldi
  *
  * Status is usually one word but can be two (`exe deleted`), so the first
  * capture is non-greedy and the match anchors on the version, which always
- * starts with a digit. Rows that are neither a Stone nor a Netldi — the shared
- * page cache gets its own row — do not match and are skipped, as are the header
- * and separator lines.
+ * starts with a digit.
+ *
+ * **The version is not always digits and dots, and that cost a whole release
+ * once.** `gslist` reports `4.0.0.Alpha`, not `4.0.0.Alpha1` — the version is
+ * truncated to eleven characters before it is ever formatted (its own row
+ * format is `%-9s`, a minimum width, so printf is not the culprit; the lock
+ * file's version field is). Measured against a live 4.0.0.Alpha1 stone on
+ * 2026-09-11, and reported upstream. An earlier version of this pattern
+ * matched `[\d.]*`, which cannot match `4.0.0.Alpha` at all — so every Stone
+ * and Netldi row was silently dropped, `findStone()` answered undefined
+ * forever, the status bar read "stopped" over a running database, and every
+ * login failed with "GemDB is not running." Nothing consumes the version
+ * field, so accepting whatever the engine prints costs nothing and matching it
+ * narrowly costs everything.
+ *
+ * Rows that are neither a Stone nor a Netldi — the shared page cache gets its
+ * own row — do not match and are skipped, as are the header and separator
+ * lines.
  */
 export function parseGslist(output: string): EngineProcess[] {
   const processes: EngineProcess[] = [];
   for (const line of output.split('\n')) {
     const match = line.match(
-      /^\s*(\S+(?: \S+)?)\s+(\d[\d.]*)\s+\S+\s+(\d+)\s+(\d+)\s+(?:\w+\s+\d+\s+[\d:]+)\s+(Stone|Netldi)\s+(.+)$/i,
+      /^\s*(\S+(?: \S+)?)\s+(\d\S*)\s+\S+\s+(\d+)\s+(\d+)\s+(?:\w+\s+\d+\s+[\d:]+)\s+(Stone|Netldi)\s+(.+)$/i,
     );
     if (!match) continue;
     const type = match[5].toLowerCase() === 'stone' ? 'stone' : 'netldi';

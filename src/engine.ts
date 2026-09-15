@@ -10,7 +10,21 @@ import { archiveExtension, platformKey } from './platform';
 import { log, logStep } from './log';
 import { engineDirName, ensureRootPath, enginePath, expectedEnginePath } from './paths';
 
-const CATALOG_BASE = 'https://downloads.gemtalksystems.com/platforms';
+/**
+ * Where the engine comes from, and why it is not the public catalog.
+ *
+ * GemStone's own catalog (`downloads.gemtalksystems.com/platforms/<key>/`)
+ * publishes releases; 4.0.0.Alpha1 is not one, and that URL 404s for it. The
+ * builds GemDB pins are staged at `dl.gemdb.com/<version>/` instead, which is
+ * laid out by version rather than by platform — the archive names are
+ * identical, so only the directory above them differs.
+ *
+ * It publishes exactly the three server kits GemDB supports, which is the
+ * other half of `isSupportedPlatform`: there is no `i386.Darwin` build here at
+ * all, so Intel macOS is now out of reach for want of an engine as well as for
+ * want of a machine to build its shim on.
+ */
+const CATALOG_BASE = 'https://dl.gemdb.com';
 
 export type Progress = vscode.Progress<{ message?: string; increment?: number }>;
 
@@ -18,7 +32,7 @@ export type Progress = vscode.Progress<{ message?: string; increment?: number }>
 export function engineArtifact(version = engineVersion()): { fileName: string; url: string } {
   const key = platformKey();
   const fileName = `GemStone64Bit${version}-${key}.${archiveExtension()}`;
-  return { fileName, url: `${CATALOG_BASE}/${key}/${fileName}` };
+  return { fileName, url: `${CATALOG_BASE}/${version}/${fileName}` };
 }
 
 /**
@@ -85,8 +99,9 @@ export async function installEngine(
     );
   }
 
-  // The archive is ~1 GB and serves no purpose once extracted. Keeping it
-  // would double the disk cost of an install that is meant to be unobtrusive.
+  // The archive (144 MB for the macOS disk image, ~450 MB for the Linux zips)
+  // serves no purpose once extracted, and keeping it would add most of its own
+  // size again to an install that is meant to be unobtrusive.
   try {
     fs.unlinkSync(archivePath);
     log(`Removed the downloaded archive ${fileName}`);
@@ -270,8 +285,9 @@ export function downloadFile(
 /**
  * Extraction runs out of process and is awaited, never `execFileSync`.
  *
- * This is the longest step after the download — copying about 700 MB — and
- * running it synchronously blocks the extension host for its whole duration.
+ * This is the longest step after the download — copying about 900 MB out of
+ * the image — and running it synchronously blocks the extension host for its
+ * whole duration.
  * That freezes every other extension sharing the host, stops the progress
  * messages below from telling anyone anything, and makes Cancel unclickable,
  * because flipping a CancellationToken needs an event loop that is free to run.

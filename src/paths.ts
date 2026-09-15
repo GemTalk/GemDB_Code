@@ -50,16 +50,6 @@ export function databaseLogPath(): string {
   return path.join(databasePath(), 'log');
 }
 
-/**
- * The extent a release ships, with Python support already in it.
- *
- * A build artifact of `scripts/bundle-extent.sh`, like the Grail payload —
- * gitignored, and absent from a fresh checkout.
- */
-export function bundledExtentPath(extensionPath: string): string {
-  return path.join(extensionPath, 'extent', 'gemdb.dbf');
-}
-
 export function extentPath(): string {
   return path.join(databasePath(), 'data', 'extent0.dbf');
 }

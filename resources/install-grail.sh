@@ -2,12 +2,13 @@
 #
 # Install Grail into the GemDB database.
 #
-# This is GemDB's own installer, not Grail's ./install_base.sh + ./install.sh.
-# The difference is one step: Grail's scripts compile the CPython shim from
-# source, which needs a C toolchain and the engine's headers. GemDB ships that
-# library prebuilt inside the extension, so the compile is skipped and a new
-# developer needs no compiler at all. Everything else below is the same
-# sequence of topaz scripts Grail's own installers run, in the same order.
+# This is GemDB's own installer, standing in for Grail's ./install.sh. The
+# difference is one step: Grail's script compiles the CPython shim from source,
+# which needs a C toolchain and the engine's headers. GemDB ships that library
+# prebuilt inside the extension, so the compile is skipped and a new developer
+# needs no compiler at all. Everything else below is the same sequence Grail's
+# own installer runs, in the same order, and it is kept deliberately close to
+# that script so the two can be diffed when Grail moves.
 #
 # Required environment:
 #   GRAIL_DIR            staged Grail checkout (also the working directory)
@@ -48,8 +49,13 @@ set user $GEMDB_USER pass $GEMDB_PASSWORD
 set gemstone $GEMDB_STONE
 EOF
 
-GS_VERSION=$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' "$GEMSTONE/version.txt" 2>/dev/null | head -1 || true)
-echo "Database engine version: ${GS_VERSION:-unknown}"
+# Report the whole of version.txt, not just the three-part version. GemDB pins
+# one engine, so the version alone no longer distinguishes anything a log
+# reader needs -- but the Build: line carries the commit the binary was made
+# from, which is the first question when a file-in fails on one machine and not
+# another. (Grail's own installer prints it for the same reason.)
+echo "Database engine:"
+sed 's/^/  version.txt | /' "$GEMSTONE/version.txt" 2>/dev/null || echo "  (no version.txt)"
 
 run_topaz() {
     local script="$1"
@@ -62,49 +68,50 @@ run_topaz() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 1: the shared base, installed once per database as SystemUser.
+# Step 1: the shared base, installed once per extent, as SystemUser.
 # ---------------------------------------------------------------------------
-# What belongs in the base depends on the engine version, and the split has to
-# match what step 3 files per-user -- whatever is not filed here must be filed
-# there. 3.7.x is published and cannot be fixed in its base image, so it needs
-# the session-method policy patch and the shared kernel extensions; 4.0+ has
-# both natively and takes only the Unicode setting.
-echo "== Installing the shared Grail base"
-case "$GS_VERSION" in
-    3.7.*)
-        run_topaz scripts/session_methods_env1_base_37.gs
-        ./scripts/setUnicodeMode.sh
-        run_topaz scripts/install_base37.gs
-        ;;
-    *)
-        ./scripts/setUnicodeMode.sh
-        ;;
-esac
-run_topaz scripts/set_base_marker.gs
+# The base is what an ordinary (non-SystemUser) session may not create for
+# itself: Unicode comparison mode, which the kernel allows only SystemUser to
+# set, and a marker in Globals, which objectSecurityPolicyId 1 refuses to
+# anyone else. Grail's ./install_base.sh is exactly those two steps, so GemDB
+# runs that script rather than reimplementing it.
+#
+# Probed rather than run unconditionally, which is also what Grail's install.sh
+# does: on every install after the first the base is already there, and the
+# branch below never runs -- so installing Grail touches SystemUser exactly
+# once per database.
+#
+# Only a positive "absent" triggers it. An inconclusive probe (the stone is
+# down, the login failed) steps aside and lets the real install report that in
+# its own words.
+echo "== Checking for the shared Grail base"
+BASE_PROBE=$(LC_ALL=C topaz -lq -S "$GRAIL_DIR/scripts/check_base_installed.gs" < /dev/null 2>/dev/null || true)
+if printf '%s\n' "$BASE_PROBE" | grep -q 'GRAIL_BASE=absent'; then
+    echo "== Installing the shared Grail base (SystemUser)"
+    "$GRAIL_DIR/install_base.sh"
+
+    # Re-probe rather than assume: install_base.sh writes its marker last, so a
+    # base still absent here means a step failed without a non-zero exit --
+    # better caught now than as a SecurityError minutes into install.gs.
+    BASE_PROBE=$(LC_ALL=C topaz -lq -S "$GRAIL_DIR/scripts/check_base_installed.gs" < /dev/null 2>/dev/null || true)
+    if printf '%s\n' "$BASE_PROBE" | grep -q 'GRAIL_BASE=absent'; then
+        echo "ERROR: install_base.sh reported success but the base marker is still absent." >&2
+        exit 1
+    fi
+fi
 
 # ---------------------------------------------------------------------------
-# Step 2: the generated include that step 3 files in.
-# ---------------------------------------------------------------------------
-# install.gs unconditionally reads out/gen/kernel_class_extensions.gs. On 3.7.x
-# the base above already filed those methods as SystemUser, so the include is
-# empty; on 4.0+ they are filed here as per-user session methods.
-mkdir -p "$GRAIL_DIR/out/gen"
-{
-    echo "! GENERATED by GemDB -- do not edit."
-    echo "! Detected engine ${GS_VERSION:-unknown}."
-    case "$GS_VERSION" in
-        3.7.*) echo "! 3.7.x: kernel extensions were filed by the shared base above." ;;
-        *)     echo "input ./scripts/install_base40.gs" ;;
-    esac
-} > "$GRAIL_DIR/out/gen/kernel_class_extensions.gs"
-
-# ---------------------------------------------------------------------------
-# Step 3: the per-user install.
+# Step 2: the per-user install.
 # ---------------------------------------------------------------------------
 # install.gs reads SHIM_LIB_PATH from the session environment and records it in
 # the database, so every later session finds the shim without the variable
 # being set again. That recorded path is why GemDB stages Grail to a stable
 # directory instead of running it from inside the extension.
+#
+# PYTHON_LIB_PATH is deliberately not set. It points Grail at a CPython shared
+# library on the host for its embedded-FFI backend, and GemDB's whole promise
+# is a Python that needs nothing installed on the machine; install.gs treats it
+# as optional, so leaving it unset simply leaves that backend unconfigured.
 export SHIM_LIB_PATH="${SHIM_LIB_PATH:-}"
 export PYTHON_PACKAGE_PATH="${PYTHON_PACKAGE_PATH:-$GRAIL_DIR/src/python}"
 export GRAIL_DIR
@@ -120,21 +127,19 @@ rm -f "$GRAIL_DIR"/*.out
 run_topaz src/smalltalk/install.gs
 
 # ---------------------------------------------------------------------------
-# Step 4: deploy the gemdb module.
+# Step 3: deploy gemdb, so a fresh session starts clean.
 # ---------------------------------------------------------------------------
-# One cold import, committed. This is what makes a fresh session's
-# `import gemdb` leave nothing to commit — the module and its warmed
-# function caches become committed state — which gemdb's transaction()
-# entry check depends on (Grail docs/GemDB_Module.md, session hygiene).
-# The other half of the contract is per-session: every session must enable
-# canonical modules to warm-bind what this deploys (session.ts and
-# gemdb-run.tpz both do). Guarded: a Grail payload from before the gemdb
-# module simply has no script, and the install is still complete.
-if [ -f scripts/deployGemdb.gs ]; then
-    echo "== Deploying gemdb"
-    run_topaz scripts/deployGemdb.gs
-else
-    echo "NOTE: this Grail payload predates gemdb (no scripts/deployGemdb.gs); skipping its deploy."
-fi
+# One cold import of the `gemdb` module, committed here, so that no user
+# session has to make it. Compiling a module is a WRITE -- it creates the
+# module's class in the committed PythonModules -- so without this the first
+# `import gemdb` in every new session dirties the transaction, and
+# `gemdb.transaction()` then refuses to start, describing pending changes the
+# user did not make. Deploying here turns that import into a warm bind.
+#
+# After install.gs, never before: install.gs recreates the Python runtime
+# classes and bumps Grail's runtime generation, which discards any deployment
+# made under the previous one.
+echo "== Deploying gemdb"
+run_topaz scripts/deployGemdb.gs
 
 echo "== Grail installed"

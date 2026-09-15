@@ -2,7 +2,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { __setSetting } from '../__mocks__/vscode';
-import { ensureRootPath, expectedEnginePath } from '../paths';
+import { createDatabase } from '../database';
+import { ensureRootPath, expectedEnginePath, extentPath } from '../paths';
 
 /**
  * A database of GemDB's own making, in a directory of its own, on the real
@@ -71,4 +72,41 @@ export function makeFixture(): Fixture | undefined {
     // would delete the developer's engine.
     remove: () => fs.rmSync(root, { recursive: true, force: true }),
   };
+}
+
+/**
+ * The extent the suite starts from when a test needs Python but is not testing
+ * the file-in.
+ *
+ * Built by `npm run test:extent`, which creates a scratch database, files
+ * Grail into it and leaves the result at `.test-extent/gemdb.dbf`. It is a
+ * TEST artifact and nothing else: GemDB ships no extent, because every user's
+ * database is theirs and keeps whatever they put in it — Grail and the MCP
+ * server are installed INTO it and upgraded in place, which is the only way an
+ * update can reach a database that already holds data. What that costs is
+ * several minutes of topaz per file-in, and paying it once per suite rather
+ * than once per test file is what this is for.
+ *
+ * `grail.test.ts` deliberately does not use it: filing Grail into a stock
+ * extent is exactly what that file tests, and it is the path every real
+ * install takes.
+ */
+export function testExtentPath(): string {
+  return path.join(process.cwd(), '.test-extent', 'gemdb.dbf');
+}
+
+/** True when `npm run test:extent` has been run in this checkout. */
+export function haveTestExtent(): boolean {
+  return fs.existsSync(testExtentPath());
+}
+
+/**
+ * Create the fixture's database from the prepared extent, so Python is there
+ * without a file-in. Mirrors what `createDatabase` does for a user, then
+ * swaps the stock extent for the prepared one.
+ */
+export function createDatabaseWithPython(fixture: Fixture): void {
+  createDatabase(fixture.engine);
+  fs.copyFileSync(testExtentPath(), extentPath());
+  fs.chmodSync(extentPath(), 0o644);
 }

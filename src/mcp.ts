@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 import { DB_PASSWORD, DB_USER, STONE_NAME, mcpPort, mcpReadOnly, rootPath } from './config';
 import { errorMessage, log, logStep } from './log';
 import { engineEnvironment } from './processes';
-import { installedMcpStamp, mcpPath, mcpRouterStatePath, mcpStampPath } from './paths';
+import { grailPath, installedMcpStamp, mcpPath, mcpRouterStatePath, mcpStampPath } from './paths';
 
 /**
  * The MCP server — GemTalk's native GemStone Model Context Protocol server,
@@ -359,6 +359,130 @@ function smalltalkString(value: string): string {
 }
 
 /**
+ * The optional toolset that makes this server a GemDB server rather than a
+ * Smalltalk one. Named in the router's surface; see `startMcpServer`.
+ */
+const GRAIL_TOOLSET = 'McpGrailToolset';
+
+/**
+ * The GemStone user a read-only server's worker gems log in as.
+ *
+ * `setup-read-only-user.sh`'s own default, restated here because GemDB names
+ * it in two places — provisioning it and pointing the router at it — and the
+ * two must agree.
+ */
+const READ_ONLY_USER = 'McpReadOnly';
+
+/**
+ * Make sure the read-only GemStone user exists, provisioning it if not.
+ *
+ * **Read-only is a property of the database, not of the server.** mcp_server
+ * had a `readOnly:` flag once; it was removed in 0.9.0, and the reasoning is
+ * worth keeping because it is right: `execute_code` evaluates arbitrary
+ * Smalltalk, a test body is arbitrary Smalltalk, and a tool that compiles can
+ * be followed by one that runs — so a list of "safe" tools was never a
+ * boundary, only the appearance of one. What replaced it is enforced where it
+ * can be: `McpRouter>>workerUserId` names a GemStone user, every worker gem
+ * *is* that user, and this script gives that user a UserProfile with commits
+ * disabled — which covers gems it forks in turn.
+ *
+ * So honouring `gemdb.mcp.readOnly` means provisioning a user, which is a
+ * committed write to the user's database. That sits on the "ask" side of
+ * GemDB's automation line, and the asking is the setting itself: nobody turns
+ * this on by accident, and the alternative — a dialog in front of a toggle the
+ * user just flipped — asks the same question twice.
+ *
+ * Provisioned once and then left alone, because re-running the script DROPS
+ * and recreates the user. That is upstream's documented way to change the
+ * privilege set, and exactly the wrong thing to do to a router that is serving
+ * with it. So: probe, and create only what is missing.
+ */
+async function ensureReadOnlyUser(): Promise<boolean> {
+  const probe = [
+    topazLogin(),
+    'printit',
+    // `userWithId:` RAISES LookupError 2015 for a user that is not there, so
+    // the absent case — the only one that has anything to do — would arrive as
+    // an inconclusive probe and provision nothing. `userWithId:ifAbsent:` is
+    // the lookup that answers.
+    `(AllUsers userWithId: ${smalltalkString(READ_ONLY_USER)} ifAbsent: [nil]) isNil`,
+    "  ifTrue: ['GEMDB_RO_USER=absent']",
+    "  ifFalse: ['GEMDB_RO_USER=present']",
+    '%',
+    'logout',
+    'exit',
+  ].join('\n');
+
+  try {
+    const answer = await runTopaz(probe, 'Check for the read-only MCP user');
+    // Only a RESULT line counts, which topaz frames as `[oop size:n Class]
+    // text`. Searching the whole output cannot work: topaz echoes the script
+    // before running it, so the answer always contains this probe's own
+    // source and therefore BOTH spellings of the marker. Reading it that way
+    // answered "present" whatever the image said, so a missing user was never
+    // provisioned and every session open then failed in the router with
+    // LookupError 2015 — measured 2026-09-13, and the reason the integration
+    // test starts from a database that has never had the user.
+    const verdict = /^\[[^\]]*\]\s*GEMDB_RO_USER=(present|absent)\s*$/m.exec(answer)?.[1];
+    if (verdict === 'present') return true;
+    // An inconclusive probe is not an absent user. Provisioning on the
+    // strength of a login that failed would drop and recreate a user that is
+    // serving a running router.
+    if (verdict !== 'absent') {
+      log('Could not tell whether the read-only MCP user exists; leaving it alone.');
+      return false;
+    }
+  } catch (e) {
+    log(`Could not check for the read-only MCP user: ${errorMessage(e)}`);
+    return false;
+  }
+
+  logStep(`Provisioning the ${READ_ONLY_USER} database user`);
+  const script = path.join(mcpPath(), 'setup-read-only-user.sh');
+  if (!fs.existsSync(script)) {
+    log(
+      `This MCP payload has no setup-read-only-user.sh, so the ${READ_ONLY_USER} user cannot be ` +
+        'created and read-only access cannot be honoured.',
+    );
+    return false;
+  }
+
+  return new Promise((resolve) => {
+    const child = spawn('bash', [script], {
+      cwd: mcpPath(),
+      env: {
+        ...process.env,
+        ...engineEnvironment(),
+        GS_STONE: STONE_NAME,
+        GS_USER: DB_USER,
+        GS_PASS: DB_PASSWORD,
+        MCP_RO_USER: READ_ONLY_USER,
+      },
+    });
+    let output = '';
+    const collect = (data: Buffer): void => {
+      output += data.toString();
+    };
+    child.stdout?.on('data', collect);
+    child.stderr?.on('data', collect);
+    child.on('close', (code) => {
+      log(output.trimEnd());
+      if (code === 0) {
+        log(`The ${READ_ONLY_USER} user is ready; agent sessions will not be able to commit.`);
+        resolve(true);
+      } else {
+        log(`Provisioning ${READ_ONLY_USER} failed (exit code ${code}).`);
+        resolve(false);
+      }
+    });
+    child.on('error', (err) => {
+      log(`Provisioning ${READ_ONLY_USER} failed: ${err.message}`);
+      resolve(false);
+    });
+  });
+}
+
+/**
  * Fork the detached router gem that owns the port.
  *
  * `forkOnPort:` is the payload's own entry point for this, and what it does is
@@ -394,6 +518,12 @@ export async function startMcpServer(): Promise<boolean> {
     return true;
   }
 
+  // Read-only is a GemStone user, and provisioning it must succeed before a
+  // router claims to honour the setting. Bailing out here rather than forking
+  // a read-write server is the only safe direction: a user who asked for
+  // read-only and got read-write would have no way to tell.
+  if (mcpReadOnly() && !(await ensureReadOnlyUser())) return false;
+
   logStep(`Starting the MCP server on ${mcpUrl(port)}`);
   // `serverTitle:` is what a client displays to tell one deployment from
   // another; the server's name and version stay truthful, since every GemDB
@@ -405,7 +535,30 @@ export async function startMcpServer(): Promise<boolean> {
     'run',
     '| r |',
     'r := McpRouter new.',
-    `r readOnly: ${mcpReadOnly() ? 'true' : 'false'}.`,
+    // The Python tools, which are the whole reason an agent is pointed at
+    // GemDB rather than at a Smalltalk image.
+    //
+    // Filing them in is not enough and has not been since mcp_server 0.8.0:
+    // `installedDefaultToolsetNames`, which added McpGrailToolset to the
+    // surface whenever src/grail was loaded, is gone, and no toolset joins the
+    // default surface by being present. A router that names nothing gets the
+    // core seven, which is a server that can browse Smalltalk and not run
+    // Python — the wrong half of GemDB, and exactly what CI caught.
+    //
+    // Asked of the image rather than spelled out here: `defaultToolsetNames`
+    // IS the core surface, so a toolset added or renamed upstream arrives
+    // without an edit, and only the one name GemDB actually chooses is
+    // written down.
+    `r toolsetNames: (McpServer defaultToolsetNames copyWith: ${smalltalkString(GRAIL_TOOLSET)}).`,
+    // Where Grail's `.py` files are. The toolset reads them for
+    // `get_python_source`, `run_python_tests` and Python tracebacks, and a
+    // worker gem cannot work it out: its working directory is the stone's.
+    // This CONFIGURES the toolset and does not add it — hence the line above.
+    'r toolsetOptions: (Dictionary new',
+    `  at: ${smalltalkString(GRAIL_TOOLSET)} put: (Dictionary new`,
+    `    at: 'grailDirectory' put: ${smalltalkString(grailPath())}; yourself);`,
+    '  yourself).',
+    ...(mcpReadOnly() ? [`r workerUserId: ${smalltalkString(READ_ONLY_USER)}.`] : []),
     `r serverTitle: ${smalltalkString(`GemDB (${STONE_NAME})`)}.`,
     `r forkOnPort: ${port}`,
     '%',

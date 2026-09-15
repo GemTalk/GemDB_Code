@@ -49,7 +49,7 @@
         "gemdb.engineVersion": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Advanced: override the pinned database engine version (e.g. `3.7.5`). Leave empty to use the version this release of GemDB Code was built and tested against. A version that is not published in the public catalog cannot be downloaded — it must already be present under the root path."
+          "markdownDescription": "Advanced: override the pinned database engine version (e.g. `4.0.0.Alpha1`). Leave empty to use the version this release of GemDB Code was built and tested against. A version that is not published at dl.gemdb.com cannot be downloaded — it must already be present under the root path."
         },
         "gemdb.reinstallPythonOnUpdate": {
           "type": "boolean",
@@ -71,7 +71,7 @@
         "gemdb.mcp.readOnly": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Hide and refuse every tool that changes the database, so a connected agent can browse and search but not modify or commit. Off by default: running Python in your database is most of why you would connect an agent to it. Changing this needs **GemDB: Restart the MCP Server**."
+          "markdownDescription": "Run AI agents as a database user that cannot commit, so an agent can read and run code but nothing it does can be made permanent. Off by default: running Python in your database is most of why you would connect an agent to it. Enforced by GemStone rather than by hiding tools \u2014 the first time you turn this on, GemDB creates an `McpReadOnly` user in your database whose profile disables commits. It bounds what an agent can CHANGE, not what it can read or how much of the machine it can use. Changing this restarts the MCP server, which disconnects any connected agent."
         }
       }
     },
@@ -177,6 +177,12 @@
         "title": "Restart the MCP Server",
         "category": "GemDB",
         "icon": "$(debug-restart)"
+      },
+      {
+        "command": "gemdb.toggleMcpReadOnly",
+        "title": "Toggle Read-Only Access for AI Agents",
+        "category": "GemDB",
+        "icon": "$(lock)"
       },
       {
         "command": "gemdb.showLog",
@@ -330,7 +336,7 @@
     "test:integration": "vitest run --config vitest.integration.config.mts",
     "bundle:grail": "./scripts/bundle-grail.sh",
     "bundle:mcp": "./scripts/bundle-mcp.sh",
-    "bundle:extent": "./scripts/bundle-extent.sh",
+    "test:extent": "./scripts/build-test-extent.sh",
     "//hooks": "Local git hooks (lefthook.yml): eslint + prettier on staged files, and a non-blocking package-lock.json warning after checkout/merge/rebase. lefthook's postinstall installs them on `npm install`, so use hooks:uninstall to opt out. CI's `checks` job is the gate regardless.",
     "hooks:install": "lefthook install",
     "hooks:uninstall": "lefthook uninstall",

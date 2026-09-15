@@ -41,8 +41,18 @@ mcp/**/*.out
 mcp/.topazini
 mcp/.git/**
 
-# A build-time leftover from bundle-extent.sh: it names the scratch `gemdbbuild`
-# stone, which does not exist on a user's machine. Our .tpz files set their own
+# The extent the INTEGRATION SUITE starts from, and nothing else. GemDB stopped
+# shipping a prepared extent deliberately -- a user's database accumulates their
+# data, so an update has to install into whatever is already there (CLAUDE.md,
+# "A release ships code to build a database, not a database"). This is 96 MB of
+# test artifact that a user would download and never open, and shipping it would
+# quietly restore the very thing that was removed. It is gitignored, so only a
+# machine that has run `npm run test:extent` has one to leak -- which is every
+# CI runner, since the integration job builds it before packaging.
+.test-extent/**
+
+# A build-time leftover from build-test-extent.sh: it names the scratch
+# `gemdbbuild` stone, which does not exist on a user's machine. Our .tpz files set their own
 # user/stone *after* any .topazini runs, so it cannot hijack a login — but a
 # stray credentials file has no business in a published artifact.
 grail/.topazini

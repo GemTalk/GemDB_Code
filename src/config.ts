@@ -12,10 +12,17 @@ import * as vscode from 'vscode';
  * combination we have actually run. `gemdb.engineVersion` exists as an escape
  * hatch for our own development against unreleased builds.
  *
- * 3.7.5 is the newest version published in the public download catalog.
- * Grail installs onto it through its `install_base37.gs` path.
+ * 4.0.0.Alpha1 is what Grail supports: upstream removed 3.7.x outright, and
+ * its installers now refuse anything below 4.0. The build matters as well as
+ * the version — Grail requires a 4.0 of 2026-07-29 or later, which is what
+ * makes an Alpha the pin rather than a released 3.7.
+ *
+ * The version string is the whole of it, `Alpha1` included: it names the
+ * product directory, the download, and the GCI library GemDB loads
+ * (`libgcits-4.0.0.Alpha1-64.dylib`). Only `gslist` disagrees, reporting a
+ * truncated `4.0.0.Alpha` — see parseGslist.
  */
-export const PINNED_ENGINE_VERSION = '3.7.5';
+export const PINNED_ENGINE_VERSION = '4.0.0.Alpha1';
 
 /**
  * GemDB manages exactly one database, with fixed names. Hiding the naming is

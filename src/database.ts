@@ -1,14 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { execFileSync } from 'child_process';
 import { STONE_NAME } from './config';
 import { log, logStep } from './log';
-import {
-  databaseExists,
-  databasePath,
-  ensureRootPath,
-  extentPath,
-  bundledExtentPath,
-} from './paths';
+import { databaseExists, databasePath, ensureRootPath, extentPath } from './paths';
 
 /**
  * Create the one database GemDB manages.
@@ -19,24 +14,10 @@ import {
  * is otherwise the same shape Jasper writes, because that is the shape the
  * engine's tooling expects to find.
  */
-/**
- * What a call to `createDatabase` actually did.
- *
- * `preloaded` is true only when this call made the database *and* made it from
- * the shipped extent — which is the one case where Grail is already filed in
- * and the stamp may be written without doing the work. "The extension ships an
- * extent" is not the same question: an upgrade finds the database already
- * there, carrying whatever Grail was filed into it before.
- */
-export interface DatabaseCreation {
-  created: boolean;
-  preloaded: boolean;
-}
-
-export function createDatabase(enginePath: string, extensionPath?: string): DatabaseCreation {
+export function createDatabase(enginePath: string): boolean {
   if (databaseExists()) {
     log(`Database already exists at ${databasePath()}`);
-    return { created: false, preloaded: false };
+    return false;
   }
 
   logStep('Creating the database');
@@ -113,19 +94,18 @@ export function createDatabase(enginePath: string, extensionPath?: string): Data
     fs.copyFileSync(defaultConf, path.join(dbPath, 'conf', 'default.conf'));
   }
 
-  const extentSource = initialExtent(enginePath, extensionPath);
-  log(
-    extentSource.preloaded
-      ? 'Copying the GemDB extent, which already contains Python support…'
-      : 'Copying the initial extent…',
-  );
-  fs.copyFileSync(extentSource.path, extentPath());
+  const stock = path.join(enginePath, 'bin', 'extent0.dbf');
+  if (!fs.existsSync(stock)) {
+    throw new Error(`The engine at ${enginePath} has no initial extent at ${stock}.`);
+  }
+  log('Copying the initial extent…');
+  fs.copyFileSync(stock, extentPath());
   // The extent ships read-only in the product tree; the engine must be able to
   // write to this copy.
   fs.chmodSync(extentPath(), 0o644);
 
   log(`Database created at ${dbPath}`);
-  return { created: true, preloaded: extentSource.preloaded };
+  return true;
 }
 
 /** Delete the database directory, extent and all. */
@@ -137,30 +117,74 @@ export function removeDatabase(): void {
 }
 
 /**
- * Which extent a new database starts from.
+ * The engine version that wrote an extent, as `copydbf -i` reports it.
  *
- * A release ships `extent/gemdb.dbf` — a database with Grail already filed in,
- * built once by `scripts/bundle-extent.sh` and tested once, so every user gets
- * the same bytes rather than running several hundred Smalltalk files through
- * topaz on their own machine.
+ * Pure, so the parsing can be tested without a database. `copydbf` prints a
+ * block of file facts; the line that matters is
  *
- * The engine's own `extent0.dbf` is the fallback, and it is not a vestige: a
- * checkout that has never run `bundle:extent` still produces a working
- * database, and `ensureRunning` files Grail into it the way it always has.
- * That path is also what a future in-place Grail upgrade will use, so it stays
- * exercised rather than rotting.
+ *     GemStone Version: 4.0.0.Alpha1, Thu Sep 10 10:46:11 2026 (branch HEAD), f0f3e55
+ *
+ * and only the part before the first comma identifies the release.
  */
-function initialExtent(
-  enginePath: string,
-  extensionPath: string | undefined,
-): { path: string; preloaded: boolean } {
-  if (extensionPath) {
-    const bundled = bundledExtentPath(extensionPath);
-    if (fs.existsSync(bundled)) return { path: bundled, preloaded: true };
+export function parseRepositoryVersion(output: string): string | undefined {
+  const match = output.match(/^\s*GemStone Version:\s*([^,\n]+)/m);
+  return match?.[1].trim();
+}
+
+/**
+ * What `copydbf -i` says about the database on disk, or undefined if it cannot
+ * say. Never throws: an unreadable extent is the engine's problem to report
+ * when it opens it, not a reason to refuse to start.
+ */
+export function repositoryVersion(enginePath: string): string | undefined {
+  if (!databaseExists()) return undefined;
+  try {
+    const output = execFileSync(path.join(enginePath, 'bin', 'copydbf'), ['-i', extentPath()], {
+      encoding: 'utf-8',
+      // A header read, not a copy. If it has not answered by now something is
+      // wrong with the file, which is exactly the case we must not hang on.
+      timeout: 30_000,
+    });
+    return parseRepositoryVersion(output);
+  } catch {
+    return undefined;
   }
-  const stock = path.join(enginePath, 'bin', 'extent0.dbf');
-  if (!fs.existsSync(stock)) {
-    throw new Error(`The engine at ${enginePath} has no initial extent at ${stock}.`);
-  }
-  return { path: stock, preloaded: false };
+}
+
+/** Raised when the database on disk was written by a different engine. */
+export class DatabaseVersionError extends Error {}
+
+/**
+ * Refuse to touch a database an older engine wrote.
+ *
+ * This exists because the failure it replaces is so much worse than an error
+ * message. Measured on 2026-09-11, moving from 3.7.5 to 4.0.0.Alpha1: the
+ * extent format is unchanged (`compatibilityLevel: 855` either way), so the
+ * 4.0 stone **starts** on a 3.7.5 repository and `gslist` reports it OK — the
+ * status bar says the database is running. Every login then fails with
+ * GemStone error 4045, "The Gem and dbf versions are incompatible", so the
+ * first notebook cell, the shell and the MCP server all fail at once with an
+ * error that names neither the cause nor the cure.
+ *
+ * There is no in-place upgrade to offer instead: 3.7.5 shipped
+ * `bin/upgradeImage`, 4.0.0.Alpha1 does not, so converting the image is not
+ * something GemDB could do on the user's behalf even if it wanted to. Saying
+ * so and stopping is the honest move, and at this stage of the product — very
+ * few users, all of them close by — losing a scratch database is the cheaper
+ * end of the trade against silently running against a repository that cannot
+ * answer.
+ *
+ * Checked before the stone starts rather than at login, because a stone that
+ * starts is what makes this confusing in the first place.
+ */
+export function assertDatabaseMatchesEngine(enginePath: string, engineVersion: string): void {
+  const repository = repositoryVersion(enginePath);
+  if (!repository || repository === engineVersion) return;
+  throw new DatabaseVersionError(
+    `The database at ${databasePath()} was created by GemStone ${repository}, ` +
+      `but this release of GemDB runs GemStone ${engineVersion}. ` +
+      'There is no in-place upgrade — GemStone 4.0 ships no upgradeImage — so the ' +
+      `database has to be recreated: delete ${databasePath()} and start GemDB again. ` +
+      'Anything stored in it is lost, so copy out whatever you still need first.',
+  );
 }

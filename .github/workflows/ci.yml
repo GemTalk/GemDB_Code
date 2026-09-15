@@ -13,7 +13,7 @@ name: CI
 # linux-arm64 — on a runner of that architecture, because the CPython shim it
 # compiles is valid only for the platform it was built on. Each leg downloads
 # the pinned engine, raises shared memory, compiles the shim, assembles the
-# MCP server payload, builds the shipped extent, runs the suite that starts a
+# MCP server payload, builds the extent the suite starts from, runs the tests that start a
 # real database, then packages that target's .vsix and checks what is inside
 # it. That last step is the one
 # release risk nothing else catches — a .vsix packages cleanly from a tree
@@ -245,14 +245,19 @@ jobs:
           MCP_REF: ${{ inputs.mcp-ref }}
         run: npm run bundle:mcp
 
-      - name: Build the shipped extent
-        run: npm run bundle:extent
+      # Not a shipped artifact: GemDB installs Grail into whatever database the
+      # user already has, so nothing here ships an extent. This one exists so
+      # the tests that need Python but are not testing the file-in do not pay
+      # for one each. Building it also proves the installer works on this
+      # platform, which is most of what it used to prove as a release artifact.
+      - name: Build the extent the suite starts from
+        run: npm run test:extent
 
       # The integration suite SKIPS itself when the engine, the payload or the
-      # extent is absent — which is right locally (a fresh checkout still has a
-      # green suite) and dangerous here, where it would report success for a
-      # suite that ran nothing. Assert the preconditions instead of trusting
-      # the exit code.
+      # test extent is absent — which is right locally (a fresh checkout still
+      # has a green suite) and dangerous here, where it would report success
+      # for a suite that ran nothing. Assert the preconditions instead of
+      # trusting the exit code.
       - name: Confirm the suite has something to run against
         env:
           ENGINE_VERSION: ${{ steps.engine.outputs.version }}
@@ -265,7 +270,7 @@ jobs:
             "$engine/sys/stoned" \
             "grail/GRAIL_VERSION" \
             "grail/prebuilt/${PLATFORM_KEY}/libcpython_ua.${LIB_EXT}" \
-            "extent/gemdb.dbf" \
+            ".test-extent/gemdb.dbf" \
             "out/gemdb-shell.js" \
             "mcp/MCP_VERSION" \
             "mcp/install.sh"
@@ -279,7 +284,7 @@ jobs:
             echo "The integration suite would skip itself rather than fail. Refusing to report a green run." >&2
             exit 1
           fi
-          echo "Engine, Grail payload, MCP payload and shipped extent are all present."
+          echo "Engine, Grail payload, MCP payload and test extent are all present."
 
       - name: Integration tests
         run: npm run test:integration
@@ -287,7 +292,7 @@ jobs:
       # Now that the artifacts exist, package this target for real and check
       # what is inside (package.sh does both, and refuses to leave a .vsix
       # unchecked). This is what CONTRIBUTING.md's release steps could not lean
-      # on before: a missing prebuilt/ directory, a stale extent, or a koffi
+      # on before: a missing prebuilt/ directory or a koffi
       # filter that stopped working. It matters more per-target than it did on
       # one platform — `vsce package --target linux-x64` succeeds just as
       # happily from a tree that has never built a Linux shim.
@@ -296,7 +301,7 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: scripts/package.sh "$TARGET"
 
-      # The shim, the extent and the bundles are what a release ships, and this
+      # The shim and the bundles are what a release ships, and this
       # is the machine that can build this target's shim. Keeping the .vsix
       # means a release can be assembled from CI artifacts rather than from
       # three developer machines. The Release workflow does exactly that: it

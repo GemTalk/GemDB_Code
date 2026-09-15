@@ -439,8 +439,8 @@ export class GciSession {
     // session-local flag, `___canonicalClassesEnabled___`, which this login
     // turned on; the flag was retired when warm binding became the only path,
     // and what is warm is now decided by what has been committed — which is
-    // exactly what the shipped extent, with gemdb deployed and its caches
-    // warmed, provides. The send survived here for a while as a caught DNU,
+    // exactly what installing Grail provides, since its last step deploys
+    // gemdb and warms its caches. The send survived here for a while as a DNU,
     // logging a failure on every single login, which is worse than nothing.
     // Record GemStone's own serial for this session, so what the extension
     // knows (which notebook owns it) can be joined to what the database knows

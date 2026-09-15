@@ -18,12 +18,12 @@ import * as vscode from 'vscode';
  * predicate. Doing the second without the first is the bug this function exists
  * to prevent.
  *
- * Intel macOS is the one Unix platform deliberately left out. The engine is
- * published for it (as `i386.Darwin`), and everything below this line spells it
- * correctly, but nobody here has a machine that can build its shim natively —
- * Apple Silicon hardware and CI runners cannot, short of cross-compiling, and a
- * cross-built shim nothing has run is exactly what this gate refuses to
- * promise.
+ * Intel macOS is out, and is not coming back. It used to be one machine away:
+ * the 3.7.x catalog published an `i386.Darwin` engine and only the shim was
+ * missing. At 4.0 the engine itself is gone — dl.gemdb.com carries
+ * `arm64.Darwin`, `arm64.Linux` and `x86_64.Linux`, and nothing for Intel
+ * macOS — so there is no build to support even if someone produced a machine
+ * to build the shim on. Treat it as unsupported rather than pending.
  *
  * Windows stays further out, and not only for the shim: its install runs a Unix
  * shell pipeline, and reaching it means routing every command through WSL as
@@ -42,15 +42,17 @@ export function isSupportedPlatform(): boolean {
 }
 
 /**
- * The catalog/product-directory key for this machine, e.g. `arm64.Darwin`.
+ * The download/product-directory key for this machine, e.g. `arm64.Darwin`.
  *
- * The engine's Darwin x86_64 build is named `i386.Darwin` for historical
- * reasons — that is the vendor's spelling, not a mistake here.
+ * Undefined on Intel macOS, which no longer has a key to spell: the engine is
+ * not published for it (see `isSupportedPlatform`), so there is no product
+ * directory it could name.
  */
 export function platformKey(): string | undefined {
-  const arch = process.arch === 'arm64' ? 'arm64' : 'x86_64';
-  if (process.platform === 'darwin') return arch === 'arm64' ? 'arm64.Darwin' : 'i386.Darwin';
-  if (process.platform === 'linux') return `${arch}.Linux`;
+  if (process.platform === 'darwin') return process.arch === 'arm64' ? 'arm64.Darwin' : undefined;
+  if (process.platform === 'linux') {
+    return `${process.arch === 'arm64' ? 'arm64' : 'x86_64'}.Linux`;
+  }
   return undefined;
 }
 
