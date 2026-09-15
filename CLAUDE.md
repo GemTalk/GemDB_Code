@@ -20,6 +20,7 @@ npm run bundle:grail       # assemble the Grail payload (needs a C toolchain)
 npm run bundle:mcp         # assemble the MCP server payload (needs nothing)
 npm run test:extent        # build the extent the integration suite starts from
 npm run package            # .vsix
+npm run hooks:uninstall    # remove the local git hooks npm install added
 scripts/install-engine.sh  # download + extract the pinned engine, no editor involved
 scripts/check-vsix.sh      # assert a packaged .vsix carries what an install needs
 ```
@@ -148,12 +149,17 @@ payload, the shim, the test extent, `out/gemdb-shell.js` (which `repl.test.ts`
 needs because it drives the shell as a real process), and the MCP payload.
 Anything new that skips on a missing artifact belongs in that list.
 
-**`bundle:grail` clones Grail's default branch**, so the integration job is
-also the early warning that a Grail change broke GemDB's installer — and it
-means a GemDB branch that depends on unmerged Grail work is red until that
-Grail PR lands. Prove it in the meantime with `workflow_dispatch` and its
-`grail-ref` input, which becomes `GRAIL_REF` for `bundle-grail.sh`.
-`bundle:mcp` does the same for the MCP server, with an `mcp-ref` input.
+**`bundle:grail` and `bundle:mcp` clone the commits pinned in `vendor-pins.sh`**, not
+upstream's default branch — so a release is reproducible from its tag, and two
+`.vsix` files built from the same GemDB sha carry the same upstream code. The
+cost, taken deliberately: this is no longer an early warning that a Grail or
+mcp_server change broke GemDB's installer, since CI no longer builds against
+upstream HEAD on every run. To check upstream deliberately, dispatch the
+workflow (Actions → CI → Run workflow) with `grail-ref: main` and/or
+`mcp-ref: main`; those become `GRAIL_REF`/`MCP_REF` for `bundle-grail.sh` and
+`bundle-mcp.sh`, which still verify everything GemDB's installer reads. Bumping
+a pin is a one-line `vendor-pins.sh` PR whose CI run is the proof the new upstream
+commit works.
 
 CI never publishes. `.github/workflows/release.yml` does, and it is dispatched
 by hand, holds at a required-reviewer gate, and **builds nothing** — it
@@ -273,8 +279,9 @@ but are not testing the file-in start from it. `grail.test.ts` still files Grail
 into a stock extent, because that is the path every real install takes.
 
 **The Grail payload is a build artifact, not source.** `grail/` is gitignored and
-produced by `scripts/bundle-grail.sh`, which clones Grail, compiles its CPython
-shim against the _pinned_ engine version, and stages the result. The shim links
+produced by `scripts/bundle-grail.sh`, which clones the Grail commit pinned in
+`vendor-pins.sh`, compiles its CPython shim against the pinned engine version (a
+different pin, in `src/config.ts`), and stages the result. The shim links
 `$GEMSTONE/lib/gciualib.o`, so it is valid only for the platform **and** the
 engine version it was built against — a mismatch installs cleanly and then
 fails at `import`. Changing `PINNED_ENGINE_VERSION` in `src/config.ts` means

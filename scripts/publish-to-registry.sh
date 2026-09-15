@@ -106,8 +106,28 @@ publish_one() {
     # loop below exited at the first failing package instead of attempting the
     # rest -- the exact opposite of what this script is for. A command on the
     # left of `||` is exempt from errexit, so nothing has to be toggled at all.
+    #
+    # `tee >(cat >&2)` rather than the obvious `tee /dev/stderr`, and the
+    # difference is a portability trap this script fell into once. `/dev/stderr`
+    # on Linux is a symlink to /proc/self/fd/2, so `tee` REOPENS whatever fd 2
+    # already refers to -- and opening a SOCKET that way fails with ENXIO, "No
+    # such device or address". Node's spawn family gives a child a socketpair
+    # for its stderr, not a pipe (measured: `stat -f %HT /dev/fd/2` inside a
+    # spawnSync'd bash answers `Socket`), so under any Node-driven caller --
+    # this script's own test suite, or a task runner -- `tee` died on Linux and
+    # wrote nothing. macOS hides it: there /dev/fd/N dups the descriptor rather
+    # than reopening what it names, so it works on a socket and the tests passed
+    # locally while CI went red.
+    #
+    # The consequence was worse than losing the streamed copy, because of the
+    # `pipefail` above: a dead `tee` exits 1, that becomes the PIPELINE's
+    # status, and every CLI outcome arrived here as 1. A clean publish was
+    # classified `FAILED` and a distinct exit status was flattened -- in the
+    # script whose entire job is telling those apart. Process substitution
+    # sidesteps it: the /dev/fd bash passes names a pipe bash itself created,
+    # which opens on both platforms.
     local output status
-    output=$("${cmd[@]}" 2>&1 | tee /dev/stderr) && status=0 || status=$?
+    output=$("${cmd[@]}" 2>&1 | tee >(cat >&2)) && status=0 || status=$?
 
     if [ "$status" -eq 0 ]; then
         echo "result: published"

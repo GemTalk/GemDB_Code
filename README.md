@@ -236,9 +236,12 @@ against the pinned engine, and stages the result under `grail/`. The compiled
 shim is specific to **both** the platform and the engine version, so a full
 release runs that script once per supported platform against the same working
 tree; each run adds its own `grail/prebuilt/<platform>/` and leaves the others
-alone. It is gitignored rather than committed, and because it is a snapshot,
-"the latest Python support" means "what was latest when the extension was
-packaged" — re-run it when cutting a release.
+alone.
+
+The payload is gitignored rather than committed, and it is a snapshot: "the
+Python support" means "the Grail commit pinned in `vendor-pins.sh` when the
+extension was packaged" — a fixed commit, not whatever was latest upstream.
+Re-run `bundle:grail` when cutting a release.
 
 Python support is *installed into* your database rather than shipped as a
 prepared one. That costs a few minutes on the first run, and it is what lets an
