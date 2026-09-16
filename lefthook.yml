@@ -1,20 +1,25 @@
 # Local git hooks. lefthook's own postinstall installs these on `npm install`
 # unless CI is set, so they are on by default; `npm run hooks:uninstall`
-# removes them and `npm run hooks:install` puts them back. CI's `checks` job
-# is the real gate either way.
+# removes them and `npm run hooks:install` puts them back.
 #
-# The glob is `src/**.ts`, not `src/**/*.ts`: lefthook's `**` matches across
-# separators but the trailing `/*.ts` then demands one, so `src/**/*.ts` would
-# silently skip every file directly under src/ — measured, not assumed.
+# The glob matches on extension rather than path so it tracks what eslint and
+# prettier actually cover. It also lists extensions this repo has none of
+# today, so a future .cjs build script is linted the day it lands rather than
+# the day someone notices. 
+#
+# `npx --no` keeps a hook from reaching the registry mid-commit: with stale
+# node_modules it fails naming the missing package instead of installing one.
+# The `--` is not optional with it — without the separator npm claims the
+# flags for itself.
 pre-commit:
   parallel: true
   jobs:
     - name: eslint
-      glob: 'src/**.ts'
-      run: npx eslint --no-warn-ignored {staged_files}
+      glob: '*.{ts,mts,cts,js,mjs,cjs}'
+      run: npx --no -- eslint --no-warn-ignored {staged_files}
     - name: prettier
-      glob: 'src/**.ts'
-      run: npx prettier --check {staged_files}
+      glob: '*.{ts,mts,cts,js,mjs,cjs}'
+      run: npx --no -- prettier --check {staged_files}
 
 post-checkout:
   jobs:
