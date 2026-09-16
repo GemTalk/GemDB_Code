@@ -22,15 +22,9 @@
 # src/config.ts and this one move together: neither is independently valid.
 PINNED_GRAIL_REF=45f03ba5fc0075a8e81662d9952ebba00c7dad6b
 
-# mcp_server: proven green on 4.0.0.Alpha1, 2026-09-15, and NOT green on
-# 4.0.0.a2 -- through no fault of this pin. On a2 the router cannot fork a
-# worker gem: GsTsExternalSession>>login fails with error 2710 (original 4136),
-# "the connection to the Stone Repository monitor was refused", because the
-# default stone NRS is hostname-qualified and a2's remote path rejects it.
-# Reproduced outside GemDB with six lines of topaz, and it goes away when the
-# stone NRS is pinned to localhost, so it is the engine's to fix and no pin here
-# can route around it. Everything else on a2 passes; only mcp.test.ts is red.
-# The previous
+# mcp_server: re-proven against 4.0.0.a2 on 2026-09-16 -- the whole integration
+# suite passes, mcp.test.ts included. The commit is unchanged from the Alpha1
+# proof on 2026-09-15; only the engine under it moved. The previous
 # pin (7b26a23, 2026-09-11) predates 0.9.0 and carries no
 # setup-read-only-user.sh, which bundle-mcp.sh names as an entry point and
 # src/mcp.ts runs to provision McpReadOnly. It also predates GemTalk/mcp_server#29,
