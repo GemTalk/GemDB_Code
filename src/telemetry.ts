@@ -67,6 +67,7 @@ const EVENT = {
   setupStarted: 'setupStarted',
   setupFinished: 'setupFinished',
   osConfigPrompted: 'osConfigPrompted',
+  databaseStarted: 'databaseStarted',
 } as const;
 type EventName = (typeof EVENT)[keyof typeof EVENT];
 
@@ -317,4 +318,47 @@ export function reportOsConfigPrompted(
   missing: OsConfigMissing,
 ): void {
   send(EVENT.osConfigPrompted, { trigger, outcome, missing });
+}
+
+export type DatabaseOutcome =
+  | 'started'
+  | 'unsupportedPlatform'
+  | 'missingPayload'
+  | 'setupCancelled'
+  | 'setupFailed'
+  | 'osConfigDeclined'
+  | 'startFailed';
+
+/** The last failure `reportDatabaseStarted` sent, so a repeat is silent. */
+let lastReportedFailure: DatabaseOutcome | undefined;
+
+/**
+ * The database came up, or didn't, on `ensureRunning` — the one path
+ * everything that needs one goes through.
+ *
+ * Bounded twice over, both load-bearing:
+ *
+ * - Sent only when `didWork` is true or the outcome is a failure. Most
+ *   `ensureRunning` calls are no-ops — every notebook cell after the first
+ *   goes through it again, with nothing left to do — and those send nothing.
+ * - A failure is sent only when it differs from the last one reported,
+ *   cleared on a successful start. Without this, a user stuck at the sudo
+ *   prompt would emit one event per cell batch — the same unbounded volume
+ *   `didWork` guards against, from the other direction.
+ */
+export function reportDatabaseStarted(
+  trigger: Trigger,
+  outcome: DatabaseOutcome,
+  filedGrail: 'no' | 'firstTime' | 'update',
+  durationMs: number,
+  didWork: boolean,
+): void {
+  if (outcome === 'started') {
+    lastReportedFailure = undefined;
+    if (!didWork) return;
+  } else {
+    if (outcome === lastReportedFailure) return;
+    lastReportedFailure = outcome;
+  }
+  send(EVENT.databaseStarted, { trigger, outcome, filedGrail }, { durationMs });
 }

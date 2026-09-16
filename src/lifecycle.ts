@@ -53,7 +53,13 @@ import {
 import { isSupportedPlatform } from './platform';
 import { logoutAll } from './session';
 import { allowAutoStart } from './autoStart';
-import { Trigger, reportSetupFinished, reportSetupStarted } from './telemetry';
+import {
+  DatabaseOutcome,
+  Trigger,
+  reportDatabaseStarted,
+  reportSetupFinished,
+  reportSetupStarted,
+} from './telemetry';
 
 /** Guard every entry point with one clear message rather than a stack trace. */
 function requireSupportedPlatform(): boolean {
@@ -286,19 +292,28 @@ export async function start(extensionPath: string): Promise<void> {
  * Returns true when the database is up and Python will run.
  */
 export async function ensureRunning(extensionPath: string, trigger: Trigger): Promise<boolean> {
+  const startedAt = Date.now();
+  const failed = (outcome: Exclude<DatabaseOutcome, 'started'>): false => {
+    reportDatabaseStarted(trigger, outcome, 'no', Date.now() - startedAt, false);
+    return false;
+  };
+
   // Asking for a running database is the clearest possible retraction of an
   // earlier "stop it". Running a cell counts: `ensureRunning` is the one path
   // to a running database, so it is the one place this belongs.
   allowAutoStart();
-  if (!requireSupportedPlatform()) return false;
-  if (!requireGrailPayload(extensionPath)) return false;
+  if (!requireSupportedPlatform()) return failed('unsupportedPlatform');
+  if (!requireGrailPayload(extensionPath)) return failed('missingPayload');
 
   // Files may still be missing if the automatic preparation was cancelled, or
   // never ran. Finishing it here is what lets a cancel be a pause: the download
   // picks up from the bytes already on disk.
   if (!isInstalled()) {
     const outcome = await runSetup(extensionPath, trigger);
-    if (outcome !== 'completed' || !isInstalled()) return false;
+    if (outcome !== 'completed') {
+      return failed(outcome === 'cancelled' ? 'setupCancelled' : 'setupFailed');
+    }
+    if (!isInstalled()) return failed('setupFailed');
   }
 
   // Staging Grail writes the shell command too, but only when the payload
@@ -314,19 +329,21 @@ export async function ensureRunning(extensionPath: string, trigger: Trigger): Pr
     log(`Could not write the gemdb command: ${errorMessage(e)}`);
   }
 
-  if (!(await ensureOsConfigured(extensionPath, trigger)).ok) return false;
+  const osResult = await ensureOsConfigured(extensionPath, trigger);
+  if (!osResult.ok) return failed('osConfigDeclined');
 
   return vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: 'Starting GemDB' },
     async (progress) => {
       try {
-        await startProcesses(progress);
+        const { startedStone, startedNetldi } = await startProcesses(progress);
 
         // Grail is filed in here rather than during preparation because it
         // needs a running database. The same branch covers the first install
         // and an extension update that ships a newer Grail — in both cases the
         // build on disk differs from the one recorded in the database.
         const firstTime = !grailInstalled();
+        let filedGrail: 'no' | 'firstTime' | 'update' = 'no';
         if (grailNeedsUpdate(extensionPath) && (firstTime || reinstallPythonOnUpdate())) {
           const stamp = bundledGrailStamp(extensionPath);
           log(
@@ -340,13 +357,16 @@ export async function ensureRunning(extensionPath: string, trigger: Trigger): Pr
           stageGrail(extensionPath);
           await installGrail(extensionPath, progress);
           recordGrailInstalled(extensionPath);
+          filedGrail = firstTime ? 'firstTime' : 'update';
         }
 
         await ensureMcpServing(extensionPath, progress);
+        const didWork = osResult.prompted || startedStone || startedNetldi || filedGrail !== 'no';
+        reportDatabaseStarted(trigger, 'started', filedGrail, Date.now() - startedAt, didWork);
         return true;
       } catch (e) {
         reportFailure('Starting GemDB', e);
-        return false;
+        return failed('startFailed');
       }
     },
   );
