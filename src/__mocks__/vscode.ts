@@ -155,6 +155,14 @@ export const window = {
   showErrorMessage(_message: string, ..._items: unknown[]): Promise<string | undefined> {
     return Promise.resolve(undefined);
   },
+  /** A terminal that records nothing and does nothing — callers only ever `show()`/`sendText()` it. */
+  createTerminal(_nameOrOptions?: unknown): {
+    show(): void;
+    sendText(text: string): void;
+    dispose(): void;
+  } {
+    return { show: () => {}, sendText: () => {}, dispose: () => {} };
+  },
   /**
    * Progress is a pass-through here: run the callback and return its result.
    * Nothing asserts on the notification itself — that is the editor's job,
@@ -310,6 +318,12 @@ export const workspace = {
       },
     };
   },
+  /** No open documents by default — `runFile` reads a saved file either way. */
+  textDocuments: [] as {
+    uri: { toString(): string };
+    isDirty: boolean;
+    save(): Promise<boolean>;
+  }[],
   onDidCloseNotebookDocument(_listener: (notebook: unknown) => void): Disposable {
     return new Disposable(() => {});
   },
