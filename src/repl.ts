@@ -4,7 +4,7 @@ import { shellQuote } from './osConfig';
 import { findNetldi, findStone } from './processes';
 import { ensureRunning } from './lifecycle';
 import { cliPath, ensureCliCurrent } from './cli';
-import { Trigger } from './telemetry';
+import { Trigger, reportPythonUsed } from './telemetry';
 
 /**
  * Make sure the database is up, starting it if it is not.
@@ -52,6 +52,7 @@ export async function openRepl(extensionPath: string): Promise<void> {
     iconPath: new vscode.ThemeIcon('symbol-namespace'),
   });
   terminal.show();
+  reportPythonUsed('shell', 'launched');
 }
 
 /**
@@ -97,4 +98,5 @@ export async function runFile(extensionPath: string, uri?: vscode.Uri): Promise<
   });
   terminal.show();
   terminal.sendText(`${shellQuote(cliPath())} ${shellQuote(target.fsPath)}`);
+  reportPythonUsed('runFile', 'launched');
 }

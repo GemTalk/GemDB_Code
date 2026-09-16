@@ -68,6 +68,7 @@ const EVENT = {
   setupFinished: 'setupFinished',
   osConfigPrompted: 'osConfigPrompted',
   databaseStarted: 'databaseStarted',
+  pythonUsed: 'pythonUsed',
 } as const;
 type EventName = (typeof EVENT)[keyof typeof EVENT];
 
@@ -81,6 +82,9 @@ let reporter: TelemetryReporter | undefined;
  * the extension host and are not repeated here.
  */
 let baseProperties: Record<string, string> = {};
+
+/** When this machine was first seen, for `pythonUsed`'s `minutesSinceFirstSeen`. */
+let firstSeenAtMs: number | undefined;
 
 const FIRST_SEEN_FILE = 'first-seen';
 
@@ -99,6 +103,12 @@ interface InstallDay {
   /** UTC date only (`YYYY-MM-DD`) — no timestamp, no path. */
   installDay: string;
   installDaySource: InstallDaySource;
+  /**
+   * The raw ISO timestamp behind `installDay`, kept only in memory —
+   * `minutesSinceFirstSeen` needs sub-day precision, and `installDay` itself
+   * is deliberately date-only so it never carries one.
+   */
+  firstSeenAt: string;
 }
 
 function utcDateOnly(iso: string): string {
@@ -124,22 +134,27 @@ export function resolveInstallDay(storageDir: string, databaseExists: boolean): 
   const firstSeenPath = path.join(storageDir, FIRST_SEEN_FILE);
   try {
     const contents = fs.readFileSync(firstSeenPath, 'utf8');
-    return { installDay: utcDateOnly(contents), installDaySource: 'firstSeen' };
+    return {
+      installDay: utcDateOnly(contents),
+      installDaySource: 'firstSeen',
+      firstSeenAt: contents,
+    };
   } catch {
     /* no first-seen file yet — resolve it below and record one */
   }
 
-  const today = utcDateOnly(new Date().toISOString());
+  const now = new Date().toISOString();
   const installDay: InstallDay = {
-    installDay: today,
+    installDay: utcDateOnly(now),
     installDaySource: databaseExists ? 'reinstall' : 'firstSeen',
+    firstSeenAt: now,
   };
 
   // Matches setup-attempted's own posture: worst case, this is offered once
   // more next activation. A failure here must never fail activation.
   try {
     fs.mkdirSync(storageDir, { recursive: true });
-    fs.writeFileSync(firstSeenPath, new Date().toISOString());
+    fs.writeFileSync(firstSeenPath, now);
   } catch {
     /* worst case it is resolved again next activation */
   }
@@ -171,10 +186,18 @@ export function initTelemetry(context: vscode.ExtensionContext, databaseExists: 
   // install — `common.extversion` is the same in both — so say which one
   // this is. Every query that reports on users has to exclude anything but
   // 'production'.
-  const { installDay, installDaySource } = resolveInstallDay(
+  const { installDay, installDaySource, firstSeenAt } = resolveInstallDay(
     context.globalStorageUri.fsPath,
     databaseExists,
   );
+  // The write in resolveInstallDay is not atomic, so a crash or a full disk
+  // during first activation can leave a zero-byte or truncated first-seen
+  // file; `new Date(...).getTime()` on that is NaN, and NaN !== undefined
+  // would slide past reportPythonUsed's guard and send NaN as a measure. Every
+  // reader gets `undefined` instead by validating once, here, rather than at
+  // each call site.
+  const parsedFirstSeenAtMs = new Date(firstSeenAt).getTime();
+  firstSeenAtMs = Number.isFinite(parsedFirstSeenAtMs) ? parsedFirstSeenAtMs : undefined;
   // `daysSinceInstall` is deliberately not sent: it is derivable at query time
   // from `installDay` and the event's own timestamp, and a dimension repeated
   // on every event forever is not free. `installDay` itself is not optional
@@ -361,4 +384,37 @@ export function reportDatabaseStarted(
     lastReportedFailure = outcome;
   }
   send(EVENT.databaseStarted, { trigger, outcome, filedGrail }, { durationMs });
+}
+
+export type Surface = 'notebook' | 'shell' | 'runFile';
+
+/** Surfaces `pythonUsed` has already reported this window. */
+const seenSurfaces = new Set<Surface>();
+
+/**
+ * Python ran, or a surface that runs it was opened — once per window per
+ * surface, at most three events total.
+ *
+ * This is the shape the design settles on deliberately, in place of a
+ * once-ever `firstPythonRun`: the funnel terminus falls out of
+ * `min(timestamp) by machineId`, retention falls out of
+ * `count(distinct day)`, and repeat usage is never discarded. No persisted
+ * marker means no gap or duplicate if global storage is lost.
+ *
+ * `evidence` says how sure this is a genuine run: `executed` means source
+ * was sent to the database and a result came back (including a Python-level
+ * error returned in band — that is still a real run); `launched` means only
+ * that a terminal was opened, which the host cannot confirm was ever typed
+ * into.
+ */
+export function reportPythonUsed(surface: Surface, evidence: 'executed' | 'launched'): void {
+  if (seenSurfaces.has(surface)) return;
+  seenSurfaces.add(surface);
+  const minutesSinceFirstSeen =
+    firstSeenAtMs !== undefined ? (Date.now() - firstSeenAtMs) / 60000 : undefined;
+  send(
+    EVENT.pythonUsed,
+    { surface, evidence },
+    minutesSinceFirstSeen !== undefined ? { minutesSinceFirstSeen } : undefined,
+  );
 }

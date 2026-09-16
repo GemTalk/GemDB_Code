@@ -8,6 +8,14 @@ import { FakeController, __controllers, __resetSettings } from '../__mocks__/vsc
 // the kernel picker — VS Code's behaviour, not worth a downloaded editor per
 // run to assert.
 
+// notebook.ts now reports pythonUsed via telemetry.ts, which imports the real
+// @vscode/extension-telemetry package — see its own mock for why that needs
+// one at all outside an extension host. Nothing under test here asserts on
+// telemetry — that is pythonUsed.test.ts's job, in its own module instance so
+// telemetry.ts's per-window `seenSurfaces` state starts empty — so this just
+// keeps the module graph loadable.
+vi.mock('@vscode/extension-telemetry');
+
 // The database and the Python are both somebody else's tests: what the
 // controller decides is when to call them, with what, and what to do with the
 // answer. Grail's own behaviour is covered against a real database in
