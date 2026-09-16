@@ -2,19 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { __resetSettings, __setSetting } from '../__mocks__/vscode';
+import { __resetSettings, __setSetting, __telemetry } from '../__mocks__/vscode';
 
 // `activate()` is synchronous, but everything after its two exits — the
 // download, the sudo prompt, autoStart — is a detached tail that must never
-// run in a unit test. These mocks keep that tail inert; see telemetry.ts's own
-// mock for why the event itself is faked rather than asserted through a real
-// reporter.
-const reportActivation = vi.fn<(durationMs: number) => void>();
-
-vi.mock('../telemetry', () => ({
-  initTelemetry: () => {},
-  reportActivation: (ms: number) => reportActivation(ms),
-}));
+// run in a unit test. These mocks keep that tail inert. `telemetry.ts` itself
+// is NOT mocked: the vscode mock's fake `env.createTelemetryLogger`, plus the
+// root-level `__mocks__/@vscode/extension-telemetry.ts`, let the real module
+// run, so this exercises real `send`, real `baseProperties` merging, and
+// real event names, recorded in `__telemetry`.
+vi.mock('@vscode/extension-telemetry');
 vi.mock('../lifecycle', () => ({
   isInstalled: () => true,
   ensureMcpRunning: async () => false,
@@ -50,6 +47,7 @@ function fakeContext(): Parameters<typeof activate>[0] {
   return {
     extensionPath: '/ext',
     extension: { packageJSON: { version: '0.0.0-test' } },
+    extensionMode: 1, // vscode.ExtensionMode.Production
     globalStorageUri: { fsPath: mkdtempSync(join(tmpdir(), 'gemdb-activation-')) },
     subscriptions: [],
     environmentVariableCollection: {
@@ -67,7 +65,6 @@ describe('activate()', () => {
 
   beforeEach(() => {
     __resetSettings();
-    reportActivation.mockClear();
     __setSetting('gemdb.rootPath', mkdtempSync(join(tmpdir(), 'gemdb-root-')));
     originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
     originalArch = Object.getOwnPropertyDescriptor(process, 'arch');
@@ -84,8 +81,9 @@ describe('activate()', () => {
 
     activate(fakeContext());
 
-    expect(reportActivation).toHaveBeenCalledTimes(1);
-    const [durationMs] = reportActivation.mock.calls[0];
+    const activated = __telemetry.filter((e) => e.name === 'activated');
+    expect(activated).toHaveLength(1);
+    const durationMs = activated[0].measurements?.activationMs;
     expect(durationMs).toBeGreaterThanOrEqual(0);
     expect(Number.isFinite(durationMs)).toBe(true);
   });
@@ -98,6 +96,6 @@ describe('activate()', () => {
 
     activate(fakeContext());
 
-    expect(reportActivation).toHaveBeenCalledTimes(1);
+    expect(__telemetry.filter((e) => e.name === 'activated')).toHaveLength(1);
   });
 });
