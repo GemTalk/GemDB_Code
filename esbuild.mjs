@@ -56,6 +56,13 @@ const common = {
   plugins: [problemMatcherPlugin],
 };
 
+/**
+ * An assertion this file makes about the build, distinct from an esbuild
+ * diagnostic — the catch block below needs to tell the two apart to know
+ * what still needs printing.
+ */
+class BuildAssertionError extends Error {}
+
 const builds = [
   {
     ...common,
@@ -77,8 +84,57 @@ const builds = [
     outfile: 'out/gemdb-shell.js',
     external: ['koffi'],
     alias: { vscode: './src/cliVscode.ts' },
+    metafile: true,
   },
 ];
+
+/**
+ * Neither telemetry.ts nor the `@vscode/extension-telemetry` package it wraps
+ * may reach the shell bundle: there is no extension host there to enforce the
+ * user's telemetry setting (see telemetry.ts). ESLint's `no-restricted-imports`
+ * catches a direct import of telemetry.ts, but not a rename, a re-export, or a
+ * facade module — checking the graph esbuild actually built catches all of
+ * those. The package check is the ultimate guard: it also catches a file that
+ * imports `@vscode/extension-telemetry` directly, bypassing telemetry.ts
+ * entirely — that package requires `vscode` itself, and constructing its
+ * reporter is exactly what would ship real events with nothing enforcing
+ * consent.
+ */
+function assertNoTelemetryInShellBundle(result) {
+  if (!result.metafile) return;
+  const inputs = Object.keys(result.metafile.inputs);
+  const reachedOwnModule = inputs.some((input) => input.endsWith('src/telemetry.ts'));
+  const reachedPackage = inputs.some((input) =>
+    input.includes('node_modules/@vscode/extension-telemetry/'),
+  );
+  if (reachedOwnModule || reachedPackage) {
+    throw new BuildAssertionError(
+      `out/gemdb-shell.js pulled in ${reachedOwnModule ? 'src/telemetry.ts' : '@vscode/extension-telemetry'}. ` +
+        "There is no extension host in the shell to enforce the user's telemetry setting — " +
+        'this must never ship.',
+    );
+  }
+}
+
+/**
+ * cliVscode.ts documents itself as deliberately tiny, on the theory that more
+ * of the editor API leaking into the CLI's import graph "reports itself
+ * through the loud failure of a missing export at bundle time". Measured: a
+ * reference to a missing export produces an `import-is-undefined` warning,
+ * and the build succeeds anyway — so without this, that comment is false.
+ * Scoped to that one warning id, and to the shell build only: other warnings
+ * (and the extension build, which has the real `vscode` module) are
+ * unaffected.
+ */
+function assertNoUndefinedShellImports(result) {
+  const undefinedImports = result.warnings.filter((w) => w.id === 'import-is-undefined');
+  if (undefinedImports.length > 0) {
+    throw new BuildAssertionError(
+      'out/gemdb-shell.js references an export cliVscode.ts does not provide. ' +
+        'See the warning above for which one.',
+    );
+  }
+}
 
 if (watch) {
   for (const options of builds) {
@@ -87,10 +143,14 @@ if (watch) {
   }
 } else {
   try {
-    await Promise.all(builds.map((options) => esbuild.build(options)));
-  } catch {
+    const [, shellResult] = await Promise.all(builds.map((options) => esbuild.build(options)));
+    assertNoTelemetryInShellBundle(shellResult);
+    assertNoUndefinedShellImports(shellResult);
+  } catch (e) {
     // esbuild has already printed the diagnostics; rethrowing would bury them
-    // under a Node stack trace that says nothing extra.
+    // under a Node stack trace that says nothing extra. A BuildAssertionError
+    // is not an esbuild diagnostic, so it still needs to be seen.
+    if (e instanceof BuildAssertionError) console.error(e.message);
     process.exit(1);
   }
 }

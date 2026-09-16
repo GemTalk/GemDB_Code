@@ -37,7 +37,7 @@ import { initTelemetry, reportActivation } from './telemetry';
 
 export function activate(context: vscode.ExtensionContext): void {
   const activationStarted = Date.now();
-  initTelemetry(context);
+  initTelemetry(context, isInstalled());
 
   const extensionPath = context.extensionPath;
   log(`GemDB ${context.extension.packageJSON.version as string} activated`);
