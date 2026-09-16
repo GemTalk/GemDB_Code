@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync } from 'fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { __resetSettings, __setSetting, __telemetry } from '../__mocks__/vscode';
+import { __resetSettings, __setSetting, __telemetry, env } from '../__mocks__/vscode';
 
 // `activate()` is synchronous, but everything after its two exits — the
 // download, the sudo prompt, autoStart — is a detached tail that must never
@@ -65,19 +65,24 @@ function fakeContext(): Parameters<typeof activate>[0] {
 describe('activate()', () => {
   let originalPlatform: PropertyDescriptor | undefined;
   let originalArch: PropertyDescriptor | undefined;
+  let rootPathValue: string;
 
   beforeEach(() => {
     __resetSettings();
-    __setSetting('gemdb.rootPath', mkdtempSync(join(tmpdir(), 'gemdb-root-')));
+    rootPathValue = mkdtempSync(join(tmpdir(), 'gemdb-root-'));
+    __setSetting('gemdb.rootPath', rootPathValue);
     originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
     originalArch = Object.getOwnPropertyDescriptor(process, 'arch');
     isInstalled.mockReset().mockReturnValue(true);
     isRunning.mockReset().mockReturnValue(false);
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    Object.defineProperty(process, 'arch', { value: 'arm64' });
   });
 
   afterEach(() => {
     if (originalPlatform) Object.defineProperty(process, 'platform', originalPlatform);
     if (originalArch) Object.defineProperty(process, 'arch', originalArch);
+    env.remoteName = undefined;
   });
 
   it('reports activation exactly once on a supported platform', async () => {
@@ -144,6 +149,78 @@ describe('activate()', () => {
 
       const [activated] = __telemetry.filter((e) => e.name === 'activated');
       expect(activated.properties.state).toBe('running');
+    });
+  });
+
+  describe('unattendedSetupSkipped', () => {
+    function skipped(): { skipReason: unknown }[] {
+      return __telemetry
+        .filter((e) => e.name === 'unattendedSetupSkipped')
+        .map((e) => ({ skipReason: e.properties.skipReason }));
+    }
+
+    it('reports alreadyInstalled without ever emitting setupStarted', () => {
+      isInstalled.mockReturnValue(true);
+
+      activate(fakeContext());
+
+      expect(skipped()).toEqual([{ skipReason: 'alreadyInstalled' }]);
+    });
+
+    it('reports remoteWindow for a remote or web window', () => {
+      isInstalled.mockReturnValue(false);
+      env.remoteName = 'wsl';
+
+      activate(fakeContext());
+
+      expect(skipped()).toEqual([{ skipReason: 'remoteWindow' }]);
+    });
+
+    it('reports markerPresent when an earlier cancel already recorded a marker', () => {
+      isInstalled.mockReturnValue(false);
+      const context = fakeContext();
+      writeFileSync(
+        join(context.globalStorageUri.fsPath, 'setup-attempted'),
+        new Date().toISOString(),
+      );
+
+      activate(context);
+
+      expect(skipped()).toEqual([{ skipReason: 'markerPresent' }]);
+    });
+
+    it('reports lockHeld when another window already owns the setup lock', async () => {
+      isInstalled.mockReturnValue(false);
+      mkdirSync(join(rootPathValue, '.gemdb-locks'), { recursive: true });
+      // A pid this test process did not spawn, but that is alive on any Unix
+      // host: process 1 is always running. Anything other than this test's
+      // own pid takes the "another window" branch instead of the "stale
+      // debris from an earlier call" one.
+      writeFileSync(join(rootPathValue, '.gemdb-setup.lock'), '1');
+
+      activate(fakeContext());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(skipped()).toEqual([{ skipReason: 'lockHeld' }]);
+    });
+
+    it('reports installedByOtherWindow when the lock re-check finds it already done', async () => {
+      // isInstalled() is called twice by activate() itself (initTelemetry,
+      // then the activated.state calculation) before prepareOnFirstRun's own
+      // outer check — both fine to answer true. The outer check must answer
+      // false to reach the lock at all; the re-check inside it must then
+      // answer true, the shape of another window finishing the whole thing
+      // while this one was waiting to acquire the lock.
+      isInstalled
+        .mockReturnValueOnce(true) // initTelemetry
+        .mockReturnValueOnce(true) // activated.state
+        .mockReturnValueOnce(false) // prepareOnFirstRun's outer check
+        .mockReturnValue(true); // the re-check inside the lock
+
+      activate(fakeContext());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(skipped()).toEqual([{ skipReason: 'installedByOtherWindow' }]);
     });
   });
 });
