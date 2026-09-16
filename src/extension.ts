@@ -29,7 +29,7 @@ import { cloneBrainFreeze } from './demo';
 import { confirmMcpEnabled, registerMcpProvider, registerWithClient } from './mcpRegistration';
 import { configureSharedMemory, ensureOsConfigured, isSharedMemoryConfigured } from './osConfig';
 import { isSupportedPlatform, setContext } from './platform';
-import { isRunning } from './processes';
+import { isRunning, isRunningAsync } from './processes';
 import { renameOwner } from './pythonQueries';
 import { openRepl, runFile } from './repl';
 import { closeSessionFor, logoutAll, setInputHandler } from './session';
@@ -289,7 +289,7 @@ export function activate(context: vscode.ExtensionContext): void {
       `GemDB does not support ${process.platform}/${process.arch} yet — ` +
         'macOS on Apple Silicon only.',
     );
-    reportActivation(Date.now() - activationStarted);
+    reportActivation(Date.now() - activationStarted, 'unsupportedPlatform');
     return;
   }
 
@@ -303,7 +303,19 @@ export function activate(context: vscode.ExtensionContext): void {
   putCliOnPath(context.environmentVariableCollection);
 
   status.refresh();
-  reportActivation(Date.now() - activationStarted);
+  // Reported off the synchronous activation path: `isRunningAsync()` spawns
+  // `gslist`, and the state it reports is not worth stalling every window's
+  // activation for. `activationMs` is still captured synchronously above, so
+  // it keeps measuring activation itself rather than this report's own cost.
+  const activationMs = Date.now() - activationStarted;
+  void (async () => {
+    const state = isInstalled()
+      ? (await isRunningAsync())
+        ? 'running'
+        : 'stopped'
+      : 'notInstalled';
+    reportActivation(activationMs, state);
+  })();
 
   void prepareOnFirstRun(context, extensionPath, () => status.refresh()).then(() =>
     autoStart(extensionPath, () => status.refresh()),
