@@ -14,7 +14,7 @@ import { engineDirName, ensureRootPath, enginePath, expectedEnginePath } from '.
  * Where the engine comes from, and why it is not the public catalog.
  *
  * GemStone's own catalog (`downloads.gemtalksystems.com/platforms/<key>/`)
- * publishes releases; 4.0.0.Alpha1 is not one, and that URL 404s for it. The
+ * publishes releases; a 4.0 alpha is not one, and that URL 404s for it. The
  * builds GemDB pins are staged at `dl.gemdb.com/<version>/` instead, which is
  * laid out by version rather than by platform — the archive names are
  * identical, so only the directory above them differs.

@@ -49,7 +49,7 @@
         "gemdb.engineVersion": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Advanced: override the pinned database engine version (e.g. `4.0.0.Alpha1`). Leave empty to use the version this release of GemDB Code was built and tested against. A version that is not published at dl.gemdb.com cannot be downloaded — it must already be present under the root path."
+          "markdownDescription": "Advanced: override the pinned database engine version (e.g. `4.0.0.a2`). Leave empty to use the version this release of GemDB Code was built and tested against. A version that is not published at dl.gemdb.com cannot be downloaded — it must already be present under the root path."
         },
         "gemdb.reinstallPythonOnUpdate": {
           "type": "boolean",

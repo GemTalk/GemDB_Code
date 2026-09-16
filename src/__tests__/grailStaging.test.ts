@@ -28,7 +28,7 @@ import { expectedEnginePath, grailPath, grailStampPath, installedGrailStamp } fr
 let root: string;
 let ext: string;
 
-const BUNDLED = 'grail=0.1-2172-gabc\ncommit=abc\nengine=4.0.0.Alpha1\n';
+const BUNDLED = 'grail=0.1-2172-gabc\ncommit=abc\nengine=4.0.0.a2\n';
 
 /** A stand-in extension directory carrying a Grail payload. */
 function makeExtensionDir(stamp: string): string {

@@ -11,7 +11,10 @@
 # Bumping a pin is a one-line PR to this file; a green CI run on it is the
 # proof the new upstream commit works.
 
-# Grail: proven green on the 4.0.0.Alpha1 move, 2026-09-15. The previous pin
+# Grail: re-proven against 4.0.0.a2 on 2026-09-16 -- the shim builds, the
+# payload stages, and every Python path in the integration suite passes. The
+# commit is unchanged from the Alpha1 proof on 2026-09-15; only the engine under
+# it moved. The previous pin
 # (50468c7, 2026-09-11) cannot build this tree at all -- it predates Grail's
 # 4.0-only installer, so it carries no scripts/kernel_class_extensions.gs and
 # bundle-grail.sh stops on its own REQUIRED check. Grail dropped 3.7.x on
@@ -19,7 +22,15 @@
 # src/config.ts and this one move together: neither is independently valid.
 PINNED_GRAIL_REF=45f03ba5fc0075a8e81662d9952ebba00c7dad6b
 
-# mcp_server: proven green on the 4.0.0.Alpha1 move, 2026-09-15. The previous
+# mcp_server: proven green on 4.0.0.Alpha1, 2026-09-15, and NOT green on
+# 4.0.0.a2 -- through no fault of this pin. On a2 the router cannot fork a
+# worker gem: GsTsExternalSession>>login fails with error 2710 (original 4136),
+# "the connection to the Stone Repository monitor was refused", because the
+# default stone NRS is hostname-qualified and a2's remote path rejects it.
+# Reproduced outside GemDB with six lines of topaz, and it goes away when the
+# stone NRS is pinned to localhost, so it is the engine's to fix and no pin here
+# can route around it. Everything else on a2 passes; only mcp.test.ts is red.
+# The previous
 # pin (7b26a23, 2026-09-11) predates 0.9.0 and carries no
 # setup-read-only-user.sh, which bundle-mcp.sh names as an entry point and
 # src/mcp.ts runs to provision McpReadOnly. It also predates GemTalk/mcp_server#29,

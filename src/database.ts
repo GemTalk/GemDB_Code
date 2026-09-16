@@ -122,7 +122,7 @@ export function removeDatabase(): void {
  * Pure, so the parsing can be tested without a database. `copydbf` prints a
  * block of file facts; the line that matters is
  *
- *     GemStone Version: 4.0.0.Alpha1, Thu Sep 10 10:46:11 2026 (branch HEAD), f0f3e55
+ *     GemStone Version: 4.0.0.a2, Tue Sep 15 12:05:05 2026 (branch HEAD), 0fa9b443
  *
  * and only the part before the first comma identifies the release.
  */
@@ -166,9 +166,17 @@ export class DatabaseVersionError extends Error {}
  * first notebook cell, the shell and the MCP server all fail at once with an
  * error that names neither the cause nor the cure.
  *
+ * The same holds one alpha to the next, and that is the case a user actually
+ * meets now: measured 2026-09-16, an Alpha1 extent still reads
+ * `compatibilityLevel: 855` under the a2 engine, so the a2 stone starts on it
+ * and every login fails exactly as above. Alpha1 was withdrawn from the
+ * catalog the same day a2 arrived, so every existing database is on the far
+ * side of this guard.
+ *
  * There is no in-place upgrade to offer instead: 3.7.5 shipped
- * `bin/upgradeImage`, 4.0.0.Alpha1 does not, so converting the image is not
- * something GemDB could do on the user's behalf even if it wanted to. Saying
+ * `bin/upgradeImage`, and no 4.0 alpha ships one (checked again on a2), so
+ * converting the image is not something GemDB could do on the user's behalf
+ * even if it wanted to. Saying
  * so and stopping is the honest move, and at this stage of the product — very
  * few users, all of them close by — losing a scratch database is the cheaper
  * end of the trade against silently running against a repository that cannot

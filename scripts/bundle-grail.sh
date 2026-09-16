@@ -75,7 +75,7 @@ if [ ! -d "$GEMSTONE" ]; then
     echo "  Install GemDB once (which downloads it), or set GEMSTONE explicitly." >&2
     exit 1
 fi
-# The full version, not a three-part prefix: the pin is `4.0.0.Alpha1`, and a
+# The full version, not a three-part prefix: the pin is `4.0.0.a2`, and a
 # `[0-9]+\.[0-9]+\.[0-9]+` match answers `4.0.0`, which then never equals the
 # pin and fails every build. Line 2 of version.txt begins with exactly the
 # string that names the product directory and the GCI library.

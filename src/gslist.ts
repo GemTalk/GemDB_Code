@@ -22,25 +22,32 @@ export interface EngineProcess {
  *
  * A data row is `{status} {version} {owner} {pid} {port} {date} {type} {name}`:
  *
- *     OK           4.0.0.Alpha jfoster      56970 65107 Sep 11 16:46 Stone   gemdb
- *     exe deleted  4.0.0.Alpha jfoster      56992 65112 Sep 11 16:46 Netldi  gemdbldi
+ *     exists       4.0.0.a2  jfoster      64458 53809 Sep 16 06:17 Stone   gemdb
+ *     exe deleted  4.0.0.a2  jfoster      64464 53807 Sep 16 06:17 Netldi  gemdbldi
  *
  * Status is usually one word but can be two (`exe deleted`), so the first
  * capture is non-greedy and the match anchors on the version, which always
  * starts with a digit.
  *
  * **The version is not always digits and dots, and that cost a whole release
- * once.** `gslist` reports `4.0.0.Alpha`, not `4.0.0.Alpha1` — the version is
- * truncated to eleven characters before it is ever formatted (its own row
- * format is `%-9s`, a minimum width, so printf is not the culprit; the lock
- * file's version field is). Measured against a live 4.0.0.Alpha1 stone on
- * 2026-09-11, and reported upstream. An earlier version of this pattern
- * matched `[\d.]*`, which cannot match `4.0.0.Alpha` at all — so every Stone
+ * once.** An earlier version of this pattern matched `[\d.]*`, so every Stone
  * and Netldi row was silently dropped, `findStone()` answered undefined
  * forever, the status bar read "stopped" over a running database, and every
- * login failed with "GemDB is not running." Nothing consumes the version
- * field, so accepting whatever the engine prints costs nothing and matching it
- * narrowly costs everything.
+ * login failed with "GemDB is not running." `4.0.0.a2` does not match
+ * `[\d.]*` either, so the current pin would break it just as thoroughly.
+ *
+ * The version can also be TRUNCATED, which is worth keeping in mind even
+ * though the current pin does not show it. `gslist` reported `4.0.0.Alpha` for
+ * a `4.0.0.Alpha1` stone — eleven characters, cut before the row is ever
+ * formatted (its own format is `%-9s`, a minimum width, so printf is not the
+ * culprit; the lock file's fixed `char version[12]` is). Measured against a
+ * live Alpha1 stone on 2026-09-11 and reported upstream; `4.0.0.a2` is eight
+ * characters and so arrives whole, measured 2026-09-16. Both shapes are in the
+ * tests, because the pin that hides the truncation today is not the pin
+ * forever.
+ *
+ * Nothing consumes the version field, so accepting whatever the engine prints
+ * costs nothing and matching it narrowly costs everything.
  *
  * Rows that are neither a Stone nor a Netldi — the shared page cache gets its
  * own row — do not match and are skipped, as are the header and separator

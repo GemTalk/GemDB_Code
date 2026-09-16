@@ -398,9 +398,17 @@ and then every login fails with GemStone error 4045, "The Gem and dbf versions
 are incompatible". The first notebook cell, the shell and the MCP server all
 break at once with an error naming neither cause nor cure.
 
-There is no upgrade to offer instead: 3.7.5 shipped `bin/upgradeImage`,
-4.0.0.Alpha1 ships none, so converting the image is not something GemDB could
-do on a user's behalf. The guard reads the repository's version with
+**One alpha to the next is the same story, and it is the one users actually
+meet.** 4.0.0.Alpha1 was withdrawn from the catalog on 2026-09-16, the day
+4.0.0.a2 replaced it, so every database in the field was written by an engine
+that can no longer be downloaded. Measured that day: an Alpha1 extent still
+reads `compatibilityLevel: 855` under a2, so the a2 stone starts on it and only
+the logins fail. The guard is what turns that into a sentence.
+
+There is no upgrade to offer instead: 3.7.5 shipped `bin/upgradeImage`, and no
+4.0 alpha ships one (checked again on a2), so converting the image is not
+something GemDB could do on a user's behalf. The guard reads the repository's
+version with
 `copydbf -i` and refuses, naming both versions and the directory to delete.
 Checked in two places, and both are needed: `prepareFiles`, which is the
 first-install path, and `startProcesses` before the stone starts, because an
@@ -615,7 +623,7 @@ scripts that print which behaviour the Grail in front of you has.
 **`gemdb file.py` starts with a dirty session, so `gemdb.transaction()` cannot
 be a script's first statement.** Measured 2026-08-23 against the payload of
 that date, before Grail retired the canonical-modules flag. **Not re-measured
-since the move to 4.0.0.Alpha1 and Grail `0319048`**, where the installer's
+since the move to the 4.0 alphas and Grail `0319048`**, where the installer's
 last step now deploys `gemdb` — which is exactly what makes the notebook and
 shell sessions clean, and may well have changed this too. The advice below is
 cheap either way (`commit()` or `abort()` first), but treat the finding as

@@ -39,7 +39,7 @@ The two flags are the only decisions:
   forgot this flag would install cleanly and quietly hand an agent the wrong
   server.
 - **`--no-auth`** leaves out the OAuth/OIDC front end. The pinned engine
-  (4.0.0.Alpha1) *can* compile it, so this is a choice: `McpAuthRouter` exists for a
+  (a 4.0 alpha) *can* compile it, so this is a choice: `McpAuthRouter` exists for a
   port reachable from another host, which is Jasper's territory. Nothing in
   GemDB can start it, so shipping it would file code into every user's database
   that nothing can reach.
