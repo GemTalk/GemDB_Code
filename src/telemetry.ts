@@ -63,6 +63,7 @@ const CONNECTION_STRING =
  */
 const EVENT = {
   activated: 'activated',
+  unattendedSetupSkipped: 'unattendedSetupSkipped',
 } as const;
 type EventName = (typeof EVENT)[keyof typeof EVENT];
 
@@ -230,4 +231,21 @@ function send(
  */
 export function reportActivation(durationMs: number, state: GemDbState): void {
   send(EVENT.activated, { state }, { activationMs: durationMs });
+}
+
+/** Why the unattended first-run setup at activation did not run. */
+export type SkipReason =
+  'alreadyInstalled' | 'remoteWindow' | 'markerPresent' | 'lockHeld' | 'installedByOtherWindow';
+
+/**
+ * The unattended pass at activation bailed out before setup ran.
+ *
+ * Emitted only when it skips — the case where it runs instead is
+ * `setupStarted{trigger: firstRun}`, and emitting both would double-count the
+ * same activation. `markerPresent` is the highest-value reason here: it is
+ * exactly "this user is stuck behind their own earlier cancel", and it is
+ * invisible today.
+ */
+export function reportUnattendedSetupSkipped(skipReason: SkipReason): void {
+  send(EVENT.unattendedSetupSkipped, { skipReason });
 }

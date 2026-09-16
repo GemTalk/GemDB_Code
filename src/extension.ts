@@ -34,7 +34,7 @@ import { openRepl, runFile } from './repl';
 import { closeSessionFor, logoutAll, setInputHandler } from './session';
 import { GemDbStatusBar } from './statusBar';
 import { StatusViewProvider } from './statusView';
-import { initTelemetry, reportActivation } from './telemetry';
+import { initTelemetry, reportActivation, reportUnattendedSetupSkipped } from './telemetry';
 
 export function activate(context: vscode.ExtensionContext): void {
   const activationStarted = Date.now();
@@ -341,19 +341,30 @@ async function prepareOnFirstRun(
   extensionPath: string,
   refresh: () => void,
 ): Promise<void> {
-  if (isInstalled()) return;
+  if (isInstalled()) {
+    reportUnattendedSetupSkipped('alreadyInstalled');
+    return;
+  }
 
   // A remote or web window shares the marketplace install but not the machine
   // GemDB would be setting up. Only a local desktop window should act.
-  if (vscode.env.remoteName !== undefined || vscode.env.uiKind !== vscode.UIKind.Desktop) return;
+  if (vscode.env.remoteName !== undefined || vscode.env.uiKind !== vscode.UIKind.Desktop) {
+    reportUnattendedSetupSkipped('remoteWindow');
+    return;
+  }
 
   const marker = path.join(context.globalStorageUri.fsPath, 'setup-attempted');
-  if (fs.existsSync(marker)) return;
+  if (fs.existsSync(marker)) {
+    reportUnattendedSetupSkipped('markerPresent');
+    return;
+  }
 
   const outcome = await withSetupLock(async () => {
     // Re-check inside the lock: another window may have finished the whole
     // thing while this one was waiting to acquire it.
-    if (isInstalled()) return { prepared: true, configured: await isSharedMemoryConfigured() };
+    if (isInstalled()) {
+      return { prepared: true, configured: await isSharedMemoryConfigured(), ranSetup: false };
+    }
     log('First run: preparing GemDB. This downloads about 210 MB and uses about 820 MB of disk.');
 
     // The download and the permission prompt run side by side, deliberately.
@@ -378,9 +389,13 @@ async function prepareOnFirstRun(
       prompted: false,
     }));
     const [prepared, osResult] = await Promise.all([files, os]);
-    return { prepared, configured: osResult.ok };
+    return { prepared, configured: osResult.ok, ranSetup: true };
   });
-  if (outcome === undefined) return; // another window is doing it
+  if (outcome === undefined) {
+    reportUnattendedSetupSkipped('lockHeld');
+    return; // another window is doing it
+  }
+  if (!outcome.ranSetup) reportUnattendedSetupSkipped('installedByOtherWindow');
 
   // Recorded whether it succeeded or was cancelled — either way this machine
   // has been offered setup, and a cancel is a decision to be respected.
