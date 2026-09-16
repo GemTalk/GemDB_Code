@@ -84,7 +84,7 @@ export class GemDbNotebookController {
     // Running a cell is a request to run Python, and Python only runs inside
     // the database — so start it rather than asking. Done once for the whole
     // batch, before any cell reports a spurious failure.
-    if (!(await ensureRunning(this.extensionPath))) {
+    if (!(await ensureRunning(this.extensionPath, 'notebook'))) {
       for (const cell of cells)
         this.failCell(cell, 'GemDB is not running, so the cell was not run.');
       return;

@@ -4,6 +4,7 @@ import { execFile } from 'child_process';
 import * as vscode from 'vscode';
 import { REQUIRED_SHARED_MEMORY_GB } from './config';
 import { log } from './log';
+import { Trigger } from './telemetry';
 
 /**
  * Operating-system prerequisites for running the database engine.
@@ -131,10 +132,14 @@ export function isRemoveIpcConfigured(): boolean {
  * `sudo` — we refuse rather than let the start fail with an error about
  * segment allocation that means nothing to a new developer.
  */
-export async function ensureOsConfigured(extensionPath: string): Promise<boolean> {
+export async function ensureOsConfigured(
+  extensionPath: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- threaded through for Task 7
+  trigger: Trigger,
+): Promise<{ ok: boolean; prompted: boolean }> {
   const sharedMemoryOk = await isSharedMemoryConfigured();
   const removeIpcOk = isRemoveIpcConfigured();
-  if (sharedMemoryOk && removeIpcOk) return true;
+  if (sharedMemoryOk && removeIpcOk) return { ok: true, prompted: false };
 
   const steps: string[] = [];
   if (!sharedMemoryOk) {
@@ -159,7 +164,7 @@ export async function ensureOsConfigured(extensionPath: string): Promise<boolean
     { modal: true },
     'Configure',
   );
-  if (choice !== 'Configure') return false;
+  if (choice !== 'Configure') return { ok: false, prompted: true };
 
   if (!sharedMemoryOk) {
     await runSetupScript(
@@ -175,7 +180,7 @@ export async function ensureOsConfigured(extensionPath: string): Promise<boolean
         `Shared memory is still below ${REQUIRED_SHARED_MEMORY_GB} GB, so GemDB did not start. ` +
           'Run "GemDB: Configure Shared Memory" and try again.',
       );
-      return false;
+      return { ok: false, prompted: true };
     }
     log('Shared memory configured');
   }
@@ -192,10 +197,15 @@ export async function ensureOsConfigured(extensionPath: string): Promise<boolean
     }
   }
 
-  return true;
+  return { ok: true, prompted: true };
 }
 
-/** Open the shared-memory setup on its own, from the command palette. */
+/**
+ * Open the shared-memory setup on its own, from the command palette.
+ *
+ * Re-probes afterwards, unlike the script run alone: run this way, nothing
+ * else tells the user whether it worked.
+ */
 export async function configureSharedMemory(extensionPath: string): Promise<void> {
   await runSetupScript(
     SHARED_MEMORY_TERMINAL,
@@ -205,6 +215,13 @@ export async function configureSharedMemory(extensionPath: string): Promise<void
       process.platform === 'linux' ? 'setSharedMemoryLinux.sh' : 'setSharedMemoryDarwin.sh',
     ),
   );
+  if (await isSharedMemoryConfigured()) {
+    void vscode.window.showInformationMessage('Shared memory configured.');
+  } else {
+    void vscode.window.showErrorMessage(
+      `Shared memory is still below ${REQUIRED_SHARED_MEMORY_GB} GB.`,
+    );
+  }
 }
 
 /**
