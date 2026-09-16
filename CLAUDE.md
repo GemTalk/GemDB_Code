@@ -12,6 +12,7 @@ npm install
 npm run typecheck          # tsc --noEmit
 npm run typecheck:strict   # extra checks the first-party code is held to
 npm run lint
+npm run lint:toolchain     # guards against `tsc` silently resolving to the wrong TypeScript
 npm run format:check
 npm test                   # unit tests, mocked, milliseconds
 npm run test:integration   # a real database in a temp root path; seconds

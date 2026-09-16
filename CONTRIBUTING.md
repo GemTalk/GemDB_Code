@@ -30,6 +30,7 @@ engine that is already there alone.
 npm run typecheck          # tsc --noEmit
 npm run typecheck:strict   # extra checks the first-party code is held to
 npm run lint
+npm run lint:toolchain     # guards against `tsc` silently resolving to the wrong TypeScript
 npm run format:check
 npm test                   # unit tests, mocked, milliseconds
 npm run test:integration   # a real database in a temp root path; seconds
@@ -74,7 +75,7 @@ request, on pushes to `main`, and on demand. Two jobs:
 
 | Job | Where | What it covers |
 | --- | --- | --- |
-| `checks` | Linux, ~2 min | lint, format, both typechecks, the unit suite, and that `vsce` can still package |
+| `checks` | Linux, ~2 min | lint, the toolchain guard, format, both typechecks, the unit suite, and that `vsce` can still package |
 | `integration` | one leg per shipped target — `macos-15`, `ubuntu-latest`, `ubuntu-24.04-arm`; ~3 min each, in parallel | installs the pinned engine, raises shared memory, builds the Grail payload and the extent the suite starts from, runs the integration suite, then packages that target's `.vsix` and checks what is inside it |
 
 Every target is built and tested on a machine of its own architecture, because
