@@ -2,13 +2,17 @@ import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { engineVersion, mcpEnabled, reinstallPythonOnUpdate, rootPath } from './config';
 import { writeCliScripts } from './cli';
-import { createDatabase, removeDatabase } from './database';
+import {
+  assertDatabaseMatchesEngine,
+  createDatabase,
+  DatabaseVersionError,
+  removeDatabase,
+} from './database';
 import { Progress, installEngine, removeEngine } from './engine';
 import {
   grailLabel,
   grailNeedsUpdate,
   recordGrailInstalled,
-  stageAndRecordGrail,
   installGrail,
   stageGrail,
   bundledGrailStamp,
@@ -54,8 +58,8 @@ import { allowAutoStart } from './autoStart';
 function requireSupportedPlatform(): boolean {
   if (isSupportedPlatform()) return true;
   void vscode.window.showErrorMessage(
-    'GemDB runs on macOS with Apple Silicon. Intel Macs, Linux, and Windows are planned ' +
-      'but not available yet.',
+    'GemDB runs on macOS with Apple Silicon, and on Linux (x64 or arm64). ' +
+      'Intel Macs and Windows are not supported.',
   );
   return false;
 }
@@ -91,17 +95,16 @@ async function prepareFiles(
   const engine = await installEngine(progress, token);
   if (token.isCancellationRequested) return;
 
-  progress.report({ message: 'Creating your database…' });
-  const database = createDatabase(engine, extensionPath);
+  // Before anything is created or copied: a database an older engine wrote
+  // cannot be used by this one, and the engine will not say so until a login
+  // fails. See assertDatabaseMatchesEngine.
+  assertDatabaseMatchesEngine(engine, engineVersion());
 
-  // Stage Grail, then — only if this run made the database from the shipped
-  // extent — record that it is already filed in, saving the several minutes
-  // `ensureRunning` would otherwise spend filing it in on first use. The order
-  // matters and the reasons are in stageAndRecordGrail; so does the condition,
-  // which asks what this call did rather than what the extension ships, since
-  // an upgrade finds a database carrying whatever Grail it was built with.
+  progress.report({ message: 'Creating your database…' });
+  createDatabase(engine);
+
   progress.report({ message: 'Preparing Python support…' });
-  stageAndRecordGrail(extensionPath, database.created && database.preloaded);
+  stageGrail(extensionPath);
 }
 
 /** Guard against a build that forgot to run `npm run bundle:grail`. */
@@ -230,6 +233,20 @@ export async function prepare(extensionPath: string): Promise<boolean> {
 /** Log a failure and offer the log, in the one shape every step uses. */
 function reportFailure(what: string, e: unknown): void {
   log(`\n${what} failed: ${errorMessage(e)}`);
+
+  // A database the engine cannot read is not a step that failed — it is a
+  // decision waiting on the user, and it needs the whole message rather than
+  // one prefixed by whatever GemDB happened to be doing. Modal, because it
+  // asks for something (deleting a directory) and a toast that expires
+  // unanswered leaves GemDB apparently broken for no stated reason.
+  if (e instanceof DatabaseVersionError) {
+    void vscode.window.showErrorMessage('GemDB cannot use this database', {
+      modal: true,
+      detail: e.message,
+    });
+    return;
+  }
+
   void vscode.window
     .showErrorMessage(`${what} failed: ${errorMessage(e)}`, 'Show Log')
     .then((choice) => {
@@ -411,6 +428,13 @@ export async function ensureMcpRunning(extensionPath: string): Promise<boolean> 
 async function startProcesses(progress?: vscode.Progress<{ message?: string }>): Promise<void> {
   const running = listProcesses();
   if (!findStone(running)) {
+    // Checked here as well as in `prepareFiles`, because an extension update
+    // reaches this line without going through preparation at all: the engine
+    // is downloaded, the database exists, Grail is staged, so `isInstalled()`
+    // is true and the first thing that happens is a stone starting on a
+    // repository the new engine cannot read.
+    const engine = enginePath();
+    if (engine) assertDatabaseMatchesEngine(engine, engineVersion());
     progress?.report({ message: 'Starting the database…' });
     await startStone();
   } else {

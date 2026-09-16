@@ -1,12 +1,22 @@
 #!/bin/bash
-# Build the extent GemDB ships: a database with Grail already filed in.
+# Build the extent the INTEGRATION SUITE starts from: a database with Grail
+# already filed in.
 #
-#   npm run bundle:extent        (after npm run bundle:grail)
+#   npm run test:extent        (after npm run bundle:grail)
 #
-# Every user's database starts as a byte-for-byte copy of what this produces,
-# so the file-in runs once here, on a machine we control, rather than several
-# hundred Smalltalk files through topaz on each user's machine. That turns a
-# per-install risk into a per-release one, which is the trade this exists for.
+# A test artifact, and only that. GemDB deliberately ships no extent: a user's
+# database is theirs, and it accumulates their data, so Grail and the MCP
+# server have to be installed INTO whatever database is already there and
+# upgraded in place. Shipping a prepared extent would make the first install
+# faster and every upgrade afterwards a different, less-tested path -- and the
+# one it skipped is the one that has to work for the life of the database.
+#
+# What that costs is minutes of topaz per file-in, which is worth paying once
+# per user and not worth paying once per integration test file. So the suite
+# builds this, and the tests that need Python but are not testing the file-in
+# start from it (see testExtentPath in src/__integration__/fixture.ts).
+# `grail.test.ts` still files Grail into a stock extent, because that is the
+# path every real install takes.
 #
 # The result is one file for every platform: extents are portable across
 # GemStone's supported platforms at a given version, unlike the CPython shim,
@@ -17,16 +27,12 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEST="$REPO/extent"
+DEST="$REPO/.test-extent"
 VERSION="$(sed -nE "s/^export const PINNED_ENGINE_VERSION = '(.+)';$/\1/p" "$REPO/src/config.ts")"
 [ -n "$VERSION" ] || { echo "ERROR: could not read PINNED_ENGINE_VERSION from src/config.ts" >&2; exit 1; }
 
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) PLATFORM="arm64.Darwin" ;;
-  # `i386.Darwin` is the vendor's spelling for the 64-bit Intel build, and it
-  # is what platformKey() and bundle-grail.sh use. There is no
-  # `x86_64.Darwin` engine directory to find.
-  Darwin-x86_64) PLATFORM="i386.Darwin" ;;
   Linux-aarch64) PLATFORM="arm64.Linux" ;;
   Linux-x86_64) PLATFORM="x86_64.Linux" ;;
   *) echo "ERROR: unsupported platform $(uname -s)-$(uname -m)" >&2; exit 1 ;;

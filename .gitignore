@@ -19,8 +19,10 @@ grail/
 # but it is still the mcp_server repository's code, not this one's.
 mcp/
 
-# The preloaded extent is a build artifact of scripts/bundle-extent.sh.
-extent/
+# The extent the integration suite starts from, built by
+# scripts/build-test-extent.sh. A TEST artifact: no extent is shipped, because
+# a user's database is theirs and Grail is installed into it.
+.test-extent/
 
 # Release packages downloaded from CI by scripts/fetch-vsix.sh. Built
 # elsewhere, published from here, kept nowhere.

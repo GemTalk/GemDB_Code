@@ -50,8 +50,14 @@ fi
 
 case "$(uname -s)" in
     Darwin)
+        # arm64 only: no 4.0 engine is published for Intel macOS, so there is
+        # nothing to build a shim against even where a machine exists.
         SHARED_EXT=dylib
-        [ "$(uname -m)" = "arm64" ] && PLATFORM_KEY=arm64.Darwin || PLATFORM_KEY=i386.Darwin
+        if [ "$(uname -m)" != "arm64" ]; then
+            echo "ERROR: Intel macOS is not supported -- no engine is published for it." >&2
+            exit 1
+        fi
+        PLATFORM_KEY=arm64.Darwin
         ;;
     Linux)
         SHARED_EXT=so
@@ -69,7 +75,11 @@ if [ ! -d "$GEMSTONE" ]; then
     echo "  Install GemDB once (which downloads it), or set GEMSTONE explicitly." >&2
     exit 1
 fi
-ACTUAL_VERSION=$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' "$GEMSTONE/version.txt" 2>/dev/null | head -1 || true)
+# The full version, not a three-part prefix: the pin is `4.0.0.a2`, and a
+# `[0-9]+\.[0-9]+\.[0-9]+` match answers `4.0.0`, which then never equals the
+# pin and fails every build. Line 2 of version.txt begins with exactly the
+# string that names the product directory and the GCI library.
+ACTUAL_VERSION=$(awk 'NR==2 {print $1}' "$GEMSTONE/version.txt" 2>/dev/null || true)
 if [ "$ACTUAL_VERSION" != "$PINNED_ENGINE_VERSION" ]; then
     echo "ERROR: \$GEMSTONE is version $ACTUAL_VERSION but GemDB pins $PINNED_ENGINE_VERSION." >&2
     echo "  A shim built against the wrong engine fails at run time, not install time." >&2
@@ -127,10 +137,11 @@ echo "Grail commit: $GRAIL_COMMIT ($GRAIL_DESCRIBE)"
 # has to fail here -- at package time, where someone is watching -- rather than
 # on a new developer's first run.
 REQUIRED=(
+    install_base.sh
     src/smalltalk/install.gs
-    scripts/session_methods_env1_base_37.gs
-    scripts/install_base37.gs
-    scripts/install_base40.gs
+    scripts/check_base_installed.gs
+    scripts/kernel_class_extensions.gs
+    scripts/deployGemdb.gs
     scripts/set_base_marker.gs
     scripts/setUnicodeMode.sh
     scripts/grail.tpz
@@ -181,7 +192,10 @@ mkdir -p "$DEST"
 cp -R "$SRC/src" "$DEST/src"
 rm -rf "$DEST/src/c"
 cp -R "$SRC/scripts" "$DEST/scripts"
-for item in LICENSE README.md; do
+# install_base.sh is at Grail's top level, and GemDB's installer shells out to
+# it for the once-per-extent SystemUser steps -- so it has to travel with the
+# payload like the scripts/ directory does.
+for item in install_base.sh LICENSE README.md; do
     [ -e "$SRC/$item" ] && cp "$SRC/$item" "$DEST/$item"
 done
 find "$DEST" \( -name '*.o' -o -name '*.out' -o -name '__pycache__' \) -exec rm -rf {} + 2>/dev/null || true

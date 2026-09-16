@@ -13,6 +13,22 @@ Status: **design notes, nothing implemented.** Claims are marked as measured
 where they were checked on 2026-08-22 against the 3.7.5 kits and this
 repository, and as unverified where they still need a Windows machine.
 
+**Re-checked on 2026-09-16 against 4.0.0.a2**, where GemDB's pin now sits
+(first checked on 2026-09-12 against 4.0.0.Alpha1, which the catalog has since
+withdrawn). Nothing below changes in kind — there is still no Windows server,
+and there is still a Windows client kit — but three details moved. The kits
+come from `dl.gemdb.com/<version>/` rather than the public catalog, so every
+URL here names a host that does not carry 4.0. The client is
+`GemStone64BitClient4.0.0.a2-x86.Windows_NT.zip` (32.7 MB), carrying
+`libgcits-4.0.0.a2-64.dll`. And Intel macOS, which this document treats as a
+beneficiary of the same work, no longer has an engine published at all — so the
+Docker and remote-server options below are the *only* routes to it, not a
+shortcut past a missing shim.
+
+**The catalog keeps one alpha at a time**, so a version named here is a
+snapshot: `4.0.0.Alpha1` 404s today. Read the names below as "the kit of the
+pinned version", not as URLs to paste.
+
 ## What is actually platform-specific
 
 Very little, and knowing exactly which little is what makes this tractable.
@@ -20,11 +36,10 @@ Very little, and knowing exactly which little is what makes this tractable.
 | Component | Portable? |
 | --- | --- |
 | `out/*.js`, the extension and shell bundles | Yes — plain JS |
-| `extent/gemdb.dbf` | Yes — extents are portable across platforms at a given engine version |
 | Grail's Python sources | Yes |
 | koffi | Prebuilt by upstream for 18 platforms, including `win32_x64` (measured) |
 | **Grail's CPython shim** | **No** — compiled against one engine version on one platform |
-| **The engine itself** | **No server build exists for Windows** (measured: the catalog 404s for `i386.Windows_NT` and `x86_64.Windows_NT` at 3.7.5) |
+| **The engine itself** | **No server build exists for Windows** (measured: the catalog 404s for `i386.Windows_NT` and `x86_64.Windows_NT` at 3.7.5; at 4.0 only a *client* is published for Windows) |
 
 The shim matters less than it first appears: it loads **gem-side**, inside the
 database process. Wherever the server runs, the shim is that platform's shim,
@@ -190,9 +205,10 @@ Baking the engine into a published image inverts that: we become the
 distributor, and a `docker pull` presents nobody with a license. GemTalk owns
 GemStone, so this is a decision GemTalk can make — but it should be a decision,
 with a NOTICE rewrite and probably an acceptance step, not a side effect of
-writing a Dockerfile. (The line is already less absolute than it reads:
-`extent/gemdb.dbf` derives from the engine's own `extent0.dbf` and ships in
-every `.vsix` today.)
+writing a Dockerfile. (The line is already less absolute than it reads: the
+Grail shim links the engine's own `lib/gciualib.o` and ships in every `.vsix`
+today. It used to be a clearer example still — `extent/gemdb.dbf` was a copy of
+the engine's `extent0.dbf` — but GemDB no longer ships an extent.)
 
 **A thin image keeps the posture and most of the prize.** Base OS, Node, our
 scripts; `install-engine.sh` runs on first start into a volume, exactly as the

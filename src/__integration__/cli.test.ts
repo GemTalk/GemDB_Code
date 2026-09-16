@@ -4,11 +4,9 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cliPath } from '../cli';
-import { createDatabase } from '../database';
 import { bundledGrailStamp, stageGrail } from '../grail';
-import { bundledExtentPath } from '../paths';
 import { isRunning, startStone, stopStone } from '../processes';
-import { Fixture, makeFixture } from './fixture';
+import { createDatabaseWithPython, Fixture, haveTestExtent, makeFixture } from './fixture';
 
 /**
  * The `gemdb` shell command, run the way a user runs it: bash, a file
@@ -16,12 +14,12 @@ import { Fixture, makeFixture } from './fixture';
  * with the fixture's own root path baked in, so everything it starts stays
  * inside the fixture — including the stone it starts for itself.
  *
- * Uses the preloaded extent: the CLI needs Python already in the database, and
- * copying the shipped extent is seconds where a file-in is not.
+ * Uses the suite's prepared extent: the CLI needs Python already in the
+ * database, and copying that file is seconds where a file-in is not.
  */
 
 const ext = process.cwd();
-const ready = bundledGrailStamp(ext) !== undefined && fs.existsSync(bundledExtentPath(ext));
+const ready = bundledGrailStamp(ext) !== undefined && haveTestExtent();
 
 let fixture: Fixture | undefined;
 let workDir: string;
@@ -65,7 +63,7 @@ beforeAll(async () => {
   if (!fixture) return;
   workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gemdb-cli-work-'));
 
-  createDatabase(fixture.engine, ext); // the preloaded extent — Python included
+  createDatabaseWithPython(fixture); // Python already filed in — see testExtentPath
   stageGrail(ext); // stages Grail and generates the CLI
   await startStone();
 

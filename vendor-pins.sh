@@ -11,8 +11,23 @@
 # Bumping a pin is a one-line PR to this file; a green CI run on it is the
 # proof the new upstream commit works.
 
-# Grail: last proven green on GemDB main, 2026-09-11.
-PINNED_GRAIL_REF=50468c783010f03b52d351eb20f64f4daa97bd42
+# Grail: re-proven against 4.0.0.a2 on 2026-09-16 -- the shim builds, the
+# payload stages, and every Python path in the integration suite passes. The
+# commit is unchanged from the Alpha1 proof on 2026-09-15; only the engine under
+# it moved. The previous pin
+# (50468c7, 2026-09-11) cannot build this tree at all -- it predates Grail's
+# 4.0-only installer, so it carries no scripts/kernel_class_extensions.gs and
+# bundle-grail.sh stops on its own REQUIRED check. Grail dropped 3.7.x on
+# 2026-09-12 and now refuses anything below 4.0, so the engine pin in
+# src/config.ts and this one move together: neither is independently valid.
+PINNED_GRAIL_REF=45f03ba5fc0075a8e81662d9952ebba00c7dad6b
 
-# mcp_server: last proven green on GemDB main, 2026-09-11.
-PINNED_MCP_REF=7b26a23080cf62029dda6287e8b4018e8596a5b1
+# mcp_server: re-proven against 4.0.0.a2 on 2026-09-16 -- the whole integration
+# suite passes, mcp.test.ts included. The commit is unchanged from the Alpha1
+# proof on 2026-09-15; only the engine under it moved. The previous
+# pin (7b26a23, 2026-09-11) predates 0.9.0 and carries no
+# setup-read-only-user.sh, which bundle-mcp.sh names as an entry point and
+# src/mcp.ts runs to provision McpReadOnly. It also predates GemTalk/mcp_server#29,
+# without which install.sh refuses every 4.0.0.Alpha1 stone and no Mcp class is
+# ever filed in.
+PINNED_MCP_REF=e717182507d262b1dd8c19ff91c6800bb52117e1

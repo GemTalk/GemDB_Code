@@ -7,7 +7,7 @@
 # code to build them, and both are gitignored build artifacts. So the ways a
 # .vsix goes wrong are not compile errors: it packages cleanly from a tree where
 # `bundle:grail` was never run, or was run on a different platform than the
-# target being packaged, or where `bundle:extent` predates the last change --
+# target being packaged --
 # and the result installs fine and then fails at the first `import`.
 # CONTRIBUTING.md answers that with "install the .vsix and run it once", which
 # is still the real test; this is the cheap check that runs first, in CI and
@@ -86,7 +86,6 @@ REQUIRED=(
   "extension/package.json|the manifest"
   "extension/out/extension.js|the extension bundle"
   "extension/out/gemdb-shell.js|the GemDB Shell, staged to <rootPath>/bin at run time"
-  "extension/extent/gemdb.dbf|the preloaded database (portable across platforms)"
   "extension/grail/GRAIL_VERSION|the Grail payload"
   "extension/grail/prebuilt/$PLATFORM_KEY/libcpython_ua.$LIB_EXT|the CPython shim for $PLATFORM_KEY"
   "extension/grail/scripts/grail.tpz|the Grail scripts the installer drives"
@@ -155,6 +154,7 @@ if [ -n "$koffi_extra" ]; then
   unwanted=$((unwanted + 1))
 fi
 
+check_absent '^extension/\.test-extent/' "the integration suite's extent, 96 MB a user would never open"
 check_absent '^extension/src/' "the sources are build inputs, not payload"
 check_absent '\.map$' "source maps belong in a debug build, not a release"
 check_absent '^extension/grail/\.git' "a whole Grail clone would ship"
@@ -176,7 +176,7 @@ echo "$(basename "$VSIX"): $(wc -l <<<"$LISTING" | tr -d ' ') files, ${size_mb} 
 
 if [ "$missing" -ne 0 ] || [ "$unwanted" -ne 0 ]; then
   echo "ERROR: $missing required path(s) missing, $unwanted unwanted group(s) present." >&2
-  [ "$missing" -eq 0 ] || echo "       A missing artifact usually means 'npm run bundle:grail' was not run on $PLATFORM_KEY, or 'npm run bundle:mcp' / 'npm run bundle:extent' was never run." >&2
+  [ "$missing" -eq 0 ] || echo "       A missing artifact usually means 'npm run bundle:grail' was not run on $PLATFORM_KEY, or 'npm run bundle:mcp' was never run." >&2
   exit 1
 fi
 
