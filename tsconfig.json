@@ -3,7 +3,10 @@
     "module": "commonjs",
     "target": "ES2022",
     "lib": ["ES2024"],
-    "outDir": "out",
+    // Nothing compiles this project to disk: esbuild.mjs produces the two
+    // bundles in out/, and tsc's only job here is type checking. noEmit
+    // rather than an outDir because out/ is where those bundles live
+    "noEmit": true,
     "rootDir": "src",
     "sourceMap": true,
     "strict": true,
