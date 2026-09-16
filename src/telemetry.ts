@@ -31,6 +31,23 @@ import { TelemetryReporter } from '@vscode/extension-telemetry';
  *    reporter is what flushes queued events.
  */
 
+/**
+ * What caused a lifecycle step to happen, shared by every event that needs one.
+ *
+ * Values name what the user did — a command id or a surface — never a
+ * function, so a series survives a refactor.
+ */
+export type Trigger =
+  | 'firstRun' // the unattended pass at activation
+  | 'autoStart' // the database coming up unasked
+  | 'installCommand' // gemdb.install
+  | 'startCommand' // gemdb.start
+  | 'sharedMemoryCommand' // gemdb.configureSharedMemory
+  | 'notebook' // a notebook cell batch
+  | 'shell' // Open GemDB Shell
+  | 'runFile' // Run Python File
+  | 'mcp'; // an agent, through the MCP provider
+
 // Not a secret — a connection string only says where events land.
 const CONNECTION_STRING =
   'InstrumentationKey=933fff8d-f71d-4f13-b7dd-7fe6b5cceade;' +
