@@ -64,6 +64,8 @@ const CONNECTION_STRING =
 const EVENT = {
   activated: 'activated',
   unattendedSetupSkipped: 'unattendedSetupSkipped',
+  setupStarted: 'setupStarted',
+  setupFinished: 'setupFinished',
 } as const;
 type EventName = (typeof EVENT)[keyof typeof EVENT];
 
@@ -248,4 +250,36 @@ export type SkipReason =
  */
 export function reportUnattendedSetupSkipped(skipReason: SkipReason): void {
   send(EVENT.unattendedSetupSkipped, { skipReason });
+}
+
+/**
+ * Mirrors `lifecycle.ts`'s own `SetupOutcome`, kept as a separate type rather
+ * than imported so this module stays a leaf: nothing it imports can create a
+ * cycle back through a caller.
+ */
+type SetupOutcome = 'completed' | 'cancelled' | 'failed';
+
+/**
+ * `runSetup` started — a user choosing to download, every time. Repeats
+ * freely and is meant to: cancelling and later pressing Resume is two
+ * attempts, both visible, not a special case.
+ */
+export function reportSetupStarted(trigger: Trigger): void {
+  send(EVENT.setupStarted, { trigger });
+}
+
+/**
+ * `runSetup` finished, paired with the `setupStarted` for the same attempt.
+ *
+ * A start with no matching finish — the user quit VS Code mid-download — is
+ * the drop-out this pair exists to measure, so never collapse this into a
+ * single event. Never pass `errorMessage(e)` here: GemStone errors embed
+ * paths, and a classified failure reason is phase 3's `stepFailed`, not this.
+ */
+export function reportSetupFinished(
+  trigger: Trigger,
+  outcome: SetupOutcome,
+  durationMs: number,
+): void {
+  send(EVENT.setupFinished, { trigger, outcome }, { durationMs });
 }

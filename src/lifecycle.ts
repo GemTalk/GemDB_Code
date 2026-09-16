@@ -53,7 +53,7 @@ import {
 import { isSupportedPlatform } from './platform';
 import { logoutAll } from './session';
 import { allowAutoStart } from './autoStart';
-import { Trigger } from './telemetry';
+import { Trigger, reportSetupFinished, reportSetupStarted } from './telemetry';
 
 /** Guard every entry point with one clear message rather than a stack trace. */
 function requireSupportedPlatform(): boolean {
@@ -151,14 +151,16 @@ function paused(): void {
  * This is the setup body shared by `prepare()`, `install()` and
  * `ensureRunning()` — previously three copies of the same try/cancel/catch.
  */
-async function runSetup(extensionPath: string, trigger: Trigger): Promise<SetupOutcome> {
-  return vscode.window.withProgress(
+export async function runSetup(extensionPath: string, trigger: Trigger): Promise<SetupOutcome> {
+  reportSetupStarted(trigger);
+  const startedAt = Date.now();
+  const outcome = await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
       title: trigger === 'installCommand' ? 'Installing GemDB' : 'Setting up GemDB',
       cancellable: true,
     },
-    async (progress, token) => {
+    async (progress, token): Promise<SetupOutcome> => {
       try {
         await prepareFiles(extensionPath, progress, token);
         if (token.isCancellationRequested) {
@@ -176,6 +178,8 @@ async function runSetup(extensionPath: string, trigger: Trigger): Promise<SetupO
       }
     },
   );
+  reportSetupFinished(trigger, outcome, Date.now() - startedAt);
+  return outcome;
 }
 
 /**
