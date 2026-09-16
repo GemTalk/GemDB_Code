@@ -49,15 +49,23 @@ is used in.
 
 File paths, file names, notebook URIs or titles, Python source code, notebook
 cell contents, query text, database contents, GemStone session or cache
-names, usernames, email addresses, environment variables, or your IP address
-(see "Approximate location" above for what Azure derives from it before
-discarding it).
+names, usernames, email addresses, environment variables, error messages, or
+exception text, or your IP address (see "Approximate location" above for
+what Azure derives from it before discarding it). Events that record a
+failure — for example, whether setup or a database start succeeded — carry
+only a short classified reason (such as "cancelled" or "failed"), never the
+underlying error's own text, because GemStone errors can embed file paths.
 
 ## Why we collect it
 
 To understand aggregate usage — for example, which platforms GemDB runs on,
 which regions it is used in, and how activation performs — so we can
-prioritize fixes and improvements.
+prioritize fixes and improvements. This includes: whether the first-time
+setup that downloads and installs GemDB completed, was cancelled, or failed,
+and how long it took; whether the one-time prompt to raise this machine's
+shared memory was accepted; whether the database started and, if not, what
+stopped it; and when Python was used, and on which surface (a notebook, the
+GemDB Shell, or running a file) — never what was run or what it produced.
 This relies on legitimate interest (GDPR Art. 6(1)(f)); it is not used for
 advertising or profiling.
 
@@ -92,5 +100,5 @@ and delete the matching records.
 
 ## Changes
 
-Last updated: 2026-09-15. Changes to this notice will be published in this
+Last updated: 2026-09-16. Changes to this notice will be published in this
 repository.
