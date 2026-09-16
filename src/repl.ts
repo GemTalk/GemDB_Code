@@ -4,6 +4,7 @@ import { shellQuote } from './osConfig';
 import { findNetldi, findStone } from './processes';
 import { ensureRunning } from './lifecycle';
 import { cliPath, ensureCliCurrent } from './cli';
+import { Trigger } from './telemetry';
 
 /**
  * Make sure the database is up, starting it if it is not.
@@ -13,9 +14,9 @@ import { cliPath, ensureCliCurrent } from './cli';
  * the database. So this starts it instead — the one thing that genuinely needs
  * consent, raising shared memory, still prompts on its way through.
  */
-async function requireRunning(extensionPath: string): Promise<boolean> {
+async function requireRunning(extensionPath: string, trigger: Trigger): Promise<boolean> {
   if (findStone() && findNetldi()) return true;
-  return ensureRunning(extensionPath);
+  return ensureRunning(extensionPath, trigger);
 }
 
 /**
@@ -28,7 +29,7 @@ async function requireRunning(extensionPath: string): Promise<boolean> {
  */
 let replCounter = 0;
 export async function openRepl(extensionPath: string): Promise<void> {
-  if (!(await requireRunning(extensionPath))) return;
+  if (!(await requireRunning(extensionPath, 'shell'))) return;
   // The wrapper is this terminal's shell program, so it has to be there and
   // has to be this build — VS Code reports a missing one as a launch failure
   // with no hint of what GemDB should have done about it.
@@ -70,7 +71,7 @@ export async function runFile(extensionPath: string, uri?: vscode.Uri): Promise<
     void vscode.window.showErrorMessage(`${path.basename(target.fsPath)} is not a Python file.`);
     return;
   }
-  if (!(await requireRunning(extensionPath))) return;
+  if (!(await requireRunning(extensionPath, 'runFile'))) return;
   // Same guarantee as the shell: this terminal is about to be sent the
   // wrapper's path as a command line.
   if (!ensureCliCurrent(extensionPath)) {

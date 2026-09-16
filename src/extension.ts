@@ -370,9 +370,12 @@ async function prepareOnFirstRun(
     // other runs a script under sudo — so there is no ordering between them to
     // get wrong. Neither rejects: both report failure by returning.
     const files = prepare(extensionPath);
-    const os = ensureOsConfigured(extensionPath).catch(() => false);
-    const [prepared, configured] = await Promise.all([files, os]);
-    return { prepared, configured };
+    const os = ensureOsConfigured(extensionPath, 'firstRun').catch(() => ({
+      ok: false,
+      prompted: false,
+    }));
+    const [prepared, osResult] = await Promise.all([files, os]);
+    return { prepared, configured: osResult.ok };
   });
   if (outcome === undefined) return; // another window is doing it
 
@@ -442,7 +445,7 @@ async function autoStart(extensionPath: string, refresh: () => void): Promise<vo
   await withSetupLock(async () => {
     if (isRunning()) return;
     log('Starting the database, so it is ready when you are.');
-    await ensureRunning(extensionPath);
+    await ensureRunning(extensionPath, 'autoStart');
   });
   refresh();
 }

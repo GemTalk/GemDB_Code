@@ -206,7 +206,7 @@ export async function install(extensionPath: string): Promise<void> {
 
   // Starting is a separate act, and it is where consent is asked for: raising
   // shared memory needs sudo, and the processes it starts outlive the editor.
-  if (!(await ensureRunning(extensionPath))) return;
+  if (!(await ensureRunning(extensionPath, 'installCommand'))) return;
 
   void vscode.window
     .showInformationMessage(
@@ -263,7 +263,7 @@ function reportFailure(what: string, e: unknown): void {
 /** The explicit "Start GemDB" command. */
 export async function start(extensionPath: string): Promise<void> {
   if (!requireSupportedPlatform()) return;
-  await ensureRunning(extensionPath);
+  await ensureRunning(extensionPath, 'startCommand');
 }
 
 /**
@@ -281,7 +281,7 @@ export async function start(extensionPath: string): Promise<void> {
  *
  * Returns true when the database is up and Python will run.
  */
-export async function ensureRunning(extensionPath: string): Promise<boolean> {
+export async function ensureRunning(extensionPath: string, trigger: Trigger): Promise<boolean> {
   // Asking for a running database is the clearest possible retraction of an
   // earlier "stop it". Running a cell counts: `ensureRunning` is the one path
   // to a running database, so it is the one place this belongs.
@@ -293,7 +293,7 @@ export async function ensureRunning(extensionPath: string): Promise<boolean> {
   // never ran. Finishing it here is what lets a cancel be a pause: the download
   // picks up from the bytes already on disk.
   if (!isInstalled()) {
-    const outcome = await runSetup(extensionPath, 'firstRun');
+    const outcome = await runSetup(extensionPath, trigger);
     if (outcome !== 'completed' || !isInstalled()) return false;
   }
 
@@ -310,7 +310,7 @@ export async function ensureRunning(extensionPath: string): Promise<boolean> {
     log(`Could not write the gemdb command: ${errorMessage(e)}`);
   }
 
-  if (!(await ensureOsConfigured(extensionPath))) return false;
+  if (!(await ensureOsConfigured(extensionPath, trigger)).ok) return false;
 
   return vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: 'Starting GemDB' },
@@ -407,7 +407,7 @@ async function ensureMcpServing(
  * that answers every tool call with a login failure.
  */
 export async function ensureMcpRunning(extensionPath: string): Promise<boolean> {
-  if (!(await ensureRunning(extensionPath))) return false;
+  if (!(await ensureRunning(extensionPath, 'mcp'))) return false;
   // `ensureRunning` starts it when it is enabled, so this is the report rather
   // than a second attempt — except where the database was already up and the
   // router had been stopped by hand, which `ensureMcpServing` handles above.
@@ -415,8 +415,12 @@ export async function ensureMcpRunning(extensionPath: string): Promise<boolean> 
 }
 
 /** Start whichever of the two processes is not already up. */
-async function startProcesses(progress?: vscode.Progress<{ message?: string }>): Promise<void> {
+async function startProcesses(
+  progress?: vscode.Progress<{ message?: string }>,
+): Promise<{ startedStone: boolean; startedNetldi: boolean }> {
   const running = listProcesses();
+  let startedStone = false;
+  let startedNetldi = false;
   if (!findStone(running)) {
     // Checked here as well as in `prepareFiles`, because an extension update
     // reaches this line without going through preparation at all: the engine
@@ -427,15 +431,18 @@ async function startProcesses(progress?: vscode.Progress<{ message?: string }>):
     if (engine) assertDatabaseMatchesEngine(engine, engineVersion());
     progress?.report({ message: 'Starting the database…' });
     await startStone();
+    startedStone = true;
   } else {
     log('The database is already running.');
   }
   if (!findNetldi(running)) {
     progress?.report({ message: 'Starting the session listener…' });
     await startNetldi();
+    startedNetldi = true;
   } else {
     log('The session listener is already running.');
   }
+  return { startedStone, startedNetldi };
 }
 
 /**
