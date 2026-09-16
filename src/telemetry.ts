@@ -66,6 +66,7 @@ const EVENT = {
   unattendedSetupSkipped: 'unattendedSetupSkipped',
   setupStarted: 'setupStarted',
   setupFinished: 'setupFinished',
+  osConfigPrompted: 'osConfigPrompted',
 } as const;
 type EventName = (typeof EVENT)[keyof typeof EVENT];
 
@@ -282,4 +283,37 @@ export function reportSetupFinished(
   durationMs: number,
 ): void {
   send(EVENT.setupFinished, { trigger, outcome }, { durationMs });
+}
+
+/**
+ * How the modal ended.
+ *
+ * `removeIpcUnset` is not a softer `stillUnconfigured`, and the two must not
+ * be merged: shared memory is a hard gate, so `stillUnconfigured` means the
+ * database did not start, while RemoveIPC is advisory, so `removeIpcUnset`
+ * means it started and will not survive a logout. Reusing one name for both
+ * would also make them indistinguishable in the case that produces each —
+ * `missing: 'both'`, where the pair is the only thing that says which half
+ * failed.
+ */
+export type OsConfigOutcome = 'configured' | 'declined' | 'stillUnconfigured' | 'removeIpcUnset';
+
+/** What was short when the modal was shown — not what is still short after it. */
+export type OsConfigMissing = 'sharedMemory' | 'removeIpc' | 'both';
+
+/**
+ * The shared-memory/RemoveIPC modal was shown, and how it went.
+ *
+ * Emitted only when the modal actually appeared — never on the
+ * already-configured fast path, which is silent by design and would just be
+ * volume. `trigger` is what earns this event: CLAUDE.md spends three
+ * paragraphs on *where* to ask for shared memory and names two rejected
+ * placements, and nobody has measured whether the current one works.
+ */
+export function reportOsConfigPrompted(
+  trigger: Trigger,
+  outcome: OsConfigOutcome,
+  missing: OsConfigMissing,
+): void {
+  send(EVENT.osConfigPrompted, { trigger, outcome, missing });
 }
