@@ -1,4 +1,5 @@
 import js from '@eslint/js';
+import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
@@ -80,5 +81,15 @@ export default tseslint.config(
         },
       ],
     },
+  },
+  {
+    // The build and tooling scripts, which are Node rather than TypeScript.
+    // `js.configs.recommended` applies repo-wide and turns on `no-undef`, but
+    // the only languageOptions above are scoped to `src/**/*.ts` — so without
+    // this block ESLint reads these with ES builtins alone and calls every
+    // `process` and `console` undefined. `.js` and `.cjs` need the same
+    // globals for the same reason `.mjs` does.
+    files: ['**/*.{mjs,cjs,js}'],
+    languageOptions: { globals: { ...globals.node } },
   },
 );
