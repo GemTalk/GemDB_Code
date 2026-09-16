@@ -285,7 +285,7 @@ export function activate(context: vscode.ExtensionContext): void {
       `GemDB does not support ${process.platform}/${process.arch} yet — ` +
         'macOS on Apple Silicon only.',
     );
-    reportActivation(Date.now() - activationStarted);
+    reportActivation(Date.now() - activationStarted, 'unsupportedPlatform');
     return;
   }
 
@@ -299,7 +299,10 @@ export function activate(context: vscode.ExtensionContext): void {
   putCliOnPath(context.environmentVariableCollection);
 
   status.refresh();
-  reportActivation(Date.now() - activationStarted);
+  reportActivation(
+    Date.now() - activationStarted,
+    isInstalled() ? (isRunning() ? 'running' : 'stopped') : 'notInstalled',
+  );
 
   void prepareOnFirstRun(context, extensionPath, () => status.refresh()).then(() =>
     autoStart(extensionPath, () => status.refresh()),

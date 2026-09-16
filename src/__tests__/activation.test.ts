@@ -12,8 +12,9 @@ import { __resetSettings, __setSetting, __telemetry } from '../__mocks__/vscode'
 // run, so this exercises real `send`, real `baseProperties` merging, and
 // real event names, recorded in `__telemetry`.
 vi.mock('@vscode/extension-telemetry');
+const isInstalled = vi.fn(() => true);
 vi.mock('../lifecycle', () => ({
-  isInstalled: () => true,
+  isInstalled: () => isInstalled(),
   ensureMcpRunning: async () => false,
   ensureRunning: async () => false,
   install: async () => {},
@@ -28,8 +29,9 @@ vi.mock('../autoStart', () => ({
   initAutoStart: () => {},
   suppressAutoStart: () => {},
 }));
+const isRunning = vi.fn(() => false);
 vi.mock('../processes', () => ({
-  isRunning: () => false,
+  isRunning: () => isRunning(),
   isListening: () => true,
   listProcesses: () => [],
 }));
@@ -68,6 +70,8 @@ describe('activate()', () => {
     __setSetting('gemdb.rootPath', mkdtempSync(join(tmpdir(), 'gemdb-root-')));
     originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
     originalArch = Object.getOwnPropertyDescriptor(process, 'arch');
+    isInstalled.mockReset().mockReturnValue(true);
+    isRunning.mockReset().mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -96,6 +100,44 @@ describe('activate()', () => {
 
     activate(fakeContext());
 
-    expect(__telemetry.filter((e) => e.name === 'activated')).toHaveLength(1);
+    const activated = __telemetry.filter((e) => e.name === 'activated');
+    expect(activated).toHaveLength(1);
+    expect(activated[0].properties.state).toBe('unsupportedPlatform');
+  });
+
+  describe('activated.state', () => {
+    beforeEach(() => {
+      Object.defineProperty(process, 'platform', { value: 'darwin' });
+      Object.defineProperty(process, 'arch', { value: 'arm64' });
+    });
+
+    it('is notInstalled when nothing is on disk yet', () => {
+      isInstalled.mockReturnValue(false);
+
+      activate(fakeContext());
+
+      const [activated] = __telemetry.filter((e) => e.name === 'activated');
+      expect(activated.properties.state).toBe('notInstalled');
+    });
+
+    it('is stopped when installed but not running', () => {
+      isInstalled.mockReturnValue(true);
+      isRunning.mockReturnValue(false);
+
+      activate(fakeContext());
+
+      const [activated] = __telemetry.filter((e) => e.name === 'activated');
+      expect(activated.properties.state).toBe('stopped');
+    });
+
+    it('is running when the database is up', () => {
+      isInstalled.mockReturnValue(true);
+      isRunning.mockReturnValue(true);
+
+      activate(fakeContext());
+
+      const [activated] = __telemetry.filter((e) => e.name === 'activated');
+      expect(activated.properties.state).toBe('running');
+    });
   });
 });

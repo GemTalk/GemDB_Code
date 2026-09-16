@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { TelemetryReporter } from '@vscode/extension-telemetry';
+import { GemDbState } from './statusView';
 
 /**
  * GemDB's telemetry: one named function per thing worth counting.
@@ -222,7 +223,11 @@ function send(
  * @param durationMs wall-clock time since the first statement of `activate()`,
  *   measured before the detached `prepareOnFirstRun` tail, which can run for
  *   minutes and is not activation.
+ * @param state what `activate()` found on the way in — reusing
+ *   `GemDbState`, the same vocabulary the status view publishes as
+ *   `gemdb.state`, so this and the view can never drift apart. Doubles every
+ *   activation as a health sample and gives the funnel its denominator.
  */
-export function reportActivation(durationMs: number): void {
-  send(EVENT.activated, undefined, { activationMs: durationMs });
+export function reportActivation(durationMs: number, state: GemDbState): void {
+  send(EVENT.activated, { state }, { activationMs: durationMs });
 }
