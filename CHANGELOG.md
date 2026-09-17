@@ -7,20 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **Python's `\d` matches non-ASCII decimal digits again, so `Decimal` can
-  parse them.** `Decimal('１')` answered NaN, along with every other digit
-  outside ASCII: the shim underneath was asking the C library a question it
-  never answers, and the regex engine's `\d` inherited the wrong answer.
-
-- **Three of Grail's own development scripts no longer ship inside the
-  extension.** `topazini`, `new_worktree.sh` and `create_claude_users.gs` each
-  carried a login for a database that exists only on a Grail developer's
-  machine, and nothing in GemDB ever read them. The password is GemStone's
-  published default, so nothing you have is any less safe than it was — but a
-  credentials file has no business in a published package, and a release now
-  refuses to publish one.
+## [1.5.0] - 2026-09-16
 
 ### Added
 
@@ -32,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its own — reading the code does not need one. If the folder already has a
   `brain-freeze` in it, GemDB offers to open that rather than cloning over
   your copy.
+
+- **A usage-data notice, because GemDB now reports one event when it starts.**
+  The event carries non-identifying, extension-level information — the platform,
+  the extension version, whether an operation succeeded and how long it took —
+  and never the contents of your work. GemDB honours VS Code's
+  `telemetry.telemetryLevel`, so turning telemetry off in the editor turns this
+  off too. [USAGE_DATA.md](USAGE_DATA.md) says exactly what is sent, what is
+  not, and who the data controller is.
 
 - **An MCP server, so an AI agent can use your database.** GemDB now bundles
   [GemTalk's native GemStone MCP server](https://github.com/GemTalk/mcp_server)
@@ -60,7 +55,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   The new **AI agent access** row in the GemDB panel says whether it is on and
   what is connected. `gemdb.mcp.port` moves it off 50390, and
-  `gemdb.mcp.readOnly` limits a connected agent to browsing and searching.
+  `gemdb.mcp.readOnly` logs every agent in as a database user that cannot
+  commit — it still reads everything and can still run code, but nothing it
+  does is saved.
+
+### Changed
+
+- **GemDB now runs GemStone 4.0.0.a2, and an existing database cannot come with
+  it.** The engine moved from 3.7.5 to the 4.0 alpha line, and there is no
+  in-place upgrade — GemStone 4.0 ships no `upgradeImage`. A database created by
+  an earlier release of GemDB has to be recreated, and **anything stored in it is
+  lost, so copy out whatever you still need first.**
+
+  The engine will not tell you this itself. The extent format is unchanged, so a
+  4.0 stone starts on an older database and `gslist` reports it healthy — the
+  status bar goes green — and then every login fails with "The Gem and dbf
+  versions are incompatible", which breaks your first notebook cell, the GemDB
+  Shell and any connected agent at once while naming neither the cause nor the
+  cure. So GemDB checks the database against the engine before it starts
+  anything, refuses, and names the directory to delete.
+
+  This applies to the alphas among themselves: a database written by
+  4.0.0.Alpha1 is orphaned by 4.0.0.a2, which replaced it in the download
+  catalog on 2026-09-16 — Alpha1 can no longer be downloaded at all.
+
+### Fixed
+
+- **Three of Grail's own development scripts no longer ship inside the
+  extension.** `topazini`, `new_worktree.sh` and `create_claude_users.gs` each
+  carried a login for a database that exists only on a Grail developer's
+  machine, and nothing in GemDB ever read them. The password is GemStone's
+  published default, so nothing you have is any less safe than it was — but a
+  credentials file has no business in a published package, and a release now
+  refuses to publish one.
+
+- **A failed engine download says what failed.** The download retries more
+  patiently, and a DNS failure is now reported as one rather than as a generic
+  network error — which is the difference between knowing you are offline and
+  wondering whether the engine has moved.
+
+- **Python's `\d` matches non-ASCII decimal digits again, so `Decimal` can
+  parse them.** `Decimal('１')` answered NaN, along with every other digit
+  outside ASCII: the shim underneath was asking the C library a question it
+  never answers, and the regex engine's `\d` inherited the wrong answer.
 
 ## [1.4.0] - 2026-09-03
 
@@ -376,7 +413,8 @@ gets out of the way.
 - **`sys.exit(n)` exits 1 rather than `n`**, and **`input()` is not yet
   supported**. Both are upstream in Grail.
 
-[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.1.0...v1.2.0

@@ -2,7 +2,7 @@
   "name": "gemdb",
   "displayName": "GemDB Code",
   "description": "Python with builtin transactional persistence (using true ACID semantics). When you have critical, complex data that must be consistent, use GemDB.",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "publisher": "gemtalksystems",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -71,7 +71,7 @@
         "gemdb.mcp.readOnly": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Run AI agents as a database user that cannot commit, so an agent can read and run code but nothing it does can be made permanent. Off by default: running Python in your database is most of why you would connect an agent to it. Enforced by GemStone rather than by hiding tools \u2014 the first time you turn this on, GemDB creates an `McpReadOnly` user in your database whose profile disables commits. It bounds what an agent can CHANGE, not what it can read or how much of the machine it can use. Changing this restarts the MCP server, which disconnects any connected agent."
+          "markdownDescription": "Run AI agents as a database user that cannot commit, so an agent can read and run code but nothing it does can be made permanent. Off by default: running Python in your database is most of why you would connect an agent to it. Enforced by GemStone rather than by hiding tools — the first time you turn this on, GemDB creates an `McpReadOnly` user in your database whose profile disables commits. It bounds what an agent can CHANGE, not what it can read or how much of the machine it can use. Changing this restarts the MCP server, which disconnects any connected agent."
         }
       }
     },
