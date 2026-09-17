@@ -79,13 +79,14 @@ jobs:
           cache: 'npm'
       - run: npm ci
 
-      # The same four commands CLAUDE.md and CONTRIBUTING.md name as the gate
-      # before calling something done, in the same order, so a failure here
-      # reads the same as a failure locally.
-      - name: Format check
-        run: npm run format:check
       - name: Lint
         run: npm run lint
+      # Typecheck and typecheck:strict below just run `tsc` and trust whatever
+      # it resolves to, so this asserts that is TypeScript 7 before they run.
+      - name: Lint toolchain
+        run: npm run lint:toolchain
+      - name: Format check
+        run: npm run format:check
       - name: Typecheck
         run: npm run typecheck
       - name: Typecheck (strict)

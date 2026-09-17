@@ -1,11 +1,18 @@
 import js from '@eslint/js';
+import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    // Vendored from Jasper and kept byte-for-byte so upstream fixes can be
-    // pulled in with a plain copy. Linting it would mean editing it.
-    ignores: ['out/**', 'grail/**', 'src/gci/**'],
+    // src/gci/** is vendored from Jasper and kept byte-for-byte so upstream
+    // fixes can be pulled in with a plain copy; linting it would mean editing
+    // it. The rest are build artifacts that ESLint would otherwise walk on
+    // its own, since (unlike Prettier 3) it does not read .gitignore: out/**
+    // is this project's own bundle, grail/** and mcp/** are third-party
+    // payloads staged by bundle-grail.sh and bundle-mcp.sh, dist/** is
+    // packages fetched from CI by fetch-vsix.sh, and .test-extent/** is the
+    // database extent build-test-extent.sh builds for the integration suite.
+    ignores: ['out/**', 'grail/**', 'mcp/**', 'dist/**', '.test-extent/**', 'src/gci/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -74,5 +81,15 @@ export default tseslint.config(
         },
       ],
     },
+  },
+  {
+    // The build and tooling scripts, which are Node rather than TypeScript.
+    // `js.configs.recommended` applies repo-wide and turns on `no-undef`, but
+    // the only languageOptions above are scoped to `src/**/*.ts` — so without
+    // this block ESLint reads these with ES builtins alone and calls every
+    // `process` and `console` undefined. `.js` and `.cjs` need the same
+    // globals for the same reason `.mjs` does.
+    files: ['**/*.{mjs,cjs,js}'],
+    languageOptions: { globals: { ...globals.node } },
   },
 );
