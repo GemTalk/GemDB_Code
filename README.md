@@ -40,6 +40,13 @@ outside `~/GemDB`.
 Then open the **GemDB Shell**, or a notebook with **GemDB** as the kernel. The
 database is already running — GemDB starts it for you.
 
+If you would rather read a working application than a blank prompt,
+**GemDB: Clone the Brain Freeze Demo** clones
+[brain-freeze](https://github.com/GemTalk/brain-freeze) — a Flask app whose
+data, classes and views all live in the database — and asks where to put it.
+It needs `git`, touches nothing but the folder you choose, and its own readme
+takes it from there.
+
 ### What GemDB asks for, and what it doesn't
 
 Everything in the automatic step lands inside `~/GemDB` and is undone by

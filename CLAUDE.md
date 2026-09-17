@@ -551,6 +551,7 @@ note below for how the bundle is built and staged.
 | `cli.ts`                     | generates `<rootPath>/bin/gemdb` and stages the shell bundle beside it                   |
 | `mcp.ts`                     | the MCP server: staging, filing it in, and the detached router gem                       |
 | `mcpRegistration.ts`         | registering it with this editor, and handing the details to other clients                |
+| `demo.ts`                    | cloning the Brain Freeze demo — the one command that writes outside the root path        |
 | `statusView.ts`              | the one tree view                                                                        |
 | `gci/`                       | **vendored from Jasper — do not edit**                                                   |
 
@@ -575,7 +576,10 @@ database. Per its PRD (FR-1.1, FR-8.2) it was always going to be its own
 public repo rather than ours, and it now is:
 [GemTalk/brain-freeze](https://github.com/GemTalk/brain-freeze), which also
 covers the notebook, the MCP surface and the schema change that the version
-here never did. The version that lived here is committed at
+here never did. `gemdb.cloneBrainFreeze` (`demo.ts`) is how a user gets it:
+the folder dialog is the consent, since a clone is persistent and outside the
+root path, and it never clones over a `brain-freeze` that is already there —
+that directory may hold the user's own commits. The version that lived here is committed at
 [`c9c261a`](https://github.com/GemTalk/GemDB_Code/tree/c9c261ac017fd7831cd29aa71b79da4ee8c1ed9b/docs/demo/brain-freeze),
 and is worth keeping in mind for one reason: it measured Grail `46c2a68`, and
 two of the findings below do not reproduce on `c875e56` — see the note after

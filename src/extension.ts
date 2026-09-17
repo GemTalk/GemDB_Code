@@ -25,6 +25,7 @@ import {
   resetActiveNotebook,
 } from './notebook';
 import { isMcpRunning, startMcpServer, stopMcpServer } from './mcp';
+import { cloneBrainFreeze } from './demo';
 import { confirmMcpEnabled, registerMcpProvider, registerWithClient } from './mcpRegistration';
 import { configureSharedMemory, ensureOsConfigured, isSharedMemoryConfigured } from './osConfig';
 import { isSupportedPlatform, setContext } from './platform';
@@ -218,6 +219,9 @@ export function activate(context: vscode.ExtensionContext): void {
           .update('mcp.readOnly', next, vscode.ConfigurationTarget.Global);
       },
     ),
+    // Not wrapped in `refreshing`: a clone changes nothing the status view
+    // shows, and does not need a database at all.
+    vscode.commands.registerCommand('gemdb.cloneBrainFreeze', () => cloneBrainFreeze()),
     vscode.commands.registerCommand('gemdb.showLog', () => showLog()),
     vscode.commands.registerCommand(
       'gemdb.configureSharedMemory',

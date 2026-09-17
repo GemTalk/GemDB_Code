@@ -11,23 +11,26 @@
 # Bumping a pin is a one-line PR to this file; a green CI run on it is the
 # proof the new upstream commit works.
 
-# Grail: re-proven against 4.0.0.a2 on 2026-09-16 -- the shim builds, the
-# payload stages, and every Python path in the integration suite passes. The
-# commit is unchanged from the Alpha1 proof on 2026-09-15; only the engine under
-# it moved. The previous pin
-# (50468c7, 2026-09-11) cannot build this tree at all -- it predates Grail's
-# 4.0-only installer, so it carries no scripts/kernel_class_extensions.gs and
-# bundle-grail.sh stops on its own REQUIRED check. Grail dropped 3.7.x on
-# 2026-09-12 and now refuses anything below 4.0, so the engine pin in
-# src/config.ts and this one move together: neither is independently valid.
-PINNED_GRAIL_REF=45f03ba5fc0075a8e81662d9952ebba00c7dad6b
+# Grail: main as of 2026-09-17, ~70 commits on from the pin before last
+# (45f03ba, proven against a2 on 2026-09-16). It picks up Grail's IR work and
+# two changes that alter behaviour GemDB's own notes depend on: inferred
+# instance slots are ON by default, and class attributes live in a per-class
+# holder so adding one keeps the class identity -- which is the root of the demo
+# finding that a schema change broke `isinstance` for records written before it.
+# `runPath:` can now pass arguments through to `sys.argv` as well.
+#
+# The last commit is a CPython shim fix, so this pin cannot be taken without
+# rebuilding the shim on every platform: Py_UNICODE_ISDECIMAL was iswdigit,
+# which the C standard defines as the ten ASCII digits in every locale, so \d
+# matched no non-ASCII digit and Decimal('１') answered NaN. It now searches a
+# generated Nd table (src/c/shim/grail_digit_table.h). A payload staged from
+# this commit with a shim built from the previous one installs cleanly and keeps
+# the old answer.
+PINNED_GRAIL_REF=9a0b0fcb5fb4fe49b7e4f777d12f955fb5b39996
 
-# mcp_server: re-proven against 4.0.0.a2 on 2026-09-16 -- the whole integration
-# suite passes, mcp.test.ts included. The commit is unchanged from the Alpha1
-# proof on 2026-09-15; only the engine under it moved. The previous
-# pin (7b26a23, 2026-09-11) predates 0.9.0 and carries no
-# setup-read-only-user.sh, which bundle-mcp.sh names as an entry point and
-# src/mcp.ts runs to provision McpReadOnly. It also predates GemTalk/mcp_server#29,
-# without which install.sh refuses every 4.0.0.Alpha1 stone and no Mcp class is
-# ever filed in.
-PINNED_MCP_REF=e717182507d262b1dd8c19ff91c6800bb52117e1
+# mcp_server: main as of 2026-09-16. Two commits on from the previous pin
+# (e717182), and only one of them matters: upstream followed the catalog to
+# 4.0.0.a2, because dl.gemdb.com keeps one alpha at a time and its 4.0 CI legs
+# were downloading an Alpha1 that now answers 404. Nothing GemDB's installer
+# reads moved; the entry points and load.gs files are unchanged.
+PINNED_MCP_REF=4f0254539ee77b1eb4c41c8285d9d33d7ec8ca61
