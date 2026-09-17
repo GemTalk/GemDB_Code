@@ -3,6 +3,7 @@ import { ensureRunning } from './lifecycle';
 import { errorMessage, log } from './log';
 import { PyResult, isErrorResult, resetScope, runPython } from './pythonQueries';
 import { SessionOwner, interruptSessionFor } from './session';
+import { reportPythonUsed } from './telemetry';
 
 /**
  * Which session a notebook owns.
@@ -84,7 +85,7 @@ export class GemDbNotebookController {
     // Running a cell is a request to run Python, and Python only runs inside
     // the database — so start it rather than asking. Done once for the whole
     // batch, before any cell reports a spurious failure.
-    if (!(await ensureRunning(this.extensionPath))) {
+    if (!(await ensureRunning(this.extensionPath, 'notebook'))) {
       for (const cell of cells)
         this.failCell(cell, 'GemDB is not running, so the cell was not run.');
       return;
@@ -128,13 +129,15 @@ export class GemDbNotebookController {
       });
     } catch (e) {
       // Everything that is not the Python code's own fault arrives here: the
-      // database is stopped, the session dropped, Grail is missing. Those are
-      // about the environment, not the cell, so they are worth logging too.
+      // database is stopped, the session dropped, Grail is missing. No
+      // source ever reached the database, so this is not `executed` evidence
+      // — that fires below, once a result has actually come back.
       const message = errorMessage(e);
       log(`Notebook cell failed: ${message}`);
       this.endWithError(execution, message);
       return;
     }
+    reportPythonUsed('notebook', 'executed');
 
     // What the cell printed and what it evaluated to are different outputs,
     // shown in that order — print() first, the way the code produced them.

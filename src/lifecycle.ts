@@ -53,6 +53,13 @@ import {
 import { isSupportedPlatform } from './platform';
 import { logoutAll } from './session';
 import { allowAutoStart } from './autoStart';
+import {
+  DatabaseOutcome,
+  Trigger,
+  reportDatabaseStarted,
+  reportSetupFinished,
+  reportSetupStarted,
+} from './telemetry';
 
 /** Guard every entry point with one clear message rather than a stack trace. */
 function requireSupportedPlatform(): boolean {
@@ -117,6 +124,70 @@ function requireGrailPayload(extensionPath: string): boolean {
   return false;
 }
 
+export type SetupOutcome = 'completed' | 'cancelled' | 'failed';
+
+/**
+ * Cancelling reaches here two ways: the download throws, or a step between
+ * downloads notices the token and returns. Both are the same decision and get
+ * the same acknowledgement.
+ *
+ * It has to be a notification rather than a log line. Pressing Cancel
+ * dismisses the progress notification, and without something in its place
+ * GemDB simply goes quiet — from the outside, indistinguishable from having
+ * given up. Shown once, at the moment of the decision, which keeps it
+ * consistent with the setup-attempted marker: a cancel is answered, not
+ * re-asked on every activation.
+ */
+function paused(): void {
+  log('Setup paused. It will resume where it stopped when you next start GemDB.');
+  void vscode.window
+    .showInformationMessage(
+      'Setup paused. Nothing is lost — GemDB picks up where it stopped whenever you are ready.',
+      'Resume',
+    )
+    .then((choice) => {
+      if (choice === 'Resume') void vscode.commands.executeCommand('gemdb.install');
+    });
+}
+
+/**
+ * Everything that can be done without touching the machine or the user, run
+ * under a progress notification and classified into one outcome.
+ *
+ * This is the setup body shared by `prepare()`, `install()` and
+ * `ensureRunning()` — previously three copies of the same try/cancel/catch.
+ */
+export async function runSetup(extensionPath: string, trigger: Trigger): Promise<SetupOutcome> {
+  reportSetupStarted(trigger);
+  const startedAt = Date.now();
+  const outcome = await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: trigger === 'installCommand' ? 'Installing GemDB' : 'Setting up GemDB',
+      cancellable: true,
+    },
+    async (progress, token): Promise<SetupOutcome> => {
+      try {
+        await prepareFiles(extensionPath, progress, token);
+        if (token.isCancellationRequested) {
+          paused();
+          return 'cancelled';
+        }
+        return 'completed';
+      } catch (e) {
+        if (errorMessage(e) === 'Download cancelled') {
+          paused();
+          return 'cancelled';
+        }
+        reportFailure(trigger === 'installCommand' ? 'Installing GemDB' : 'Setting up GemDB', e);
+        return 'failed';
+      }
+    },
+  );
+  reportSetupFinished(trigger, outcome, Date.now() - startedAt);
+  return outcome;
+}
+
 /**
  * The explicit "Install GemDB" command.
  *
@@ -140,27 +211,12 @@ export async function install(extensionPath: string): Promise<void> {
     return;
   }
 
-  const prepared = await vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Notification,
-      title: 'Installing GemDB',
-      cancellable: true,
-    },
-    async (progress, token) => {
-      try {
-        await prepareFiles(extensionPath, progress, token);
-        return !token.isCancellationRequested;
-      } catch (e) {
-        reportFailure('Installing GemDB', e);
-        return false;
-      }
-    },
-  );
-  if (!prepared) return;
+  const outcome = await runSetup(extensionPath, 'installCommand');
+  if (outcome !== 'completed') return;
 
   // Starting is a separate act, and it is where consent is asked for: raising
   // shared memory needs sudo, and the processes it starts outlive the editor.
-  if (!(await ensureRunning(extensionPath))) return;
+  if (!(await ensureRunning(extensionPath, 'installCommand'))) return;
 
   void vscode.window
     .showInformationMessage(
@@ -185,49 +241,9 @@ export async function install(extensionPath: string): Promise<void> {
 export async function prepare(extensionPath: string): Promise<boolean> {
   if (!isSupportedPlatform() || !bundledGrailStamp(extensionPath)) return false;
 
-  return vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Notification,
-      title: 'Setting up GemDB',
-      cancellable: true,
-    },
-    async (progress, token) => {
-      // Cancelling reaches here two ways: the download throws, or a step
-      // between downloads notices the token and returns. Both are the same
-      // decision and get the same acknowledgement.
-      //
-      // It has to be a notification rather than a log line. Pressing Cancel
-      // dismisses the progress notification, and without something in its place
-      // GemDB simply goes quiet — from the outside, indistinguishable from
-      // having given up. Shown once, at the moment of the decision, which keeps
-      // it consistent with the setup-attempted marker: a cancel is answered,
-      // not re-asked on every activation.
-      const paused = (): false => {
-        log('Setup paused. It will resume where it stopped when you next start GemDB.');
-        void vscode.window
-          .showInformationMessage(
-            'Setup paused. Nothing is lost — GemDB picks up where it stopped whenever you are ready.',
-            'Resume',
-          )
-          .then((choice) => {
-            if (choice === 'Resume') void vscode.commands.executeCommand('gemdb.install');
-          });
-        return false;
-      };
-
-      try {
-        progress.report({ message: 'Downloading the database engine…' });
-        await prepareFiles(extensionPath, progress, token);
-        if (token.isCancellationRequested) return paused();
-        log('GemDB is ready to start.');
-        return true;
-      } catch (e) {
-        if (errorMessage(e) === 'Download cancelled') return paused();
-        reportFailure('Setting up GemDB', e);
-        return false;
-      }
-    },
-  );
+  const outcome = await runSetup(extensionPath, 'firstRun');
+  if (outcome === 'completed') log('GemDB is ready to start.');
+  return outcome === 'completed';
 }
 
 /** Log a failure and offer the log, in the one shape every step uses. */
@@ -257,7 +273,7 @@ function reportFailure(what: string, e: unknown): void {
 /** The explicit "Start GemDB" command. */
 export async function start(extensionPath: string): Promise<void> {
   if (!requireSupportedPlatform()) return;
-  await ensureRunning(extensionPath);
+  await ensureRunning(extensionPath, 'startCommand');
 }
 
 /**
@@ -275,36 +291,29 @@ export async function start(extensionPath: string): Promise<void> {
  *
  * Returns true when the database is up and Python will run.
  */
-export async function ensureRunning(extensionPath: string): Promise<boolean> {
+export async function ensureRunning(extensionPath: string, trigger: Trigger): Promise<boolean> {
+  const startedAt = Date.now();
+  const failed = (outcome: Exclude<DatabaseOutcome, 'started'>): false => {
+    reportDatabaseStarted(trigger, outcome, 'no', Date.now() - startedAt, false);
+    return false;
+  };
+
   // Asking for a running database is the clearest possible retraction of an
   // earlier "stop it". Running a cell counts: `ensureRunning` is the one path
   // to a running database, so it is the one place this belongs.
   allowAutoStart();
-  if (!requireSupportedPlatform()) return false;
-  if (!requireGrailPayload(extensionPath)) return false;
+  if (!requireSupportedPlatform()) return failed('unsupportedPlatform');
+  if (!requireGrailPayload(extensionPath)) return failed('missingPayload');
 
   // Files may still be missing if the automatic preparation was cancelled, or
   // never ran. Finishing it here is what lets a cancel be a pause: the download
   // picks up from the bytes already on disk.
   if (!isInstalled()) {
-    const prepared = await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: 'Setting up GemDB',
-        cancellable: true,
-      },
-      async (progress, token) => {
-        try {
-          await prepareFiles(extensionPath, progress, token);
-          return !token.isCancellationRequested;
-        } catch (e) {
-          if (errorMessage(e) === 'Download cancelled') return false;
-          reportFailure('Setting up GemDB', e);
-          return false;
-        }
-      },
-    );
-    if (!prepared || !isInstalled()) return false;
+    const outcome = await runSetup(extensionPath, trigger);
+    if (outcome !== 'completed') {
+      return failed(outcome === 'cancelled' ? 'setupCancelled' : 'setupFailed');
+    }
+    if (!isInstalled()) return failed('setupFailed');
   }
 
   // Staging Grail writes the shell command too, but only when the payload
@@ -320,19 +329,21 @@ export async function ensureRunning(extensionPath: string): Promise<boolean> {
     log(`Could not write the gemdb command: ${errorMessage(e)}`);
   }
 
-  if (!(await ensureOsConfigured(extensionPath))) return false;
+  const osResult = await ensureOsConfigured(extensionPath, trigger);
+  if (!osResult.ok) return failed('osConfigDeclined');
 
   return vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: 'Starting GemDB' },
     async (progress) => {
       try {
-        await startProcesses(progress);
+        const { startedStone, startedNetldi } = await startProcesses(progress);
 
         // Grail is filed in here rather than during preparation because it
         // needs a running database. The same branch covers the first install
         // and an extension update that ships a newer Grail — in both cases the
         // build on disk differs from the one recorded in the database.
         const firstTime = !grailInstalled();
+        let filedGrail: 'no' | 'firstTime' | 'update' = 'no';
         if (grailNeedsUpdate(extensionPath) && (firstTime || reinstallPythonOnUpdate())) {
           const stamp = bundledGrailStamp(extensionPath);
           log(
@@ -346,13 +357,16 @@ export async function ensureRunning(extensionPath: string): Promise<boolean> {
           stageGrail(extensionPath);
           await installGrail(extensionPath, progress);
           recordGrailInstalled(extensionPath);
+          filedGrail = firstTime ? 'firstTime' : 'update';
         }
 
         await ensureMcpServing(extensionPath, progress);
+        const didWork = osResult.prompted || startedStone || startedNetldi || filedGrail !== 'no';
+        reportDatabaseStarted(trigger, 'started', filedGrail, Date.now() - startedAt, didWork);
         return true;
       } catch (e) {
         reportFailure('Starting GemDB', e);
-        return false;
+        return failed('startFailed');
       }
     },
   );
@@ -417,7 +431,7 @@ async function ensureMcpServing(
  * that answers every tool call with a login failure.
  */
 export async function ensureMcpRunning(extensionPath: string): Promise<boolean> {
-  if (!(await ensureRunning(extensionPath))) return false;
+  if (!(await ensureRunning(extensionPath, 'mcp'))) return false;
   // `ensureRunning` starts it when it is enabled, so this is the report rather
   // than a second attempt — except where the database was already up and the
   // router had been stopped by hand, which `ensureMcpServing` handles above.
@@ -425,8 +439,12 @@ export async function ensureMcpRunning(extensionPath: string): Promise<boolean> 
 }
 
 /** Start whichever of the two processes is not already up. */
-async function startProcesses(progress?: vscode.Progress<{ message?: string }>): Promise<void> {
+async function startProcesses(
+  progress?: vscode.Progress<{ message?: string }>,
+): Promise<{ startedStone: boolean; startedNetldi: boolean }> {
   const running = listProcesses();
+  let startedStone = false;
+  let startedNetldi = false;
   if (!findStone(running)) {
     // Checked here as well as in `prepareFiles`, because an extension update
     // reaches this line without going through preparation at all: the engine
@@ -437,15 +455,18 @@ async function startProcesses(progress?: vscode.Progress<{ message?: string }>):
     if (engine) assertDatabaseMatchesEngine(engine, engineVersion());
     progress?.report({ message: 'Starting the database…' });
     await startStone();
+    startedStone = true;
   } else {
     log('The database is already running.');
   }
   if (!findNetldi(running)) {
     progress?.report({ message: 'Starting the session listener…' });
     await startNetldi();
+    startedNetldi = true;
   } else {
     log('The session listener is already running.');
   }
+  return { startedStone, startedNetldi };
 }
 
 /**

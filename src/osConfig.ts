@@ -4,6 +4,7 @@ import { execFile } from 'child_process';
 import * as vscode from 'vscode';
 import { REQUIRED_SHARED_MEMORY_GB } from './config';
 import { log } from './log';
+import { OsConfigMissing, OsConfigOutcome, Trigger, reportOsConfigPrompted } from './telemetry';
 
 /**
  * Operating-system prerequisites for running the database engine.
@@ -124,17 +125,37 @@ export function isRemoveIpcConfigured(): boolean {
 }
 
 /**
- * Bring the operating system up to what the engine needs, asking first.
+ * Everything `ensureOsConfigured` decides, with the world passed in.
  *
- * Returns true if the database may start. Shared memory is the gate: if it is
- * still short after the setup script ran — a mistyped password, a cancelled
- * `sudo` — we refuse rather than let the start fail with an error about
- * segment allocation that means nothing to a new developer.
+ * Both ends of this function are root-owned — a `sysctl`, a systemd config, a
+ * terminal running `sudo` — so its branches are unreachable from a test
+ * otherwise, and two of them are worth defending: shared memory is a hard
+ * gate and must refuse the start when the script did not take, while
+ * RemoveIPC is advisory and so the same failure has to be reported *and*
+ * stepped over. Taking the collaborators as an argument is what makes those
+ * testable without an editor (the same reason `runStop` takes a `StopWorld`).
  */
-export async function ensureOsConfigured(extensionPath: string): Promise<boolean> {
-  const sharedMemoryOk = await isSharedMemoryConfigured();
-  const removeIpcOk = isRemoveIpcConfigured();
-  if (sharedMemoryOk && removeIpcOk) return true;
+export interface OsConfigWorld {
+  sharedMemoryOk: () => Promise<boolean>;
+  removeIpcOk: () => boolean;
+  /** Show the modal, already worded. True if the user chose to configure. */
+  confirm: (message: string) => Promise<boolean>;
+  runSharedMemoryScript: () => Promise<void>;
+  runRemoveIpcScript: () => Promise<void>;
+  showError: (message: string) => void;
+  report: (outcome: OsConfigOutcome, missing: OsConfigMissing) => void;
+  log: (message: string) => void;
+}
+
+export async function runEnsureOsConfigured(
+  world: OsConfigWorld,
+): Promise<{ ok: boolean; prompted: boolean }> {
+  const sharedMemoryOk = await world.sharedMemoryOk();
+  const removeIpcOk = world.removeIpcOk();
+  if (sharedMemoryOk && removeIpcOk) return { ok: true, prompted: false };
+
+  const missing: OsConfigMissing =
+    !sharedMemoryOk && !removeIpcOk ? 'both' : !sharedMemoryOk ? 'sharedMemory' : 'removeIpc';
 
   const steps: string[] = [];
   if (!sharedMemoryOk) {
@@ -151,51 +172,90 @@ export async function ensureOsConfigured(extensionPath: string): Promise<boolean
       ? 'GemDB needs one change to your operating system before the database can run:'
       : `GemDB needs ${steps.length} changes to your operating system before the database can run:`;
 
-  const choice = await vscode.window.showWarningMessage(
+  const confirmed = await world.confirm(
     `${heading}\n\n${steps.join('\n')}\n\n` +
       'A terminal will open and run a setup script with sudo, so you will be asked for your ' +
       'password. GemDB never sees it.\n\n' +
       'This is the only permission GemDB asks for, and only once for this machine.',
-    { modal: true },
-    'Configure',
   );
-  if (choice !== 'Configure') return false;
+  if (!confirmed) {
+    world.report('declined', missing);
+    return { ok: false, prompted: true };
+  }
 
   if (!sharedMemoryOk) {
-    await runSetupScript(
-      SHARED_MEMORY_TERMINAL,
-      path.join(
-        extensionPath,
-        'resources',
-        process.platform === 'linux' ? 'setSharedMemoryLinux.sh' : 'setSharedMemoryDarwin.sh',
-      ),
-    );
-    if (!(await isSharedMemoryConfigured())) {
-      void vscode.window.showErrorMessage(
+    await world.runSharedMemoryScript();
+    if (!(await world.sharedMemoryOk())) {
+      world.showError(
         `Shared memory is still below ${REQUIRED_SHARED_MEMORY_GB} GB, so GemDB did not start. ` +
           'Run "GemDB: Configure Shared Memory" and try again.',
       );
-      return false;
+      world.report('stillUnconfigured', missing);
+      return { ok: false, prompted: true };
     }
-    log('Shared memory configured');
+    world.log('Shared memory configured');
   }
 
   // Advisory: a database that cannot survive logout is still a database that
-  // starts, so a failure here is reported and stepped over.
+  // starts, so a failure here is reported and stepped over — under an outcome
+  // of its own, because `configured` would claim the fix took and
+  // `stillUnconfigured` would claim the database never started.
   if (!removeIpcOk) {
-    await runSetupScript(
-      REMOVE_IPC_TERMINAL,
-      path.join(extensionPath, 'resources', 'setRemoveIPC.sh'),
-    );
-    if (!isRemoveIpcConfigured()) {
-      log('RemoveIPC is still unset — the database will stop when you log out of this machine.');
+    await world.runRemoveIpcScript();
+    if (!world.removeIpcOk()) {
+      world.log(
+        'RemoveIPC is still unset — the database will stop when you log out of this machine.',
+      );
+      world.report('removeIpcUnset', missing);
+      return { ok: true, prompted: true };
     }
   }
 
-  return true;
+  world.report('configured', missing);
+  return { ok: true, prompted: true };
 }
 
-/** Open the shared-memory setup on its own, from the command palette. */
+/**
+ * Bring the operating system up to what the engine needs, asking first.
+ *
+ * Returns true if the database may start. Shared memory is the gate: if it is
+ * still short after the setup script ran — a mistyped password, a cancelled
+ * `sudo` — we refuse rather than let the start fail with an error about
+ * segment allocation that means nothing to a new developer.
+ */
+export function ensureOsConfigured(
+  extensionPath: string,
+  trigger: Trigger,
+): Promise<{ ok: boolean; prompted: boolean }> {
+  return runEnsureOsConfigured({
+    sharedMemoryOk: isSharedMemoryConfigured,
+    removeIpcOk: isRemoveIpcConfigured,
+    confirm: async (message) =>
+      (await vscode.window.showWarningMessage(message, { modal: true }, 'Configure')) ===
+      'Configure',
+    runSharedMemoryScript: () =>
+      runSetupScript(
+        SHARED_MEMORY_TERMINAL,
+        path.join(
+          extensionPath,
+          'resources',
+          process.platform === 'linux' ? 'setSharedMemoryLinux.sh' : 'setSharedMemoryDarwin.sh',
+        ),
+      ),
+    runRemoveIpcScript: () =>
+      runSetupScript(REMOVE_IPC_TERMINAL, path.join(extensionPath, 'resources', 'setRemoveIPC.sh')),
+    showError: (message) => void vscode.window.showErrorMessage(message),
+    report: (outcome, missing) => reportOsConfigPrompted(trigger, outcome, missing),
+    log,
+  });
+}
+
+/**
+ * Open the shared-memory setup on its own, from the command palette.
+ *
+ * Re-probes afterwards, unlike the script run alone: run this way, nothing
+ * else tells the user whether it worked.
+ */
 export async function configureSharedMemory(extensionPath: string): Promise<void> {
   await runSetupScript(
     SHARED_MEMORY_TERMINAL,
@@ -205,6 +265,13 @@ export async function configureSharedMemory(extensionPath: string): Promise<void
       process.platform === 'linux' ? 'setSharedMemoryLinux.sh' : 'setSharedMemoryDarwin.sh',
     ),
   );
+  if (await isSharedMemoryConfigured()) {
+    void vscode.window.showInformationMessage('Shared memory configured.');
+  } else {
+    void vscode.window.showErrorMessage(
+      `Shared memory is still below ${REQUIRED_SHARED_MEMORY_GB} GB.`,
+    );
+  }
 }
 
 /**

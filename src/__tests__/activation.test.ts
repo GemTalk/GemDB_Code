@@ -1,22 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync } from 'fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { __resetSettings, __setSetting } from '../__mocks__/vscode';
+import { __resetSettings, __setSetting, __telemetry, env } from '../__mocks__/vscode';
 
 // `activate()` is synchronous, but everything after its two exits — the
 // download, the sudo prompt, autoStart — is a detached tail that must never
-// run in a unit test. These mocks keep that tail inert; see telemetry.ts's own
-// mock for why the event itself is faked rather than asserted through a real
-// reporter.
-const reportActivation = vi.fn<(durationMs: number) => void>();
-
-vi.mock('../telemetry', () => ({
-  initTelemetry: () => {},
-  reportActivation: (ms: number) => reportActivation(ms),
-}));
+// run in a unit test. These mocks keep that tail inert. `telemetry.ts` itself
+// is NOT mocked: the vscode mock's fake `env.createTelemetryLogger`, plus the
+// root-level `__mocks__/@vscode/extension-telemetry.ts`, let the real module
+// run, so this exercises real `send`, real `baseProperties` merging, and
+// real event names, recorded in `__telemetry`.
+vi.mock('@vscode/extension-telemetry');
+const isInstalled = vi.fn(() => true);
 vi.mock('../lifecycle', () => ({
-  isInstalled: () => true,
+  isInstalled: () => isInstalled(),
   ensureMcpRunning: async () => false,
   ensureRunning: async () => false,
   install: async () => {},
@@ -31,8 +29,9 @@ vi.mock('../autoStart', () => ({
   initAutoStart: () => {},
   suppressAutoStart: () => {},
 }));
+const isRunning = vi.fn(() => false);
 vi.mock('../processes', () => ({
-  isRunning: () => false,
+  isRunning: () => isRunning(),
   isListening: () => true,
   listProcesses: () => [],
 }));
@@ -50,6 +49,7 @@ function fakeContext(): Parameters<typeof activate>[0] {
   return {
     extensionPath: '/ext',
     extension: { packageJSON: { version: '0.0.0-test' } },
+    extensionMode: 1, // vscode.ExtensionMode.Production
     globalStorageUri: { fsPath: mkdtempSync(join(tmpdir(), 'gemdb-activation-')) },
     subscriptions: [],
     environmentVariableCollection: {
@@ -64,18 +64,24 @@ function fakeContext(): Parameters<typeof activate>[0] {
 describe('activate()', () => {
   let originalPlatform: PropertyDescriptor | undefined;
   let originalArch: PropertyDescriptor | undefined;
+  let rootPathValue: string;
 
   beforeEach(() => {
     __resetSettings();
-    reportActivation.mockClear();
-    __setSetting('gemdb.rootPath', mkdtempSync(join(tmpdir(), 'gemdb-root-')));
+    rootPathValue = mkdtempSync(join(tmpdir(), 'gemdb-root-'));
+    __setSetting('gemdb.rootPath', rootPathValue);
     originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
     originalArch = Object.getOwnPropertyDescriptor(process, 'arch');
+    isInstalled.mockReset().mockReturnValue(true);
+    isRunning.mockReset().mockReturnValue(false);
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    Object.defineProperty(process, 'arch', { value: 'arm64' });
   });
 
   afterEach(() => {
     if (originalPlatform) Object.defineProperty(process, 'platform', originalPlatform);
     if (originalArch) Object.defineProperty(process, 'arch', originalArch);
+    env.remoteName = undefined;
   });
 
   it('reports activation exactly once on a supported platform', () => {
@@ -84,8 +90,9 @@ describe('activate()', () => {
 
     activate(fakeContext());
 
-    expect(reportActivation).toHaveBeenCalledTimes(1);
-    const [durationMs] = reportActivation.mock.calls[0];
+    const activated = __telemetry.filter((e) => e.name === 'activated');
+    expect(activated).toHaveLength(1);
+    const durationMs = activated[0].measurements?.activationMs;
     expect(durationMs).toBeGreaterThanOrEqual(0);
     expect(Number.isFinite(durationMs)).toBe(true);
   });
@@ -98,6 +105,116 @@ describe('activate()', () => {
 
     activate(fakeContext());
 
-    expect(reportActivation).toHaveBeenCalledTimes(1);
+    const activated = __telemetry.filter((e) => e.name === 'activated');
+    expect(activated).toHaveLength(1);
+    expect(activated[0].properties.state).toBe('unsupportedPlatform');
+  });
+
+  describe('activated.state', () => {
+    beforeEach(() => {
+      Object.defineProperty(process, 'platform', { value: 'darwin' });
+      Object.defineProperty(process, 'arch', { value: 'arm64' });
+    });
+
+    it('is notInstalled when nothing is on disk yet', () => {
+      isInstalled.mockReturnValue(false);
+
+      activate(fakeContext());
+
+      const [activated] = __telemetry.filter((e) => e.name === 'activated');
+      expect(activated.properties.state).toBe('notInstalled');
+    });
+
+    it('is stopped when installed but not running', () => {
+      isInstalled.mockReturnValue(true);
+      isRunning.mockReturnValue(false);
+
+      activate(fakeContext());
+
+      const [activated] = __telemetry.filter((e) => e.name === 'activated');
+      expect(activated.properties.state).toBe('stopped');
+    });
+
+    it('is running when the database is up', () => {
+      isInstalled.mockReturnValue(true);
+      isRunning.mockReturnValue(true);
+
+      activate(fakeContext());
+
+      const [activated] = __telemetry.filter((e) => e.name === 'activated');
+      expect(activated.properties.state).toBe('running');
+    });
+  });
+
+  describe('unattendedSetupSkipped', () => {
+    function skipped(): { skipReason: unknown }[] {
+      return __telemetry
+        .filter((e) => e.name === 'unattendedSetupSkipped')
+        .map((e) => ({ skipReason: e.properties.skipReason }));
+    }
+
+    it('reports alreadyInstalled without ever emitting setupStarted', () => {
+      isInstalled.mockReturnValue(true);
+
+      activate(fakeContext());
+
+      expect(skipped()).toEqual([{ skipReason: 'alreadyInstalled' }]);
+    });
+
+    it('reports remoteWindow for a remote or web window', () => {
+      isInstalled.mockReturnValue(false);
+      env.remoteName = 'wsl';
+
+      activate(fakeContext());
+
+      expect(skipped()).toEqual([{ skipReason: 'remoteWindow' }]);
+    });
+
+    it('reports markerPresent when an earlier cancel already recorded a marker', () => {
+      isInstalled.mockReturnValue(false);
+      const context = fakeContext();
+      writeFileSync(
+        join(context.globalStorageUri.fsPath, 'setup-attempted'),
+        new Date().toISOString(),
+      );
+
+      activate(context);
+
+      expect(skipped()).toEqual([{ skipReason: 'markerPresent' }]);
+    });
+
+    it('reports lockHeld when another window already owns the setup lock', async () => {
+      isInstalled.mockReturnValue(false);
+      mkdirSync(join(rootPathValue, '.gemdb-locks'), { recursive: true });
+      // A pid this test process did not spawn, but that is alive on any Unix
+      // host: process 1 is always running. Anything other than this test's
+      // own pid takes the "another window" branch instead of the "stale
+      // debris from an earlier call" one.
+      writeFileSync(join(rootPathValue, '.gemdb-setup.lock'), '1');
+
+      activate(fakeContext());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(skipped()).toEqual([{ skipReason: 'lockHeld' }]);
+    });
+
+    it('reports installedByOtherWindow when the lock re-check finds it already done', async () => {
+      // isInstalled() is called twice by activate() itself (initTelemetry,
+      // then the activated.state calculation) before prepareOnFirstRun's own
+      // outer check — both fine to answer true. The outer check must answer
+      // false to reach the lock at all; the re-check inside it must then
+      // answer true, the shape of another window finishing the whole thing
+      // while this one was waiting to acquire the lock.
+      isInstalled
+        .mockReturnValueOnce(true) // initTelemetry
+        .mockReturnValueOnce(true) // activated.state
+        .mockReturnValueOnce(false) // prepareOnFirstRun's outer check
+        .mockReturnValue(true); // the re-check inside the lock
+
+      activate(fakeContext());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(skipped()).toEqual([{ skipReason: 'installedByOtherWindow' }]);
+    });
   });
 });

@@ -1,8 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DB_PASSWORD, DB_USER, STONE_NAME, STOP_TIMEOUT_SECONDS } from '../config';
 import { EngineProcess } from '../gslist';
 import { StopWorld, runStop } from '../lifecycle';
 import { isListening, isRunning, stopStoneArgs } from '../processes';
+
+// `lifecycle.ts` now imports `telemetry.ts` at runtime (not just its `Trigger`
+// type), which pulls in the real `@vscode/extension-telemetry` package — see
+// its own mock at __mocks__/@vscode/extension-telemetry.ts for why that
+// package needs one at all. Nothing under test here touches telemetry; this
+// just keeps the module graph loadable.
+vi.mock('@vscode/extension-telemetry');
 
 const stone: EngineProcess = {
   type: 'stone',

@@ -8,7 +8,10 @@ export default defineConfig({
     // `vscode` is supplied by the editor at run time and has no npm package, so
     // anything importing it is unloadable in a test process. The stub in
     // src/__mocks__ stands in for it — see that file for what it deliberately
-    // does not cover.
+    // does not cover. `@vscode/extension-telemetry` is faked separately (see
+    // __mocks__/@vscode/extension-telemetry.ts): its compiled entry point
+    // calls Node's real `require('vscode')` at evaluation time, which this
+    // alias cannot reach.
     alias: {
       vscode: new URL('src/__mocks__/vscode.ts', import.meta.url).pathname,
     },

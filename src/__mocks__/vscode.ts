@@ -5,12 +5,28 @@
  * commands, a status bar item, a tree view, and the three `workspace.on*`
  * listeners it wires up. Anything else stays deliberately absent: a test that
  * needs more than this is a test that should be exercising something else.
+ *
+ * `env.createTelemetryLogger` is the one deliberate exception to "just enough
+ * to read a setting". It is real VS Code plumbing, faked closely enough that
+ * `@vscode/extension-telemetry`'s own `TelemetryReporter` runs unmodified on
+ * top of it — so a test exercises the real `telemetry.ts`: real `send`, real
+ * `baseProperties` merging, real event names. The failure mode it guards
+ * against is silent data loss (an event nobody notices never arrived), not a
+ * broken feature, which is worth the departure from the rest of this file.
  */
 
 const settings = new Map<string, unknown>();
 
 /** Lines written to the output channel, for a test that wants to assert on them. */
 export const __log: string[] = [];
+
+/** Every event the fake telemetry logger has seen, in order. */
+export interface FakeTelemetryEvent {
+  name: string;
+  properties: Record<string, unknown>;
+  measurements: Record<string, number> | undefined;
+}
+export const __telemetry: FakeTelemetryEvent[] = [];
 
 /** Set a setting for the duration of a test, e.g. `gemdb.rootPath`. */
 export function __setSetting(key: string, value: unknown): void {
@@ -22,6 +38,7 @@ export function __resetSettings(): void {
   __log.length = 0;
   __controllers.length = 0;
   __commands.clear();
+  __telemetry.length = 0;
 }
 
 /** Command ids registered so far, so a test can assert on them or invoke one. */
@@ -48,8 +65,61 @@ export const StatusBarAlignment = { Left: 1, Right: 2 } as const;
 
 export const UIKind = { Desktop: 1, Web: 2 } as const;
 
+export const ExtensionMode = { Production: 1, Development: 2, Test: 3 } as const;
+
+/**
+ * A fake `env.createTelemetryLogger`, standing in for VS Code's own.
+ *
+ * `isUsageEnabled: false` is load-bearing and measured: `@vscode/extension-
+ * telemetry` only instantiates its App Insights sender when the logger
+ * reports enabled, while `logUsage` records every event regardless — so this
+ * sees every event with its real properties and makes no network call.
+ *
+ * Replicates VS Code's own merge quirk: when `data.properties` is falsy, its
+ * real `TelemetryLogger` mixes `common.*` properties into the top level of
+ * `data` instead of into `data.properties` — which is silently dropped by any
+ * reader that looks only at `data.properties`. Modelled here with one fake
+ * common property, so a call that forgets to pass a properties object (see
+ * `telemetry.ts`'s own warning against ever doing that) is regression-tested
+ * rather than only commented on.
+ */
+const FAKE_COMMON_PROPERTIES: Record<string, string> = { 'common.fake': 'yes' };
+
 /** Two-line insurance: nothing here reads `env` today, but `activate()` does. */
-export const env = { remoteName: undefined as string | undefined, uiKind: UIKind.Desktop };
+export const env = {
+  remoteName: undefined as string | undefined,
+  uiKind: UIKind.Desktop,
+  createTelemetryLogger(
+    _sender: unknown,
+    _options?: unknown,
+  ): {
+    isUsageEnabled: boolean;
+    isErrorsEnabled: boolean;
+    onDidChangeEnableStates: (listener: () => void) => Disposable;
+    logUsage: (
+      name: string,
+      data?: { properties?: Record<string, unknown>; measurements?: Record<string, number> },
+    ) => void;
+    logError: (name: string) => void;
+    dispose: () => void;
+  } {
+    return {
+      isUsageEnabled: false,
+      isErrorsEnabled: false,
+      onDidChangeEnableStates: () => new Disposable(() => {}),
+      logUsage: (name, data) => {
+        const properties = data?.properties;
+        __telemetry.push({
+          name,
+          properties: properties ? { ...FAKE_COMMON_PROPERTIES, ...properties } : {},
+          measurements: data?.measurements,
+        });
+      },
+      logError: () => {},
+      dispose: () => {},
+    };
+  },
+};
 
 export const window = {
   createOutputChannel(_name: string) {
@@ -76,6 +146,38 @@ export const window = {
   onDidChangeWindowState(_listener: (state: { focused: boolean }) => void): Disposable {
     return new Disposable(() => {});
   },
+  showInformationMessage(_message: string, ..._items: unknown[]): Promise<string | undefined> {
+    return Promise.resolve(undefined);
+  },
+  showWarningMessage(_message: string, ..._items: unknown[]): Promise<string | undefined> {
+    return Promise.resolve(undefined);
+  },
+  showErrorMessage(_message: string, ..._items: unknown[]): Promise<string | undefined> {
+    return Promise.resolve(undefined);
+  },
+  /** A terminal that records nothing and does nothing — callers only ever `show()`/`sendText()` it. */
+  createTerminal(_nameOrOptions?: unknown): {
+    show(): void;
+    sendText(text: string): void;
+    dispose(): void;
+  } {
+    return { show: () => {}, sendText: () => {}, dispose: () => {} };
+  },
+  /**
+   * Progress is a pass-through here: run the callback and return its result.
+   * Nothing asserts on the notification itself — that is the editor's job,
+   * not ours — and the token never reports cancelled, since nothing here can
+   * drive one.
+   */
+  withProgress<T>(
+    _options: unknown,
+    task: (
+      progress: { report: (value: { message?: string }) => void },
+      token: { isCancellationRequested: boolean },
+    ) => Thenable<T>,
+  ): Thenable<T> {
+    return task({ report: () => {} }, { isCancellationRequested: false });
+  },
 };
 
 export const commands = {
@@ -88,14 +190,6 @@ export const commands = {
   },
 };
 
-/**
- * Progress is a pass-through here.
- *
- * `withProgress` exists in this stub only because `stop` is wrapped in one;
- * running the callback and returning its result is the whole of what a test
- * cares about. Nothing asserts on the notification itself — that is the
- * editor's job, not ours.
- */
 export const ProgressLocation = { Notification: 15 } as const;
 
 /** Minimal event plumbing, enough for a tree view's change emitter. */
@@ -224,6 +318,12 @@ export const workspace = {
       },
     };
   },
+  /** No open documents by default — `runFile` reads a saved file either way. */
+  textDocuments: [] as {
+    uri: { toString(): string };
+    isDirty: boolean;
+    save(): Promise<boolean>;
+  }[],
   onDidCloseNotebookDocument(_listener: (notebook: unknown) => void): Disposable {
     return new Disposable(() => {});
   },
