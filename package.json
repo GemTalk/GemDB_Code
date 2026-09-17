@@ -335,7 +335,6 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run bundle",
-    "compile": "tsc -p ./",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "typecheck:strict": "tsc --noEmit -p tsconfig.strict.json",
     "bundle": "node esbuild.mjs --production",
