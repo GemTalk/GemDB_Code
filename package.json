@@ -162,6 +162,12 @@
         "icon": "$(clear-all)"
       },
       {
+        "command": "gemdb.cloneBrainFreeze",
+        "title": "Clone the Brain Freeze Demo",
+        "category": "GemDB",
+        "icon": "$(repo-clone)"
+      },
+      {
         "command": "gemdb.reinstallPython",
         "title": "Reinstall the Python Execution Engine",
         "category": "GemDB"
@@ -242,6 +248,11 @@
           "command": "gemdb.reinstallPython",
           "when": "view == gemdbStatus && gemdb.installed",
           "group": "1_gemdb@2"
+        },
+        {
+          "command": "gemdb.cloneBrainFreeze",
+          "when": "view == gemdbStatus",
+          "group": "2_demo@1"
         },
         {
           "command": "gemdb.uninstall",

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Python's `\d` matches non-ASCII decimal digits again, so `Decimal` can
+  parse them.** `Decimal('１')` answered NaN, along with every other digit
+  outside ASCII: the shim underneath was asking the C library a question it
+  never answers, and the regex engine's `\d` inherited the wrong answer.
+
 - **Three of Grail's own development scripts no longer ship inside the
   extension.** `topazini`, `new_worktree.sh` and `create_claude_users.gs` each
   carried a login for a database that exists only on a Grail developer's
@@ -18,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuses to publish one.
 
 ### Added
+
+- **One command clones the Brain Freeze demo.** **GemDB: Clone the Brain Freeze
+  Demo** asks where to put it and clones
+  [brain-freeze](https://github.com/GemTalk/brain-freeze), a Flask application
+  whose data, classes and views all live in the database. It needs `git` on
+  your PATH, writes only inside the folder you pick, and starts no database of
+  its own — reading the code does not need one. If the folder already has a
+  `brain-freeze` in it, GemDB offers to open that rather than cloning over
+  your copy.
 
 - **An MCP server, so an AI agent can use your database.** GemDB now bundles
   [GemTalk's native GemStone MCP server](https://github.com/GemTalk/mcp_server)
