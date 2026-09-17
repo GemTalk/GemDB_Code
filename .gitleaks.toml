@@ -1,13 +1,19 @@
 # Gitleaks configuration for the release pipeline's scan of the packaged .vsix.
 #
 # Open VSX runs its own gitleaks-based scan server-side, AFTER accepting an
-# upload, and offers no way to allow a false positive. A hit there leaves the
-# package inactive or rejected — and by then the version number is spent,
+# upload. A hit there leaves the package inactive or rejected — and by then the
+# version number is spent,
 # because both registries are immutable per (publisher, name, version,
 # targetPlatform). Jasper has been bitten twice this way (1.7.6 and 1.8.3, both
 # GemStone's *public* default password), each time failing only the Open VSX
 # half after the Marketplace had already published. Scanning the packages
 # ourselves, before anything is uploaded, turns that into a re-dispatch.
+#
+# Open VSX's publishing documentation now describes an inline suppression
+# marker for a false positive, which it did not when those two rejections
+# happened. Untested from here, and not a reason to relax this job: the marker
+# has to sit on the flagged line, and the line that matters for GemDB is inside
+# an esbuild bundle, where no source comment survives.
 #
 # The scan target is the UNZIPPED .vsix, not the working tree. The tree
 # simultaneously misses what ships — `out/*.js`, `grail/` and `mcp/` are all in
@@ -18,8 +24,12 @@
 # Measured over the real 1.4.0 package on 2026-09-11, 128 MB in 2.3 seconds:
 # the default rules found 13 hits, every one of them inside the shipped extent.
 # That package no longer exists — GemDB stopped shipping an extent — so the
-# expected result is now zero, which is worth re-measuring on the first 4.0
-# package rather than assumed.
+# expected result was zero.
+#
+# Re-measured on the first 4.0 package, 1.5.0, on 2026-09-16: 33.7 MB in under
+# a second, and one hit rather than none — the telemetry connection string,
+# which arrived after this file was written and is allowlisted below. The
+# expected result is now exactly that one allowlisted string and nothing else.
 
 [extend]
 useDefault = true
@@ -94,6 +104,39 @@ paths = ['''grail/src/python/stdlib/''']
 description = "Test-fixture credentials in the MCP server's auth tests, which GemDB files in with --no-auth"
 targetRules = ["gemstone-password-literal"]
 paths = ['''mcp/src/auth/''']
+
+# ---------------------------------------------------------------------------
+# GemDB's own telemetry endpoint
+# ---------------------------------------------------------------------------
+# `generic-api-key` fires on the Application Insights connection string in
+# `src/telemetry.ts`, which reaches the package inside `out/extension.js`. It
+# was the one hit in all three 1.5.0 packages, and it stopped that release's
+# second dispatch at `scan` after `validate` and `collect` had passed.
+#
+# It is allowlisted rather than removed because it is not a credential in the
+# sense the rule means. An ingestion connection string says where events land;
+# it cannot read telemetry back, cannot reach the resource that stores it, and
+# grants nothing but the ability to send events to a firehose GemTalk owns. The
+# worst a holder can do is pollute GemDB's own usage data. It is also already
+# public -- it is committed in this repository, as it must be, since a client
+# cannot report telemetry to an endpoint it does not carry.
+#
+# Scoped as narrowly as gitleaks allows: this one rule, and the one literal
+# GUID, matched against the SECRET rather than the line. Deliberately no
+# `paths` entry -- conditions inside an allowlist are OR'd, so naming
+# `out/extension.js` here would exempt the whole bundle, which is the file most
+# worth scanning. A different key, in this file or any other, still fails the
+# release.
+#
+# One caveat this cannot settle: Open VSX's own detector may reach a different
+# verdict, since it is not this rule set. If it ever rejects an upload over
+# this string, the answer is not a looser rule here -- their publishing
+# documentation describes an inline suppression marker, and the durable fix is
+# to stop embedding the key in the bundle at all.
+[[allowlists]]
+description = "GemDB's own Application Insights ingestion connection string, which has to ship for telemetry to work"
+targetRules = ["generic-api-key"]
+regexes = ['''^933fff8d-f71d-4f13-b7dd-7fe6b5cceade$''']
 
 # ---------------------------------------------------------------------------
 # What this cannot do

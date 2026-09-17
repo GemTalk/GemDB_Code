@@ -291,8 +291,11 @@ gate than one run here could be.
 ### The secret scan
 
 Open VSX runs a gitleaks-based scan **server-side, after accepting the
-upload**, with no way to allow a false positive — and by then the version
-number is spent. Jasper has been rejected that way twice, each time failing
+upload** — and by then the version number is spent. (Their publishing
+documentation now describes an inline `secret-detector:ignore` marker for a
+false positive. It did not when Jasper was rejected, it is untested from here,
+and it cannot reach a line inside an esbuild bundle, so it does not change how
+this job is used.) Jasper has been rejected that way twice, each time failing
 only the Open VSX half after the Marketplace had already published. `scan`
 unzips each package and scans **its contents**, with the rules and the reasoning
 in [`.gitleaks.toml`](.gitleaks.toml).
