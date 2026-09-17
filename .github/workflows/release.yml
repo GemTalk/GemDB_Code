@@ -222,11 +222,30 @@ jobs:
           for candidate in $candidates; do
             missing=""
             for target in $TARGETS; do
-              # shellcheck disable=SC2016  # $n is a jq variable, not a shell one
-              have=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${candidate}/artifacts" \
-                --paginate --jq \
-                --arg n "vsix-${target}" \
-                '[.artifacts[] | select(.name == $n and .expired == false)] | length')
+              # The artifact name reaches jq as `env.NAME`, not as a shell
+              # expansion inside the query and not through `--arg`: `gh api` has
+              # no such flag, so `--jq` took `--arg` as its query and `n`, the
+              # name and the real query became three extra positional arguments
+              # -- `accepts 1 arg(s), received 4`, which is what stopped 1.5.0's
+              # first dispatch after every other check in this job had passed.
+              #
+              # Counted in two steps, and not as one pipeline into awk, so
+              # that a failing `gh` still stops the job: this runs under
+              # `bash -e`, where a pipeline's status is its LAST command's, so
+              # `gh ... | awk` would turn an API error into a clean `0` and
+              # report a package as missing when nobody had asked the question.
+              #
+              # The sum is needed because `--paginate` with `--jq` runs the
+              # query once per page and prints one length per page: a repository
+              # with enough artifacts to paginate would put `0\n1` in `have`,
+              # and the `-gt` below would fail as an integer expression rather
+              # than answer the question. awk prints 0 for no input, so an
+              # empty reply stays a number.
+              counts=$(NAME="vsix-${target}" gh api \
+                "repos/${GITHUB_REPOSITORY}/actions/runs/${candidate}/artifacts?per_page=100" \
+                --paginate \
+                --jq '[.artifacts[] | select(.name == env.NAME and .expired == false)] | length')
+              have=$(printf '%s\n' "$counts" | awk '{ total += $1 } END { print total + 0 }')
               [ "$have" -gt 0 ] || missing="$missing vsix-${target}"
             done
             if [ -z "$missing" ]; then
