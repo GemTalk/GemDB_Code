@@ -501,32 +501,20 @@ note below for how the bundle is built and staged.
 
 ## Layout
 
-| File                         | What it owns                                                                             |
-| ---------------------------- | ---------------------------------------------------------------------------------------- |
-| `config.ts`                  | the pinned engine version, the fixed names, the root path                                |
-| `paths.ts`                   | where everything lives under the root path                                               |
-| `engine.ts`                  | downloading and extracting the database engine                                           |
-| `database.ts`                | creating the one database                                                                |
-| `osConfig.ts`                | shared memory and RemoveIPC — the `sudo` prompts                                         |
-| `processes.ts`               | `gslist` parsing, start/stop, and the environment sessions inherit                       |
-| `grail.ts`                   | staging and installing the Grail payload                                                 |
-| `autoStart.ts`               | whether the database may start unasked, and the record of a deliberate stop              |
-| `lifecycle.ts`               | `prepare` (inert, unattended) and `ensureRunning` (prompts, starts)                      |
-| `lock.ts`                    | the cross-window setup lock — activation runs in every window                            |
-| `statusBar.ts`               | the always-visible "a database is running" indicator                                     |
-| `session.ts`                 | GCI sessions, one per owner, and who owns which                                          |
-| `pythonQueries.ts`           | the Smalltalk that runs Python and reports its errors                                    |
-| `notebook.ts`                | the notebook kernel — one session per notebook                                           |
-| `pyRepl.ts`, `lineEditor.ts` | the GemDB Shell: the REPL loop and its line editing, both host-free                      |
-| `cliMain.ts`                 | the shell as a process — a raw tty wired to `pyRepl.ts`; bundled to `out/gemdb-shell.js` |
-| `cliVscode.ts`               | the environment-backed stand-in for `vscode` in that bundle                              |
-| `repl.ts`                    | opening GemDB Shell terminals (on the CLI); running a `.py` file via the CLI             |
-| `cli.ts`                     | generates `<rootPath>/bin/gemdb` and stages the shell bundle beside it                   |
-| `mcp.ts`                     | the MCP server: staging, filing it in, and the detached router gem                       |
-| `mcpRegistration.ts`         | registering it with this editor, and handing the details to other clients                |
-| `demo.ts`                    | cloning the Brain Freeze demo — the one command that writes outside the root path        |
-| `statusView.ts`              | the one tree view                                                                        |
-| `gci/`                       | **vendored from Jasper — do not edit**                                                   |
+`src/*.ts` files are named for what they do and are self-explanatory on read.
+Exceptions worth flagging, because they aren't derivable from the file itself:
+
+- **`gci/` and `src/gci/` are vendored from Jasper — do not edit.** Copied
+  byte-for-byte from Jasper's `client/src/gciLibrary.ts`, `gciConstants.ts`,
+  and `gciLibraryError.ts` so upstream fixes can be pulled in with a plain
+  `cp`. ESLint ignores it; keep it that way, and send fixes upstream rather
+  than patching here.
+- **`grail/` is a build artifact, not source** — gitignored, produced by
+  `scripts/bundle-grail.sh` from the commit pinned in `vendor-pins.sh`.
+- **`demo.ts` is the one command that writes outside the root path** —
+  cloning the Brain Freeze demo needs a folder-dialog consent, since
+  everything else GemDB does is confined to (and undone by deleting) the root
+  path.
 
 `docs/` holds design notes that are not part of the shipped extension
 (`.vscodeignore` keeps them out of the `.vsix`): decisions taken, what was
@@ -616,11 +604,6 @@ Shell and notebook sessions are unaffected: they evaluate through
 its first action. The fix belongs in Grail (filed as Grail #851, with the
 other two faces of the same root cause); until it lands, scripts should
 `commit()` or `abort()` first.
-
-`src/gci/` is copied byte-for-byte from Jasper's `client/src/gciLibrary.ts`,
-`gciConstants.ts`, and `gciLibraryError.ts` so upstream fixes can be pulled in
-with a plain `cp`. ESLint ignores it; keep it that way, and send fixes upstream
-rather than patching here.
 
 ## Relationship to Jasper
 
