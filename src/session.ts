@@ -422,7 +422,7 @@ export class GciSession {
     );
     if (!result.session) {
       // The database has a session limit — 10 on the Community Edition key
-      // GemDB installs, and the system's own gems (GcUser, SymbolUser) spend
+      // GemDB installs, and the system's own gems (SymbolGem, GcReclaim) spend
       // some of it. Hitting it is a normal consequence of opening notebooks,
       // not a fault, so it gets an error that says what is holding the
       // sessions rather than a bare error number.

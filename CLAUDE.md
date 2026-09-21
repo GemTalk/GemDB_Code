@@ -62,12 +62,12 @@ reversible; ask about what is persistent or global.**
 - Starting the MCP server, and registering it with **this editor** — inert and
   editor-owned, so both are automated *once the user has asked for the feature
   at all*. `gemdb.mcp.enabled` is **off by default**, because a client that
-  reconnects repeatedly leaks a worker gem each time and can exhaust the ten
-  sessions the Community Edition allows — measured, and it locked a real
-  database's owner out of it (`docs/mcp-server.md`, "The session leak"). The
-  default returns once the router can cap its own workers. Given consent,
-  running it is part of `ensureRunning` (see `mcp.ts`), because "the database is
-  running" and "an agent can reach it" should be one state. Registering it uses VS Code's own
+  reconnects repeatedly leaks a worker gem each time and can exhaust the
+  session limit — measured, and it locked a real database's owner out of it
+  (`docs/mcp-server.md`, "The session leak"). The default returns once the
+  router can cap its own workers. Given consent, running it is part of
+  `ensureRunning` (see `mcp.ts`), because "the database is running" and "an
+  agent can reach it" should be one state. Registering it uses VS Code's own
   `registerMcpServerDefinitionProvider`, which is the same call as
   `putCliOnPath` below: the definition lives only while the extension is
   enabled. **Registering it with any other client is the other side of the
@@ -176,7 +176,7 @@ notebook left logged in would keep a view of a database that no longer exists.
 session**: the scope dictionary lives in that session's SessionTemps, so
 `resetScope` takes an owner and clears nothing if that owner has no session
 yet. And **sessions are scarce** — the Community Edition keyfile GemDB installs
-says `Stone Session limit: 10`, the database's own gems (GcUser, SymbolUser)
+says `Stone Session limit: 10`, the database's own gems (SymbolGem, GcReclaim)
 spend some of it, and every GemDB Shell terminal is another. So a closed
 notebook gives its session back (`onDidCloseNotebookDocument`), and a login
 refused with GemStone error 4039, 4041 or 4050 becomes a `SessionLimitError`
@@ -232,55 +232,6 @@ For reporting on sessions, `System descriptionOfSession:` carries what matters
 in slots 5 (last begin/commit/abort), 16 (commits behind this session's view),
 8 (holding the oldest commit record) and 21 (the client's pid, RPC only).
 
-**A release ships code to build a database, not a database.** GemDB used to
-ship a prepared `extent/gemdb.dbf` with Grail already filed in, so that Python
-worked the moment the files were on disk. That is gone, and the reason is the
-whole point of the product: this is a *database*. A user's extent accumulates
-their data, so an update cannot replace it — Grail and the MCP server have to
-be installed into whatever is already there and upgraded in place. Shipping a
-prepared extent made the first install fast and made every upgrade afterwards
-take a different, less-exercised path, which is precisely backwards: the path
-that has to keep working for the life of the database is the one that should
-run every time. So `createDatabase` always copies the engine's own
-`bin/extent0.dbf`, and `ensureRunning` files Grail in.
-
-What that costs is minutes of topaz on a first run, worth paying once per user
-and not worth paying once per integration test file — so
-`scripts/build-test-extent.sh` (`npm run test:extent`) builds the same thing as
-a **test** artifact at `.test-extent/gemdb.dbf`, and the tests that need Python
-but are not testing the file-in start from it. `grail.test.ts` still files Grail
-into a stock extent, because that is the path every real install takes.
-
-**The Grail payload is a build artifact, not source.** `grail/` is gitignored and
-produced by `scripts/bundle-grail.sh`, which clones the Grail commit pinned in
-`vendor-pins.sh`, compiles its CPython shim against the pinned engine version (a
-different pin, in `src/config.ts`), and stages the result. The shim links
-`$GEMSTONE/lib/gciualib.o`, so it is valid only for the platform **and** the
-engine version it was built against — a mismatch installs cleanly and then
-fails at `import`. Changing `PINNED_ENGINE_VERSION` in `src/config.ts` means
-re-running `bundle:grail` on every supported platform.
-
-**The CLI's exit codes go through a status file, not topaz.** topaz cannot
-carry an exit status out of a `run` block — `ExitClientError status:` is not
-translated, and an `iferr … exit 1` action exits 0 (all measured). The driver
-therefore ends with no `exit` command at all, and must not grow one: `topaz -h`
-says of `-S` that topaz "exits when the script completes" and that "exit and
-quit commands are ignored". Ignored silently when stdin is a pipe — which is
-every CI run, every test, and every `gemdb x.py | cat` — and out loud when
-stdin is a tty, where it printed four lines of explanation and a
-`Logging out session 1.` in front of the user. So
-`gemdb-run.tpz` writes the status to the file named in `GEMDB_STATUS_FILE` and
-the bash wrapper becomes the exit code. Errors there are caught as
-`AbstractException`, not `Error`: Grail's Python exceptions live outside the
-`Error` branch, which is why grail.tpz's own file mode exits 0 on a Python
-error. `sys.exit(n)` is decoded by that same handler: Grail raises its own
-`SystemExit` (never `ExitClientError` — `except SystemExit` and `finally`
-must keep working), whose argument survives only in the exception's Python
-`args` tuple (the CPython `code` attribute is absent and the `code` instVar
-is never assigned — measured). The driver reads it with
-`___pyAttrLoad___: #'args'` and applies CPython's contract: None → 0 silent,
-int → `n \\ 256` silent, anything else → str to stderr and 1.
-
 **`gemdb` with no arguments IS the GemDB Shell — one REPL, bundled twice, run
 once.** `out/gemdb-shell.js` is esbuild's second bundle: `cliMain.ts` wrapping
 the same `pyRepl.ts`/`pythonQueries.ts`/`session.ts` the extension uses, with
@@ -299,67 +250,6 @@ Smalltalk stack and stranded the user at `topaz 1>`, Ctrl+C did the same via
 `Break` (6003), and Ctrl+D raised `EOF from stdin!`. Do not hand the
 no-argument mode back to `grail.tpz`. The shell is exercised end to end —
 through a real pty, `expect(1)` — in `src/__integration__/repl.test.ts`.
-
-**`input()` is a round trip through a ClientForwarder, and the traps are
-measured.** Grail's input() consults a per-session stdin provider
-(`builtins class >> stdinProvider:`); `session.ts` installs a ClientForwarder
-there at first evaluation, catches its send as GCI error 2336, and resumes with
-`GciTsContinueWith` — a line (`GciTsNewUtf8String` with convertToUnicode; a raw
-Utf8 reply is byte-immutable and dies on `replaceFrom:to:with:startingAt:`),
-nil for EOF (→ EOFError), or the Symbol `#interrupt` (→ KeyboardInterrupt _at
-the call_, catchable by the user's try/except). The interrupt must travel
-in-band because both client-side routes fail: continuing with a GCI error
-restarts the signalling frame, which does not search for handlers, and a soft
-break queued while the gem waits in the forwarder is discarded on resume.
-Gem-side, ClientForwarder is a ROOT class — even `isNil` forwards — so Grail
-compares it with `==` and boxes it in an Array inside SessionTemps (whose
-`at:put:` itself sends to the value). `interrupt()` during a pending read
-resolves the read as `#interrupt` instead of sending a break the gem cannot
-receive. All of it is exercised end to end in `src/__integration__/repl.test.ts`
-(shell, via a pty) and `cli.test.ts` (file mode, which needs none of this —
-a linked gem's GsFile stdin IS the process's stdin).
-
-**`print()` reaches the user only because the query layer captures it — and it
-streams when the caller can take it.** Grail routes `print()` through the
-Smalltalk global `Transcript`; over an RPC session the gem's stdout is a log
-file, so uncaptured output silently vanishes — that was a live notebook bug
-once. `buildQuery` in `pythonQueries.ts` redirects `Transcript` per evaluation
-and restores it in an `ensure:`. Two shapes: without `onOutput` it is a
-WriteStream, shipped back with the result framed by a unit separator; with
-`onOutput` it is a `ClientForwarder`, so each print surfaces mid-execution as
-error 2336 (one `nextPutAll:` per print — Grail builds the whole line first)
-and `session.ts` hands the text to the sink and resumes with the forwarder
-itself (a stream returns self). The streaming `ensure:` must send _nothing_ to
-the forwarder. Interrupting a print loop needed its own mechanism, all of it
-measured: a break that arrives while the gem is idle in a forwarder send is
-discarded on resume, a print loop is idle in one most of the time, re-sent
-breaks almost never hit the microseconds of execution between sends, and
-continuing the send with an error does NOT terminate anything — it re-signals
-the SAME send. What works is `GciTsClearStack` on the suspended send's
-GsProcess: it ends the call, runs the unwind blocks (so the `ensure:` restores
-Transcript), and leaves the session usable. So `interrupt()` sends one
-immediate break (for a gem that is executing) and sets `breakPending`; the
-executeAsync loop clears the stack at the next forwarder stop and throws
-`ExecutionInterrupted`, which the query layer reports as
-`Error: KeyboardInterrupt - `. Anything new that evaluates Python should go
-through that layer, not `execute` directly.
-
-**The console box says what the sink takes, because the sink cannot be
-asked.** `SessionTemps #GrailConsole` holds an Array; slot 1 is the sink, and
-slot 2 — `#'utf8'` — declares that it takes bytes. `gemdb-run.tpz` sets it,
-because its sink is `GsFile stdout` and `nextPutAll:` writes a Unicode string's
-code units straight through: `print('café')` was UTF-16BE on the terminal, a
-NUL between every ASCII character, while the same print through the shell was
-right. Grail encodes with `nextPutAsUtf8:` when the slot says so. It cannot
-instead probe the sink: the shell installs a `ClientForwarder`, and *any* send
-to one — `class`, `respondsTo:`, `isNil` — forwards to the client as error
-2336, which is not a Smalltalk exception and is not catchable in the gem
-(measured; `on: AbstractException` around `forwarder class` does not run). A
-probe would turn every print in a streaming session into a spurious client
-stop. The read side is the same seam from the other direction: `GsFile stdin`
-answers bytes, so Grail decodes that one branch with `decodeFromUTF8`, keeping
-the raw line when it is not UTF-8. Both directions are pinned in
-`src/__integration__/cli.test.ts`.
 
 **An engine upgrade orphans the database, and the engine will not say so until
 a login fails.** `assertDatabaseMatchesEngine` in `database.ts` is the guard,
@@ -388,23 +278,6 @@ first-install path, and `startProcesses` before the stone starts, because an
 extension update reaches that line without preparing anything — engine
 downloaded, database present, Grail staged, so `isInstalled()` is true.
 
-**Stage Grail before stamping it, and stamp only what this run created.**
-`stageAndRecordGrail` in `grail.ts` owns that order. Reversed, it broke both
-ways at once: on a first install `<rootPath>/grail` does not exist yet, so
-writing the stamp threw ENOENT and setup died just after "Database created"
-(reported from the field, 2026-08-24); on an upgrade the stamp landed in the
-*previous* version's directory, `grailNeedsUpdate` then compared the bundled
-stamp against itself and skipped staging, so the old payload stayed on disk
-labelled as the new one and `writeCliScripts` never refreshed `bin/gemdb`. It
-could not have worked regardless — `stageGrail` replaces the directory
-wholesale, stamp included. Neither failure reproduces on a machine that has run
-an earlier version, and the integration suite calls `stageGrail` itself rather
-than going through `prepare`, which is why `src/__tests__/grailStaging.test.ts`
-starts from a root path that does not exist. Since GemDB stopped shipping an
-extent there is only one answer to *when* the stamp may be written — after a
-successful file-in, by `recordGrailInstalled`, and nowhere else — so staging no
-longer stamps at all and the ordering question has gone with it.
-
 **The MCP router is a logged-in session, so stop it before the stone.**
 `runStop` does, right after `logout` and before the NetLDI (the router forks
 its per-client workers through the listener). Left up, `stopstone` refuses over
@@ -422,25 +295,6 @@ it when the router goes; all of them were gone within four seconds.
 baseline after a client has connected, so if that ever stops holding a test
 goes red rather than a user's database becoming unstoppable. The baseline is
 not zero: `SymbolGem` and `GcReclaim` hold sessions of their own.
-
-**The Python toolset takes two separate acts: file it in, then name it.**
-`--grail` on the payload's `install.sh` is the first — without it the classes
-are not in the image at all. It is **not** sufficient, and believing it was
-cost a red CI run: mcp_server 0.8.0 removed
-`McpServer class>>installedDefaultToolsetNames`, which used to add
-`McpGrailToolset` to the surface whenever `src/grail` was loaded, so **no
-toolset joins the default surface by being present any more**. A router that
-names nothing gets `defaultToolsetNames` — the core seven — and an agent asking
-for `eval_python` is told "Unknown tool". That is a server that browses
-Smalltalk and cannot run Python, which is the wrong half of GemDB.
-
-So `startMcpServer` names it: `r toolsetNames: (McpServer defaultToolsetNames
-copyWith: 'McpGrailToolset')`. Asked of the image rather than spelled out,
-because the core seven are upstream's to change and only the one name GemDB
-chooses belongs here. Alongside it goes `toolsetOptions` carrying
-`grailDirectory` — the toolset reads Grail's `.py` files from disk for
-`get_python_source`, `run_python_tests` and Python tracebacks, and a worker gem
-cannot work out where they are: its working directory is the stone's.
 
 **Read-only is a database user, not a server mode.** `gemdb.mcp.readOnly` once
 set `McpRouter>>readOnly:`, which upstream deleted in 0.9.0 — and was right to:
@@ -479,12 +333,6 @@ shipping a payload whose own error messages pointed at a file it did not
 carry. When that scan fires, the fix is to widen `ENTRYPOINTS` or fix the
 reference, never to add a name to an exclusion list.
 
-**Grail must be staged to a stable directory.** `installGrail` records Grail's
-own directory _inside the database_, and every session resolves modules relative
-to it. The extension directory is versioned (`gemdb.gemdb-<version>/`), so it
-moves on every update; that is why `stageGrail` copies the payload to
-`<rootPath>/grail` first and points `GRAIL_DIR` there.
-
 ## What the shell is called
 
 The interactive Python prompt is **GemDB Shell** everywhere a user can see it:
@@ -509,8 +357,6 @@ Exceptions worth flagging, because they aren't derivable from the file itself:
   and `gciLibraryError.ts` so upstream fixes can be pulled in with a plain
   `cp`. ESLint ignores it; keep it that way, and send fixes upstream rather
   than patching here.
-- **`grail/` is a build artifact, not source** — gitignored, produced by
-  `scripts/bundle-grail.sh` from the commit pinned in `vendor-pins.sh`.
 - **`demo.ts` is the one command that writes outside the root path** —
   cloning the Brain Freeze demo needs a folder-dialog consent, since
   everything else GemDB does is confined to (and undone by deleting) the root
@@ -542,68 +388,17 @@ the folder dialog is the consent, since a clone is persistent and outside the
 root path, and it never clones over a `brain-freeze` that is already there —
 that directory may hold the user's own commits. The version that lived here is committed at
 [`c9c261a`](https://github.com/GemTalk/GemDB_Code/tree/c9c261ac017fd7831cd29aa71b79da4ee8c1ed9b/docs/demo/brain-freeze),
-and is worth keeping in mind for one reason: it measured Grail `46c2a68`, and
-two of the findings below do not reproduce on `c875e56` — see the note after
-them. That it was a directory able to travel is the other reason each demo is
-one. Its five findings are
-the ones to read before building a second application on this: committing
-after the imports is what keeps class identity stable across sessions
-(aborting instead breaks `isinstance` for records written seconds earlier by
-identical source); *calling* a function for the first time dirties the
-session, because Grail compiles it then, so a transaction block needs a
-commit immediately before it and the resulting `PendingChangesError` names
-no cause — and because that compile is a repository write, two sessions
-racing to make it collide on a method neither of them typed, so the commit
-that settles a session has to abort on conflict or the app wedges for good;
-a schema change keeps `isinstance` but leaves older records without the new
-attribute, so optional fields must be read with `getattr`; an exception in a
-Flask view is invisible unless the app registers its own `Exception`
-handler, because Flask logs with `exc_info=` and Grail's `logging` is a stub
-that raises on it — and that handler must print with
-`print(traceback.format_exc())`, because `sys.stderr` is None in a gem and
-`traceback.print_exc()` therefore raises inside the handler and drops the
-connection anyway; and **`gemdb file.py` does not put the script's directory
-on `sys.path`** the way `python3 file.py` does, and `sys.path` is otherwise
-empty, so a script cannot import the file next to it until it inserts its
-own directory. That last one is a second `runPath` gap, alongside the dirty
-session below, and it belongs in Grail. All five are filed upstream —
-Grail #847 (`sys.path`), #848 (`sys.stdout`/`sys.stderr` are None), #849 (no
-`__traceback__`), #850 (`sys.argv` is topaz's), #851 (compiling is a write,
-including the dirty session below) — so a workaround here can be retired
-against an issue rather than rediscovered.
+and is worth keeping in mind for one reason: it measured an older Grail commit
+than what's pinned now, and its own scripts print which behaviour the Grail in
+front of you has. That it was a directory able to travel is the other reason
+each demo is one.
 
-Two of those five were measured on Grail `46c2a68` and **do not reproduce on
-`c875e56`**, which is worth knowing before relying on them. A schema change no
-longer keeps `isinstance`: a record written before the change fails
-`isinstance` against the edited class, not merely `type(x) is C`. Reading
-optional fields with `getattr` is still right, but a class check has to use
-`type(obj).__name__`. And a first call to a never-compiled function no longer
-dirties the session — what dirties it is running the code at all, which every
-notebook cell and every `gemdb file.py` does, so the advice to commit before a
-transaction stands for a different reason than the one given above. Both are
-reproducible either way, and
-[GemTalk/brain-freeze](https://github.com/GemTalk/brain-freeze) carries
-scripts that print which behaviour the Grail in front of you has.
-
-**`gemdb file.py` starts with a dirty session, so `gemdb.transaction()` cannot
-be a script's first statement.** Measured 2026-08-23 against the payload of
-that date, before Grail retired the canonical-modules flag. **Not re-measured
-since the move to the 4.0 alphas and Grail `0319048`**, where the installer's
-last step now deploys `gemdb` — which is exactly what makes the notebook and
-shell sessions clean, and may well have changed this too. The advice below is
-cheap either way (`commit()` or `abort()` first), but treat the finding as
-dated until someone runs it again. Walking the
-preamble one send at a time in a clean session: setting the flag left
-`System needsCommit` false, the `#GrailConsole` store leaves it false, and
-`importlib runPath:` sets it true — twice from clean, so it is `runPath`
-itself, not the file's own code (a script whose first line is
-`import gemstone; print(gemstone.needs_commit)` already prints True). The
-transaction block's entry check then blames the user for Grail's plumbing.
-Shell and notebook sessions are unaffected: they evaluate through
-`evaluateSource:usingModuleScope:` and a fresh one runs a transaction block as
-its first action. The fix belongs in Grail (filed as Grail #851, with the
-other two faces of the same root cause); until it lands, scripts should
-`commit()` or `abort()` first.
+**Building on Grail, or touching the Python↔GCI bridge? Read
+[`docs/grail.md`](docs/grail.md) first** — it covers install/staging
+mechanics, the bridge internals (exit codes, `input()`, `print()`, encoding),
+and the gotchas found building Brain Freeze (class identity across
+commits/aborts, schema changes, `sys.path`, the dirty-session-on-first-
+statement trap).
 
 ## Relationship to Jasper
 
