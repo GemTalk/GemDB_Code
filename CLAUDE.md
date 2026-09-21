@@ -95,34 +95,6 @@ outstanding preparation, prompts for shared memory, starts the processes, files
 Grail in, and brings the MCP server up. New entry points that need a database
 should call it rather than checking and asking.
 
-## The two test suites
-
-`npm test` is mocked and fast, and covers decisions: the setup lock, the
-`gslist` parser, what `runStop` does when the stone refuses, what the notebook
-kernel does with a batch of cells, every keystroke the REPL's line editor
-interprets, and the REPL loop around it — the continuation rule, exit(),
-type-ahead, KeyboardInterrupt (`lineEditor.ts` is pure and `pyRepl.ts` takes
-its collaborators as a `ReplWorld` argument for exactly that reason). Anything
-with a branch worth defending belongs here, which is why `runStop` takes its
-collaborators as a `StopWorld` argument rather than reaching for them.
-
-The kernel is tested through the `executeHandler` the controller publishes —
-the same entry point VS Code calls — by way of a fake controller in
-`src/__mocks__/vscode.ts`. Deliberately no `@vscode/test-electron`: what is left
-once the batching, scope keying and output shaping are covered is whether VS
-Code offers the controller in the kernel picker, which is VS Code's behaviour
-and not worth a downloaded editor per run to assert.
-
-`npm run test:integration` starts a real database and is a separate command
-because it is seconds rather than milliseconds and leaves processes behind if it
-fails badly. It borrows the installed engine by symlink and points
-`gemdb.rootPath` at a temporary directory; since `engineEnvironment` sets
-`GEMSTONE_GLOBAL_DIR` to the root path, and that is where the engine keeps its
-lock files, the test stone and a real one can both be called `gemdb` and stay
-invisible to each other. It skips itself when no engine is installed.
-
-Download and extraction stay out of both: 144 MB to test an HTTP range request.
-
 ## CI
 
 `.github/workflows/ci.yml`, two jobs split on what they need. `checks` runs
