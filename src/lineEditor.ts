@@ -65,7 +65,7 @@ export class LineEditor {
       if (input.startsWith(ESC)) {
         // Parsing terminal escape sequences is this class's job — matching the
         // ESC control character is the point, not a slip.
-        // eslint-disable-next-line no-control-regex
+        // eslint-disable-next-line no-control-regex -- matching the ESC control character is the point, not a slip
         const match = /^\u001b(\[[0-9;]*[A-Za-z~]|[OA-Za-z])/.exec(input);
         if (!match) {
           // A prefix of a sequence — keep it for the next feed. Bound it so a

@@ -28,6 +28,8 @@ scripts/check-vsix.sh      # assert a packaged .vsix carries what an install nee
 
 Before calling something done: `npm run lint && npm run format:check && npm run typecheck && npm run typecheck:strict`.
 
+Never add `eslint-disable` or change a rule's severity to silence a lint error — fix the underlying code. If a rule genuinely can't be satisfied, add a scoped disable (single line, not file-wide) with a comment explaining why, and flag it to the user before committing. `eslint-comments/require-description` enforces that every disable comment carries a `-- reason`, so an undocumented one fails `npm run lint` outright.
+
 ## The automation line
 
 GemDB automates aggressively, along one rule: **automate what is inert and
