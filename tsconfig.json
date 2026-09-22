@@ -1,6 +1,13 @@
 {
   "compilerOptions": {
-    "module": "commonjs",
+    // The real output is commonjs (esbuild.mjs bundles with format: 'cjs'),
+    // but nothing here compiles to disk: tsc's only job is type checking, and
+    // es2022 is what lets top-level await in test files (see
+    // src/__tests__/activation.test.ts) type-check without lying about the
+    // runtime module system. "bundler" resolution matches: there's no real
+    // module loader here either, just esbuild.
+    "module": "es2022",
+    "moduleResolution": "bundler",
     "target": "ES2022",
     "lib": ["ES2024"],
     // Nothing compiles this project to disk: esbuild.mjs produces the two
@@ -18,7 +25,5 @@
     "types": ["node", "vscode"]
   },
   "include": ["src/**/*.ts"],
-  // Tests are run by vitest, which transpiles them itself; they are never
-  // bundled into the extension, so the build does not compile them.
-  "exclude": ["node_modules", "out", "grail", "src/__tests__", "src/__integration__"]
+  "exclude": ["node_modules", "out", "grail"]
 }
