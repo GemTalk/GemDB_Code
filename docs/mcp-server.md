@@ -44,6 +44,26 @@ The two flags are the only decisions:
   GemDB can start it, so shipping it would file code into every user's database
   that nothing can reach.
 
+## The Python toolset takes two separate acts: file it in, then name it
+
+`--grail` on the payload's `install.sh` is the first — without it the classes
+are not in the image at all. It is **not** sufficient, and believing it was
+cost a red CI run: mcp_server 0.8.0 removed
+`McpServer class>>installedDefaultToolsetNames`, which used to add
+`McpGrailToolset` to the surface whenever `src/grail` was loaded, so **no
+toolset joins the default surface by being present any more**. A router that
+names nothing gets `defaultToolsetNames` — the core seven — and an agent asking
+for `eval_python` is told "Unknown tool". That is a server that browses
+Smalltalk and cannot run Python, which is the wrong half of GemDB.
+
+So `startMcpServer` names it: `r toolsetNames: (McpServer defaultToolsetNames
+copyWith: 'McpGrailToolset')`. Asked of the image rather than spelled out,
+because the core seven are upstream's to change and only the one name GemDB
+chooses belongs here. Alongside it goes `toolsetOptions` carrying
+`grailDirectory` — the toolset reads Grail's `.py` files from disk for
+`get_python_source`, `run_python_tests` and Python tracebacks, and a worker gem
+cannot work out where they are: its working directory is the stone's.
+
 ## Why it is a process, and not just an install
 
 `McpRouter>>runOnPort:` is a blocking accept loop, and it has to be the main

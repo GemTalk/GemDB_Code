@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeController, __controllers, __resetSettings } from '../__mocks__/vscode';
 
+// Runs the kernel through the same entry point VS Code calls (the
+// executeHandler the controller publishes), against a fake controller rather
+// than @vscode/test-electron. Once the logic around that entry point is
+// covered, what's left is whether VS Code itself offers the controller in
+// the kernel picker — VS Code's behaviour, not worth a downloaded editor per
+// run to assert.
+
 // The database and the Python are both somebody else's tests: what the
 // controller decides is when to call them, with what, and what to do with the
 // answer. Grail's own behaviour is covered against a real database in
