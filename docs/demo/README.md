@@ -15,4 +15,7 @@ their value. Start with the findings if you are about to build something.
 **Nothing here is run by CI**, and nothing here ships in the `.vsix`
 (`.vscodeignore` excludes `docs/`). Treat a demo script as documentation that
 happens to be executable: it was true when it was measured, and the date is
-at the top of each write-up.
+at the top of each write-up. That cuts both ways: every script in the Brain
+Freeze demo was committed unable to import its own siblings, and neither the
+repo gate nor the integration suite could have noticed. Run a demo end to end
+after changing it.

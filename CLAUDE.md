@@ -261,35 +261,8 @@ Exceptions worth flagging, because they aren't derivable from the file itself:
   everything else GemDB does is confined to (and undone by deleting) the root
   path.
 
-`docs/` holds design notes that are not part of the shipped extension
-(`.vscodeignore` keeps them out of the `.vsix`): decisions taken, what was
-measured, and what is still open. Start with
-[`docs/reaching-windows.md`](docs/reaching-windows.md).
-[`docs/mcp-server.md`](docs/mcp-server.md) — the MCP server's measurements and
-decisions (session leak, read-only, stop order).
-**`docs/demo/` is one directory per demo, and each one is self-contained** —
-its `README.md`, its scripts, and anything else it needs, so a demo can be
-read in one place and lifted out in one move. Nothing in CI runs them, which
-is worth knowing before trusting one: every script in the Brain Freeze demo
-was committed unable to import its own siblings, and neither the repo gate nor
-the integration suite could have noticed.
-[`docs/demo/rabbit-in-the-hat/`](docs/demo/rabbit-in-the-hat/) is the
-five-minute demo of persistence and sessions; every command and output in it
-was measured, which is how the `runPath` gap below was found.
-Brain Freeze Insurance was the longer one — a Flask app that lives in the
-database. Per its PRD (FR-1.1, FR-8.2) it was always going to be its own
-public repo rather than ours, and it now is:
-[GemTalk/brain-freeze](https://github.com/GemTalk/brain-freeze), which also
-covers the notebook, the MCP surface and the schema change that the version
-here never did. `gemdb.cloneBrainFreeze` (`demo.ts`) is how a user gets it:
-the folder dialog is the consent, since a clone is persistent and outside the
-root path, and it never clones over a `brain-freeze` that is already there —
-that directory may hold the user's own commits. The version that lived here is committed at
-[`c9c261a`](https://github.com/GemTalk/GemDB_Code/tree/c9c261ac017fd7831cd29aa71b79da4ee8c1ed9b/docs/demo/brain-freeze),
-and is worth keeping in mind for one reason: it measured an older Grail commit
-than what's pinned now, and its own scripts print which behaviour the Grail in
-front of you has. That it was a directory able to travel is the other reason
-each demo is one.
+`docs/` holds design notes — decisions and measurements, not shipped.
+[`docs/README.md`](docs/README.md) says which one to read before which change.
 
 **Building on Grail, or touching the Python↔GCI bridge? Read
 [`docs/grail.md`](docs/grail.md) first** — it covers install/staging
