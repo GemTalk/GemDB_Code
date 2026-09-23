@@ -361,10 +361,10 @@ async function prepareOnFirstRun(
   extensionPath: string,
   refresh: () => void,
 ): Promise<void> {
-  if (isInstalled()) {
-    reportUnattendedSetupSkipped(SKIP_REASON.alreadyInstalled);
-    return;
-  }
+  // No `unattendedSetupSkipped` event here, on purpose: every installed machine
+  // takes this return on every activation, so it would double event volume and
+  // bury the rare skip reasons. `activated{state}` already records it.
+  if (isInstalled()) return;
 
   // A remote or web window shares the marketplace install but not the machine
   // GemDB would be setting up. Only a local desktop window should act.

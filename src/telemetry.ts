@@ -280,7 +280,6 @@ export function reportActivation(durationMs: number, state: GemDbState): void {
 
 /** Why the unattended first-run setup at activation did not run. */
 export const SKIP_REASON = {
-  alreadyInstalled: 'alreadyInstalled',
   remoteWindow: 'remoteWindow',
   markerPresent: 'markerPresent',
   lockHeld: 'lockHeld',
@@ -290,6 +289,12 @@ export type SkipReason = (typeof SKIP_REASON)[keyof typeof SKIP_REASON];
 
 /**
  * The unattended pass at activation bailed out before setup ran.
+ *
+ * Cadence: at most once per window activation, and only while GemDB is not
+ * installed — an installed machine returns before reaching any of these, and
+ * `activated{state}` already says so. `markerPresent` repeats on every
+ * activation until the user resumes setup; that repetition is the signal
+ * (how long they stay stuck), and it ends when they install.
  *
  * Emitted only when it skips — the case where it runs instead is
  * `setupStarted{trigger: firstRun}`, and emitting both would double-count the

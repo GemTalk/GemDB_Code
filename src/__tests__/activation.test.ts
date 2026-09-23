@@ -146,12 +146,15 @@ describe('activate()', () => {
       }));
     }
 
-    it('reports alreadyInstalled without ever emitting setupStarted', () => {
+    it('stays silent on an installed machine, leaving that to activated', async () => {
       isInstalled.mockReturnValue(true);
+      isRunning.mockReturnValue(false);
 
       activate(fakeExtensionContext());
+      await expect.poll(() => eventsNamed('activated')).toHaveLength(1);
 
-      expect(skipped()).toEqual([{ skipReason: 'alreadyInstalled' }]);
+      expect(skipped()).toEqual([]);
+      expect(eventsNamed('setupStarted')).toEqual([]);
     });
 
     it('reports remoteWindow for a remote or web window', () => {
