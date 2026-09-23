@@ -61,6 +61,7 @@ import {
   reportDatabaseStarted,
   reportSetupFinished,
   reportSetupStarted,
+  Stopwatch,
 } from './telemetry';
 
 /** Guard every entry point with one clear message rather than a stack trace. */
@@ -161,7 +162,7 @@ function paused(): void {
  */
 export async function runSetup(extensionPath: string, trigger: Trigger): Promise<SetupOutcome> {
   reportSetupStarted(trigger);
-  const startedAt = Date.now();
+  const stopwatch = Stopwatch.start();
   const outcome = await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
@@ -189,7 +190,7 @@ export async function runSetup(extensionPath: string, trigger: Trigger): Promise
       }
     },
   );
-  reportSetupFinished(trigger, outcome, Date.now() - startedAt);
+  reportSetupFinished(trigger, outcome, stopwatch.elapsedMs());
   return outcome;
 }
 
@@ -297,9 +298,9 @@ export async function start(extensionPath: string): Promise<void> {
  * Returns true when the database is up and Python will run.
  */
 export async function ensureRunning(extensionPath: string, trigger: Trigger): Promise<boolean> {
-  const startedAt = Date.now();
+  const stopwatch = Stopwatch.start();
   const failed = (outcome: Exclude<DatabaseOutcome, typeof DATABASE_OUTCOME.started>): false => {
-    reportDatabaseStarted(trigger, outcome, 'no', Date.now() - startedAt, false);
+    reportDatabaseStarted(trigger, outcome, 'no', stopwatch.elapsedMs(), false);
     return false;
   };
 
@@ -373,7 +374,7 @@ export async function ensureRunning(extensionPath: string, trigger: Trigger): Pr
           trigger,
           DATABASE_OUTCOME.started,
           filedGrail,
-          Date.now() - startedAt,
+          stopwatch.elapsedMs(),
           didWork,
         );
         return true;

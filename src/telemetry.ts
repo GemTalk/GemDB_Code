@@ -272,9 +272,30 @@ function send(
 }
 
 /**
+ * Elapsed time on the monotonic clock, for every `durationMs` sent here.
+ *
+ * Not `Date.now()` deltas: setup and `ensureRunning` can take minutes, long
+ * enough for an NTP step or a manual clock change to skew one or make it
+ * negative. The clock is hidden so no caller can subtract a `Date.now()` from
+ * a `performance.now()`. It does not advance while the machine sleeps, so a
+ * download spanning a laptop nap reports the time GemDB was actually running.
+ */
+export class Stopwatch {
+  private readonly startedAt = performance.now();
+
+  static start(): Stopwatch {
+    return new Stopwatch();
+  }
+
+  elapsedMs(): number {
+    return Math.round(performance.now() - this.startedAt);
+  }
+}
+
+/**
  * The extension host finished activating.
  *
- * @param durationMs wall-clock time since the first statement of `activate()`,
+ * @param durationMs time since the first statement of `activate()`,
  *   measured before the detached `prepareOnFirstRun` tail, which can run for
  *   minutes and is not activation.
  * @param state what `activate()` found on the way in — reusing

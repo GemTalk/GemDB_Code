@@ -37,6 +37,7 @@ import { GemDbStatusBar } from './statusBar';
 import { StatusViewProvider } from './statusView';
 import {
   SKIP_REASON,
+  Stopwatch,
   TRIGGER,
   initTelemetry,
   reportActivation,
@@ -44,7 +45,7 @@ import {
 } from './telemetry';
 
 export function activate(context: vscode.ExtensionContext): void {
-  const activationStarted = Date.now();
+  const stopwatch = Stopwatch.start();
   initTelemetry(context, isInstalled());
 
   const extensionPath = context.extensionPath;
@@ -295,7 +296,7 @@ export function activate(context: vscode.ExtensionContext): void {
       `GemDB does not support ${process.platform}/${process.arch} yet — ` +
         'macOS on Apple Silicon only.',
     );
-    reportActivation(Date.now() - activationStarted, 'unsupportedPlatform');
+    reportActivation(stopwatch.elapsedMs(), 'unsupportedPlatform');
     return;
   }
 
@@ -313,7 +314,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // `gslist`, and the state it reports is not worth stalling every window's
   // activation for. `activationMs` is still captured synchronously above, so
   // it keeps measuring activation itself rather than this report's own cost.
-  const activationMs = Date.now() - activationStarted;
+  const activationMs = stopwatch.elapsedMs();
   void (async () => {
     const state = isInstalled()
       ? (await isRunningAsync())
