@@ -7,53 +7,24 @@ import type { GemDbState } from './statusView';
 /**
  * GemDB's telemetry: one named function per thing worth counting.
  *
- * Four rules a future edit can break, neither visible from a call site:
+ * Four rules a future edit can break, none visible from a call site:
  *
- * 1. **This module must never reach `out/gemdb-shell.js`.** That bundle is
- *    built from the same sources with `vscode` aliased to `cliVscode.ts`;
- *    there is no extension host there, so nothing would enforce the user's
- *    telemetry setting. ESLint's shell-graph denylist catches a direct
- *    import at save time; esbuild's metafile check catches everything else.
- *    Any extension-host file may import this module — the denylist is what
- *    keeps the boundary, not a hand-kept allowlist — except `session.ts` and
- *    `pythonQueries.ts`, which are permanently excluded because they are
- *    themselves in the shell bundle: `gemdb-run.tpz`'s file mode and a linked
- *    `topaz` reach them only through an injected sink, never through
- *    `vscode`, and adding this import there would silently break that.
- * 2. **Never `sendDangerousTelemetryEvent`** or its siblings. They bypass the
- *    user's preference by design, for CI. Shipping one is a Marketplace
- *    violation.
- * 3. **Events are facts. Funnels are queries.** Never write a `first*` event
- *    — first-ness is `min(timestamp) by machineId` at query time, computed
- *    from an ordinary repeatable event, not baked into the schema. Baking it
- *    in costs three things: it cannot be recomputed if a marker file is lost
- *    or global storage is wiped, so a gap or a duplicate is unrecoverable and
- *    indistinguishable from each other; it discards repeat usage entirely, so
- *    retention (`count(distinct day)`) can never be answered; and it freezes
- *    one analysis decision into data that outlives it. Bound volume with
- *    cadence instead — the table below is the answer for every event this
- *    module sends, and it should stay in sync with the module:
- *
- *    | Event                      | Cadence                                    |
- *    | --------------------------- | ------------------------------------------ |
- *    | `activated`                 | once per window activation                  |
- *    | `unattendedSetupSkipped`     | once per activation, only when it skips     |
- *    | `setupStarted`               | once per attempt — repeats freely on purpose|
- *    | `setupFinished`              | once per attempt, paired with the above     |
- *    | `osConfigPrompted`           | once per modal shown or command run short   |
- *    | `databaseStarted`            | once per real start, plus deduped failures  |
- *    | `pythonUsed`                 | once per window per surface (max 3)         |
- *
- *    No event may be emitted per cell, per print, or per keystroke — a user
- *    exploring data runs hundreds of cells, and `pythonUsed`'s bound above is
- *    the shape that follows from this rule, not a special case of it.
- * 4. **Property values name what the user did, never a function.** A command
- *    id or a user-facing surface (`installCommand`, `notebook`, `shell`) is a
- *    safe vocabulary because it is what CLAUDE.md already promises stays
- *    stable — users bind keys to command ids. `trigger: 'ensureRunning'`
- *    would instead name the function that happened to call this, and a
- *    rename or a restructure would silently split the series in a chart
- *    nobody would think to reconcile.
+ * 1. **This module must never reach `out/gemdb-shell.js`** — no extension host
+ *    there enforces the user's telemetry setting (CLAUDE.md, "`gemdb` with no
+ *    arguments IS the GemDB Shell"). `no-restricted-imports` in
+ *    `eslint.config.mjs` denies it to every shell-graph file, `session.ts` and
+ *    `pythonQueries.ts` permanently (they get an injected sink instead);
+ *    `assertNoTelemetryInShellBundle` in `esbuild.mjs` checks the built graph
+ *    and is the guard that actually holds.
+ * 2. **Never `sendDangerousTelemetryEvent`** or its siblings: they bypass the
+ *    user's setting by design, and shipping one violates Marketplace policy.
+ * 3. **Events are facts, not funnels: no `first*` events.** First-ness is
+ *    `min(timestamp) by machineId` at query time. Volume is bounded by each
+ *    event's cadence, stated on its `report*` function — never per cell, per
+ *    print or per keystroke.
+ * 4. **Property values name what the user did** — a command id or a surface,
+ *    as `TRIGGER` and `SURFACE` spell them — never a function, so a rename
+ *    cannot silently split a series.
  */
 
 /**
@@ -293,7 +264,7 @@ export class Stopwatch {
 }
 
 /**
- * The extension host finished activating.
+ * The extension host finished activating — once per window activation.
  *
  * @param durationMs time since the first statement of `activate()`,
  *   measured before the detached `prepareOnFirstRun` tail, which can run for
