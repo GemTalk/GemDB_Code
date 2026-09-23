@@ -76,11 +76,13 @@ describe('activate()', () => {
 
     activate(fakeExtensionContext());
     // `activated.state` is resolved off the synchronous activation path (it
-    // spawns `gslist`), so the event lands a tick after `activate()` returns.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // spawns `gslist`), so the event lands after `activate()` returns. Poll
+    // for it rather than sleeping a tick: `activate()` has no promise to
+    // await (returning one would hold VS Code's activation on `gslist`), and
+    // a fixed wait breaks as soon as that tail grows another `await`.
+    await expect.poll(() => eventsNamed('activated')).toHaveLength(1);
 
     const activated = eventsNamed('activated');
-    expect(activated).toHaveLength(1);
     const durationMs = activated[0].measurements?.activationMs;
     expect(durationMs).toBeGreaterThanOrEqual(0);
     expect(Number.isFinite(durationMs)).toBe(true);
@@ -119,7 +121,7 @@ describe('activate()', () => {
       isRunning.mockReturnValue(false);
 
       activate(fakeExtensionContext());
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await expect.poll(() => eventsNamed('activated')).toHaveLength(1);
 
       const [activated] = eventsNamed('activated');
       expect(activated.properties.state).toBe('stopped');
@@ -130,7 +132,7 @@ describe('activate()', () => {
       isRunning.mockReturnValue(true);
 
       activate(fakeExtensionContext());
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await expect.poll(() => eventsNamed('activated')).toHaveLength(1);
 
       const [activated] = eventsNamed('activated');
       expect(activated.properties.state).toBe('running');
@@ -184,9 +186,8 @@ describe('activate()', () => {
       writeFileSync(join(rootPathValue, '.gemdb-setup.lock'), '1');
 
       activate(fakeExtensionContext());
-      await new Promise((resolve) => setTimeout(resolve, 0));
 
-      expect(skipped()).toEqual([{ skipReason: 'lockHeld' }]);
+      await expect.poll(skipped).toEqual([{ skipReason: 'lockHeld' }]);
     });
 
     it('reports installedByOtherWindow when the lock re-check finds it already done', async () => {
@@ -203,9 +204,8 @@ describe('activate()', () => {
         .mockReturnValue(true); // the re-check inside the lock
 
       activate(fakeExtensionContext());
-      await new Promise((resolve) => setTimeout(resolve, 0));
 
-      expect(skipped()).toEqual([{ skipReason: 'installedByOtherWindow' }]);
+      await expect.poll(skipped).toEqual([{ skipReason: 'installedByOtherWindow' }]);
     });
   });
 });
