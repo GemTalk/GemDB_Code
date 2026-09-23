@@ -125,5 +125,5 @@ echo "Changes are active immediately. No restart required."
 echo
 echo "To replay first-run setup as well, remove the root path and the marker"
 echo "that records that setup was offered (both as yourself, not as root):"
-echo "  chmod -R +w ~/GemDB && rm -rf ~/GemDB"
+echo "  chmod -R u+w ~/GemDB && rm -rf ~/GemDB"
 echo "  rm -f ~/Library/Application\\ Support/Code/User/globalStorage/gemdb.gemdb/setup-attempted"
