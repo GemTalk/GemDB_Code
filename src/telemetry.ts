@@ -25,6 +25,9 @@ import type { GemDbState } from './statusView';
  * 4. **Property values name what the user did** — a command id or a surface,
  *    as `TRIGGER` and `SURFACE` spell them — never a function, so a rename
  *    cannot silently split a series.
+ *
+ * `docs/telemetry.md` describes every event for people who read the data;
+ * change it with this file. `telemetryDocs.test.ts` fails when it falls behind.
  */
 
 /**
@@ -54,11 +57,12 @@ const CONNECTION_STRING =
   'ApplicationId=0459d5a4-2436-4702-9979-c274a9da9b37';
 
 /**
- * Every event GemDB can emit. Private, and `send` is typed to it, so a name
- * cannot be typo'd and no event can exist without a `report*` function below
- * that says what it means.
+ * Every event GemDB can emit. `send` is typed to it, so a name cannot be
+ * typo'd, and `send` is private, so no event can exist without a `report*`
+ * function below that says what it means. Exported only so the docs test can
+ * list it.
  */
-const EVENT = {
+export const EVENT = {
   activated: 'activated',
   unattendedSetupSkipped: 'unattendedSetupSkipped',
   setupStarted: 'setupStarted',
@@ -94,7 +98,11 @@ const FIRST_SEEN_FILE = 'first-seen';
  *   all. Without this, such a user would reach first Python in seconds and
  *   inflate conversion as a phantom new install.
  */
-type InstallDaySource = 'firstSeen' | 'reinstall';
+export const INSTALL_DAY_SOURCE = {
+  firstSeen: 'firstSeen',
+  reinstall: 'reinstall',
+} as const;
+type InstallDaySource = (typeof INSTALL_DAY_SOURCE)[keyof typeof INSTALL_DAY_SOURCE];
 
 interface InstallDay {
   /** UTC date only (`YYYY-MM-DD`) — no timestamp, no path. */
@@ -133,7 +141,7 @@ export function resolveInstallDay(storageDir: string, databaseExists: boolean): 
     const contents = fs.readFileSync(firstSeenPath, 'utf8');
     return {
       installDay: utcDateOnly(contents),
-      installDaySource: 'firstSeen',
+      installDaySource: INSTALL_DAY_SOURCE.firstSeen,
       firstSeenAt: contents,
     };
   } catch {
@@ -143,7 +151,7 @@ export function resolveInstallDay(storageDir: string, databaseExists: boolean): 
   const now = new Date().toISOString();
   const installDay: InstallDay = {
     installDay: utcDateOnly(now),
-    installDaySource: databaseExists ? 'reinstall' : 'firstSeen',
+    installDaySource: databaseExists ? INSTALL_DAY_SOURCE.reinstall : INSTALL_DAY_SOURCE.firstSeen,
     firstSeenAt: now,
   };
 
@@ -311,7 +319,12 @@ export function reportUnattendedSetupSkipped(skipReason: SkipReason): void {
  * than imported so this module stays a leaf: nothing it imports can create a
  * cycle back through a caller.
  */
-type SetupOutcome = 'completed' | 'cancelled' | 'failed';
+export const SETUP_OUTCOME = {
+  completed: 'completed',
+  cancelled: 'cancelled',
+  failed: 'failed',
+} as const;
+type SetupOutcome = (typeof SETUP_OUTCOME)[keyof typeof SETUP_OUTCOME];
 
 /**
  * `runSetup` started — a user choosing to download, every time. Repeats
@@ -394,6 +407,14 @@ export const DATABASE_OUTCOME = {
 } as const;
 export type DatabaseOutcome = (typeof DATABASE_OUTCOME)[keyof typeof DATABASE_OUTCOME];
 
+/** Whether `ensureRunning` filed Grail into the database this time, and why. */
+export const FILED_GRAIL = {
+  no: 'no',
+  firstTime: 'firstTime',
+  update: 'update',
+} as const;
+export type FiledGrail = (typeof FILED_GRAIL)[keyof typeof FILED_GRAIL];
+
 /** The last failure `reportDatabaseStarted` sent, so a repeat is silent. */
 let lastReportedFailure: DatabaseOutcome | undefined;
 
@@ -414,7 +435,7 @@ let lastReportedFailure: DatabaseOutcome | undefined;
 export function reportDatabaseStarted(
   trigger: Trigger,
   outcome: DatabaseOutcome,
-  filedGrail: 'no' | 'firstTime' | 'update',
+  filedGrail: FiledGrail,
   durationMs: number,
   didWork: boolean,
 ): void {

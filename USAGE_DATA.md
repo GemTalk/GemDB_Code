@@ -13,7 +13,8 @@ whether it's working and prioritize fixes. These events carry only
 non-identifying, extension-level information: things like which platform
 GemDB is running on, how long an operation took, or whether an operation
 succeeded or failed. They never carry the contents of your work (see "What
-we do not collect" below).
+we do not collect" below). [docs/telemetry.md](docs/telemetry.md) lists every
+event and what each of its properties can say.
 
 VS Code automatically attaches its own common properties to every event:
 `common.extname`, `common.extversion`, `common.vscodemachineid`,
@@ -97,5 +98,5 @@ and delete the matching records.
 
 ## Changes
 
-Last updated: 2026-09-16. Changes to this notice will be published in this
+Last updated: 2026-09-23. Changes to this notice will be published in this
 repository.

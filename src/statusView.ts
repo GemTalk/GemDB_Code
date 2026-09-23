@@ -23,7 +23,13 @@ function humanIdle(ms: number): string {
   return minutes < 60 ? `${minutes} min` : `${Math.round(minutes / 6) / 10} h`;
 }
 
-export type GemDbState = 'unsupportedPlatform' | 'notInstalled' | 'stopped' | 'running';
+export const GEMDB_STATE = {
+  unsupportedPlatform: 'unsupportedPlatform',
+  notInstalled: 'notInstalled',
+  stopped: 'stopped',
+  running: 'running',
+} as const;
+export type GemDbState = (typeof GEMDB_STATE)[keyof typeof GEMDB_STATE];
 
 interface Row {
   label: string;

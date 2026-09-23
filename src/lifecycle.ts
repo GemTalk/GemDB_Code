@@ -56,6 +56,8 @@ import { allowAutoStart } from './autoStart';
 import {
   DATABASE_OUTCOME,
   DatabaseOutcome,
+  FILED_GRAIL,
+  FiledGrail,
   TRIGGER,
   Trigger,
   reportDatabaseStarted,
@@ -300,7 +302,7 @@ export async function start(extensionPath: string): Promise<void> {
 export async function ensureRunning(extensionPath: string, trigger: Trigger): Promise<boolean> {
   const stopwatch = Stopwatch.start();
   const failed = (outcome: Exclude<DatabaseOutcome, typeof DATABASE_OUTCOME.started>): false => {
-    reportDatabaseStarted(trigger, outcome, 'no', stopwatch.elapsedMs(), false);
+    reportDatabaseStarted(trigger, outcome, FILED_GRAIL.no, stopwatch.elapsedMs(), false);
     return false;
   };
 
@@ -351,7 +353,7 @@ export async function ensureRunning(extensionPath: string, trigger: Trigger): Pr
         // and an extension update that ships a newer Grail — in both cases the
         // build on disk differs from the one recorded in the database.
         const firstTime = !grailInstalled();
-        let filedGrail: 'no' | 'firstTime' | 'update' = 'no';
+        let filedGrail: FiledGrail = FILED_GRAIL.no;
         if (grailNeedsUpdate(extensionPath) && (firstTime || reinstallPythonOnUpdate())) {
           const stamp = bundledGrailStamp(extensionPath);
           log(
@@ -365,11 +367,12 @@ export async function ensureRunning(extensionPath: string, trigger: Trigger): Pr
           stageGrail(extensionPath);
           await installGrail(extensionPath, progress);
           recordGrailInstalled(extensionPath);
-          filedGrail = firstTime ? 'firstTime' : 'update';
+          filedGrail = firstTime ? FILED_GRAIL.firstTime : FILED_GRAIL.update;
         }
 
         await ensureMcpServing(extensionPath, progress);
-        const didWork = osResult.prompted || startedStone || startedNetldi || filedGrail !== 'no';
+        const didWork =
+          osResult.prompted || startedStone || startedNetldi || filedGrail !== FILED_GRAIL.no;
         reportDatabaseStarted(
           trigger,
           DATABASE_OUTCOME.started,
