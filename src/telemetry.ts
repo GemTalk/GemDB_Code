@@ -488,8 +488,14 @@ const seenSurfaces = new Set<Surface>();
 export function reportPythonUsed(surface: Surface, evidence: Evidence): void {
   if (seenSurfaces.has(surface)) return;
   seenSurfaces.add(surface);
+  // Wall-clock on purpose, unlike `Stopwatch`: first-seen is persisted and
+  // this spans restarts, which no monotonic clock can. Clamped because a clock
+  // set back since first-seen was recorded would otherwise send a negative
+  // age; rounded to whole minutes, the same coarsening `installDay` applies.
   const minutesSinceFirstSeen =
-    firstSeenAtMs !== undefined ? (Date.now() - firstSeenAtMs) / 60000 : undefined;
+    firstSeenAtMs !== undefined
+      ? Math.max(0, Math.round((Date.now() - firstSeenAtMs) / 60_000))
+      : undefined;
   send(
     EVENT.pythonUsed,
     { surface, evidence },
