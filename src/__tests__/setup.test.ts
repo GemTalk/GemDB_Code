@@ -7,7 +7,6 @@ import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 // tests exercise it directly, with everything that touches the machine or
 // the network mocked out, so the three outcomes and both cancel routes are
 // covered without a real download.
-vi.mock('@vscode/extension-telemetry');
 
 interface FakeToken {
   isCancellationRequested: boolean;

@@ -9,10 +9,10 @@ import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 // download, the sudo prompt, autoStart — is a detached tail that must never
 // run in a unit test. These mocks keep that tail inert. `telemetry.ts` itself
 // is NOT mocked: the vscode mock's fake `env.createTelemetryLogger`, plus the
-// root-level `__mocks__/@vscode/extension-telemetry.ts`, let the real module
-// run, so this exercises real `send`, real `baseProperties` merging, and
-// real event names, recorded in `__telemetry`.
-vi.mock('@vscode/extension-telemetry');
+// root-level `__mocks__/@vscode/extension-telemetry.ts` (applied to every file
+// by src/__mocks__/setup.ts), let the real module run, so this exercises real
+// `send`, real `baseProperties` merging, and real event names, recorded in
+// `__telemetry`.
 const isInstalled = vi.fn(() => true);
 vi.mock('../lifecycle', () => ({
   isInstalled: () => isInstalled(),

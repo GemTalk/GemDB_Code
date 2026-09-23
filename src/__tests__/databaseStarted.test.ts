@@ -8,7 +8,6 @@ import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 // everything ensureRunning touches mocked to already-done, so the two bounds
 // on the event (silent on a no-op call, deduped on a repeated failure) can be
 // asserted without a real engine, database, or Grail.
-vi.mock('@vscode/extension-telemetry');
 vi.mock('../cli', () => ({ writeCliScripts: () => {}, ensureCliCurrent: () => true }));
 
 const bundledGrailStamp = vi.fn(() => 'grail=0.1-1-gabc\n');

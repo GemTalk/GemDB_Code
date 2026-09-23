@@ -1,13 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { REQUIRED_SHARED_MEMORY_GB } from '../config';
 import { OsConfigWorld, runEnsureOsConfigured } from '../osConfig';
-
-// `osConfig.ts` imports `telemetry.ts` for the outcome vocabulary, which
-// pulls in the real `@vscode/extension-telemetry` package — see its own mock
-// at __mocks__/@vscode/extension-telemetry.ts for why that package needs one
-// at all. Nothing under test here sends an event: the world's `report` is
-// what these tests assert on.
-vi.mock('@vscode/extension-telemetry');
 
 /**
  * A stand-in operating system that records what was asked of it.

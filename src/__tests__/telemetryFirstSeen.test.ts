@@ -5,8 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { __resetSettings } from '../__mocks__/vscode';
 import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 
-vi.mock('@vscode/extension-telemetry');
-
 const ensureRunning = vi.fn(async (_extensionPath: string, _trigger: string) => true);
 vi.mock('../lifecycle', () => ({
   ensureRunning: (extensionPath: string, trigger: string) => ensureRunning(extensionPath, trigger),

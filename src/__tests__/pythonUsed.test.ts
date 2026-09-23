@@ -7,7 +7,6 @@ import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 // That state persists for as long as this file's module instance does, so
 // each surface's bounding is asserted as one sequential story per `it()`
 // rather than across separate tests that would each assume a fresh Set.
-vi.mock('@vscode/extension-telemetry');
 
 interface SessionOwner {
   key: string;

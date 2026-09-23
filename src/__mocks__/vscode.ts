@@ -7,10 +7,13 @@
  * needs more than this is a test that should be exercising something else.
  *
  * `env.createTelemetryLogger` is the one deliberate exception to "just enough
- * to read a setting". It is real VS Code plumbing, faked closely enough that
- * `@vscode/extension-telemetry`'s own `TelemetryReporter` runs unmodified on
- * top of it — so a test exercises the real `telemetry.ts`: real `send`, real
- * `baseProperties` merging, real event names. The failure mode it guards
+ * to read a setting". It is real VS Code plumbing, and what records every
+ * event: the stand-in `TelemetryReporter` at the repo root's
+ * `__mocks__/@vscode/extension-telemetry.ts` calls straight through to it,
+ * since the real package cannot load outside an extension host (see that
+ * file). So a test exercises the real `telemetry.ts` — real `send`, real
+ * `baseProperties` merging, real event names — and only the third-party
+ * reporter between it and this logger is faked. The failure mode it guards
  * against is silent data loss (an event nobody notices never arrived), not a
  * broken feature, which is worth the departure from the rest of this file.
  */
@@ -70,9 +73,10 @@ export const ExtensionMode = { Production: 1, Development: 2, Test: 3 } as const
 /**
  * A fake `env.createTelemetryLogger`, standing in for VS Code's own.
  *
- * `isUsageEnabled: false` is load-bearing and measured: `@vscode/extension-
- * telemetry` only instantiates its App Insights sender when the logger
- * reports enabled, while `logUsage` records every event regardless — so this
+ * `isUsageEnabled: false` is insurance, and measured: no suite runs the real
+ * package today, but if one ever did, `@vscode/extension-telemetry` only
+ * instantiates its App Insights sender when the logger reports enabled,
+ * while `logUsage` records every event regardless — so this
  * sees every event with its real properties and makes no network call.
  *
  * Replicates VS Code's own merge quirk: when `data.properties` is falsy, its
