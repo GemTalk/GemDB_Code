@@ -1,8 +1,6 @@
-import { mkdtempSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { __resetSettings, __telemetry } from '../__mocks__/vscode';
+import { __resetSettings } from '../__mocks__/vscode';
+import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 
 // `runSetup` is the shared body of `prepare()`, `install()` and
 // `ensureRunning()` — see lifecycle.ts's own comment on the extraction. These
@@ -57,15 +55,7 @@ describe('runSetup', () => {
     // `send()` in telemetry.ts is a no-op until `initTelemetry` has run —
     // exactly as in a real activation — so this test needs one too, with a
     // throwaway global storage directory.
-    initTelemetry(
-      {
-        extensionMode: 1, // vscode.ExtensionMode.Production
-        globalStorageUri: { fsPath: mkdtempSync(join(tmpdir(), 'gemdb-setup-')) },
-        subscriptions: [],
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
-      false,
-    );
+    initTelemetry(fakeExtensionContext(), false);
   });
 
   it('completes when every step succeeds', async () => {
@@ -78,8 +68,8 @@ describe('runSetup', () => {
   it('reports setupStarted and setupFinished around a completed attempt', async () => {
     await runSetup('/ext', TRIGGER.installCommand);
 
-    const started = __telemetry.filter((e) => e.name === 'setupStarted');
-    const finished = __telemetry.filter((e) => e.name === 'setupFinished');
+    const started = eventsNamed('setupStarted');
+    const finished = eventsNamed('setupFinished');
     expect(started).toHaveLength(1);
     expect(started[0].properties).toMatchObject({ trigger: 'installCommand' });
     expect(finished).toHaveLength(1);
@@ -103,7 +93,7 @@ describe('runSetup', () => {
 
     expect(outcome).toBe('cancelled');
     expect(createDatabase).not.toHaveBeenCalled();
-    const finished = __telemetry.filter((e) => e.name === 'setupFinished');
+    const finished = eventsNamed('setupFinished');
     expect(finished[0].properties.outcome).toBe('cancelled');
   });
 
@@ -121,7 +111,7 @@ describe('runSetup', () => {
     const outcome = await runSetup('/ext', TRIGGER.firstRun);
 
     expect(outcome).toBe('failed');
-    const finished = __telemetry.filter((e) => e.name === 'setupFinished');
+    const finished = eventsNamed('setupFinished');
     expect(finished[0].properties).toMatchObject({ trigger: 'firstRun', outcome: 'failed' });
     expect(Object.values(finished[0].properties).join(' ')).not.toContain('ECONNRESET');
     expect(Object.values(finished[0].properties).join(' ')).not.toContain('/some/local/path');

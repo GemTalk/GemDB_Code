@@ -1,8 +1,6 @@
-import { mkdtempSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { FakeController, __controllers, __resetSettings, __telemetry } from '../__mocks__/vscode';
+import { FakeController, __controllers, __resetSettings } from '../__mocks__/vscode';
+import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 
 // `pythonUsed` is bounded once per surface per window by a module-level Set
 // in telemetry.ts, which is never reset — matching a real window's lifetime.
@@ -59,24 +57,12 @@ async function runCells(controller: FakeController, cells: unknown[]): Promise<v
   await controller.executeHandler?.(cells);
 }
 
-function pythonUsedEvents(): { properties: Record<string, unknown> }[] {
-  return __telemetry.filter((e) => e.name === 'pythonUsed');
-}
-
 beforeEach(() => {
   __resetSettings();
   vi.clearAllMocks();
   ensureRunning.mockResolvedValue(true);
   runPython.mockResolvedValue(py('ok'));
-  initTelemetry(
-    {
-      extensionMode: 1, // vscode.ExtensionMode.Production
-      globalStorageUri: { fsPath: mkdtempSync(join(tmpdir(), 'gemdb-python-used-')) },
-      subscriptions: [],
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any,
-    false,
-  );
+  initTelemetry(fakeExtensionContext(), false);
 });
 
 describe('pythonUsed', () => {
@@ -90,46 +76,46 @@ describe('pythonUsed', () => {
 
     // An empty cell never reaches runPython, so it must not count as evidence.
     await runCells(controller, [cell('   \n  ')]);
-    expect(pythonUsedEvents()).toHaveLength(0);
+    expect(eventsNamed('pythonUsed')).toHaveLength(0);
 
     // runPython rejecting is the database stopped, the session dropped, Grail
     // missing — not the Python code's own fault, and no source ever reached
     // the database, so this is not `executed` evidence.
     runPython.mockRejectedValueOnce(new Error('boom'));
     await runCells(controller, [cell('1/0')]);
-    expect(pythonUsedEvents()).toHaveLength(0);
+    expect(eventsNamed('pythonUsed')).toHaveLength(0);
 
     // A cell whose result actually comes back is the first genuine run.
     await runCells(controller, [cell('1')]);
-    expect(pythonUsedEvents()).toHaveLength(1);
-    expect(pythonUsedEvents()[0].properties).toMatchObject({
+    expect(eventsNamed('pythonUsed')).toHaveLength(1);
+    expect(eventsNamed('pythonUsed')[0].properties).toMatchObject({
       surface: 'notebook',
       evidence: 'executed',
     });
-    expect(pythonUsedEvents()[0]).toHaveProperty('measurements');
+    expect(eventsNamed('pythonUsed')[0]).toHaveProperty('measurements');
 
     // Neither more cells nor another batch add a second notebook event.
     await runCells(controller, [cell('2'), cell('3')]);
     await runCells(controller, [cell('4')]);
-    expect(pythonUsedEvents()).toHaveLength(1);
+    expect(eventsNamed('pythonUsed')).toHaveLength(1);
 
     // runFile is a different surface, so it gets its own first event —
     // and a second file run adds nothing more.
     const fileA = { fsPath: '/a.py', toString: () => 'file:///a.py' } as never;
     const fileB = { fsPath: '/b.py', toString: () => 'file:///b.py' } as never;
     await runFile('/ext', fileA);
-    expect(pythonUsedEvents()).toHaveLength(2);
-    expect(pythonUsedEvents()[1].properties).toMatchObject({
+    expect(eventsNamed('pythonUsed')).toHaveLength(2);
+    expect(eventsNamed('pythonUsed')[1].properties).toMatchObject({
       surface: 'runFile',
       evidence: 'launched',
     });
     await runFile('/ext', fileB);
-    expect(pythonUsedEvents()).toHaveLength(2);
+    expect(eventsNamed('pythonUsed')).toHaveLength(2);
 
     // The shell is a third surface — one more event, then bounded the same way.
     await openRepl('/ext');
     await openRepl('/ext');
-    expect(pythonUsedEvents().map((e) => e.properties.surface)).toEqual([
+    expect(eventsNamed('pythonUsed').map((e) => e.properties.surface)).toEqual([
       'notebook',
       'runFile',
       'shell',

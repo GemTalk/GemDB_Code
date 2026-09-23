@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { __resetSettings, __setSetting, __telemetry, env } from '../__mocks__/vscode';
+import { __resetSettings, __setSetting, env } from '../__mocks__/vscode';
+import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 
 // `activate()` is synchronous, but everything after its two exits — the
 // download, the sudo prompt, autoStart — is a detached tail that must never
@@ -46,22 +47,6 @@ vi.mock('../osConfig', () => ({
 
 const { activate } = await import('../extension');
 
-function fakeContext(): Parameters<typeof activate>[0] {
-  return {
-    extensionPath: '/ext',
-    extension: { packageJSON: { version: '0.0.0-test' } },
-    extensionMode: 1, // vscode.ExtensionMode.Production
-    globalStorageUri: { fsPath: mkdtempSync(join(tmpdir(), 'gemdb-activation-')) },
-    subscriptions: [],
-    environmentVariableCollection: {
-      description: '',
-      clear: () => {},
-      prepend: () => {},
-    },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- fake vscode.ExtensionContext, only a handful of its many fields are stubbed
-  } as any;
-}
-
 describe('activate()', () => {
   let originalPlatform: PropertyDescriptor | undefined;
   let originalArch: PropertyDescriptor | undefined;
@@ -89,12 +74,12 @@ describe('activate()', () => {
     Object.defineProperty(process, 'platform', { value: 'darwin' });
     Object.defineProperty(process, 'arch', { value: 'arm64' });
 
-    activate(fakeContext());
+    activate(fakeExtensionContext());
     // `activated.state` is resolved off the synchronous activation path (it
     // spawns `gslist`), so the event lands a tick after `activate()` returns.
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    const activated = __telemetry.filter((e) => e.name === 'activated');
+    const activated = eventsNamed('activated');
     expect(activated).toHaveLength(1);
     const durationMs = activated[0].measurements?.activationMs;
     expect(durationMs).toBeGreaterThanOrEqual(0);
@@ -107,9 +92,9 @@ describe('activate()', () => {
     // must not silently drop that population.
     Object.defineProperty(process, 'platform', { value: 'win32' });
 
-    activate(fakeContext());
+    activate(fakeExtensionContext());
 
-    const activated = __telemetry.filter((e) => e.name === 'activated');
+    const activated = eventsNamed('activated');
     expect(activated).toHaveLength(1);
     expect(activated[0].properties.state).toBe('unsupportedPlatform');
   });
@@ -123,9 +108,9 @@ describe('activate()', () => {
     it('is notInstalled when nothing is on disk yet', () => {
       isInstalled.mockReturnValue(false);
 
-      activate(fakeContext());
+      activate(fakeExtensionContext());
 
-      const [activated] = __telemetry.filter((e) => e.name === 'activated');
+      const [activated] = eventsNamed('activated');
       expect(activated.properties.state).toBe('notInstalled');
     });
 
@@ -133,10 +118,10 @@ describe('activate()', () => {
       isInstalled.mockReturnValue(true);
       isRunning.mockReturnValue(false);
 
-      activate(fakeContext());
+      activate(fakeExtensionContext());
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      const [activated] = __telemetry.filter((e) => e.name === 'activated');
+      const [activated] = eventsNamed('activated');
       expect(activated.properties.state).toBe('stopped');
     });
 
@@ -144,25 +129,25 @@ describe('activate()', () => {
       isInstalled.mockReturnValue(true);
       isRunning.mockReturnValue(true);
 
-      activate(fakeContext());
+      activate(fakeExtensionContext());
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      const [activated] = __telemetry.filter((e) => e.name === 'activated');
+      const [activated] = eventsNamed('activated');
       expect(activated.properties.state).toBe('running');
     });
   });
 
   describe('unattendedSetupSkipped', () => {
     function skipped(): { skipReason: unknown }[] {
-      return __telemetry
-        .filter((e) => e.name === 'unattendedSetupSkipped')
-        .map((e) => ({ skipReason: e.properties.skipReason }));
+      return eventsNamed('unattendedSetupSkipped').map((e) => ({
+        skipReason: e.properties.skipReason,
+      }));
     }
 
     it('reports alreadyInstalled without ever emitting setupStarted', () => {
       isInstalled.mockReturnValue(true);
 
-      activate(fakeContext());
+      activate(fakeExtensionContext());
 
       expect(skipped()).toEqual([{ skipReason: 'alreadyInstalled' }]);
     });
@@ -171,14 +156,14 @@ describe('activate()', () => {
       isInstalled.mockReturnValue(false);
       env.remoteName = 'wsl';
 
-      activate(fakeContext());
+      activate(fakeExtensionContext());
 
       expect(skipped()).toEqual([{ skipReason: 'remoteWindow' }]);
     });
 
     it('reports markerPresent when an earlier cancel already recorded a marker', () => {
       isInstalled.mockReturnValue(false);
-      const context = fakeContext();
+      const context = fakeExtensionContext();
       writeFileSync(
         join(context.globalStorageUri.fsPath, 'setup-attempted'),
         new Date().toISOString(),
@@ -198,7 +183,7 @@ describe('activate()', () => {
       // debris from an earlier call" one.
       writeFileSync(join(rootPathValue, '.gemdb-setup.lock'), '1');
 
-      activate(fakeContext());
+      activate(fakeExtensionContext());
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(skipped()).toEqual([{ skipReason: 'lockHeld' }]);
@@ -217,7 +202,7 @@ describe('activate()', () => {
         .mockReturnValueOnce(false) // prepareOnFirstRun's outer check
         .mockReturnValue(true); // the re-check inside the lock
 
-      activate(fakeContext());
+      activate(fakeExtensionContext());
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(skipped()).toEqual([{ skipReason: 'installedByOtherWindow' }]);

@@ -96,7 +96,7 @@ const EVENT = {
   databaseStarted: 'databaseStarted',
   pythonUsed: 'pythonUsed',
 } as const;
-type EventName = (typeof EVENT)[keyof typeof EVENT];
+export type EventName = (typeof EVENT)[keyof typeof EVENT];
 
 let reporter: TelemetryReporter | undefined;
 

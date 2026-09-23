@@ -2,7 +2,8 @@ import { writeFileSync, mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { __resetSettings, __telemetry } from '../__mocks__/vscode';
+import { __resetSettings } from '../__mocks__/vscode';
+import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 
 vi.mock('@vscode/extension-telemetry');
 
@@ -16,13 +17,6 @@ vi.mock('../processes', () => ({ findStone: () => true, findNetldi: () => true }
 
 const { openRepl } = await import('../repl');
 const { initTelemetry } = await import('../telemetry');
-
-function pythonUsedEvents(): {
-  properties: Record<string, unknown>;
-  measurements?: Record<string, number>;
-}[] {
-  return __telemetry.filter((e) => e.name === 'pythonUsed');
-}
 
 beforeEach(() => {
   __resetSettings();
@@ -40,23 +34,15 @@ describe('pythonUsed with a corrupt first-seen file', () => {
     const storageDir = mkdtempSync(join(tmpdir(), 'gemdb-first-seen-corrupt-'));
     writeFileSync(join(storageDir, 'first-seen'), '');
 
-    initTelemetry(
-      {
-        extensionMode: 1, // vscode.ExtensionMode.Production
-        globalStorageUri: { fsPath: storageDir },
-        subscriptions: [],
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
-      false,
-    );
+    initTelemetry(fakeExtensionContext({ globalStoragePath: storageDir }), false);
 
     await openRepl('/ext');
 
-    expect(pythonUsedEvents()).toHaveLength(1);
-    expect(pythonUsedEvents()[0].properties).toMatchObject({
+    expect(eventsNamed('pythonUsed')).toHaveLength(1);
+    expect(eventsNamed('pythonUsed')[0].properties).toMatchObject({
       surface: 'shell',
       evidence: 'launched',
     });
-    expect(pythonUsedEvents()[0].measurements).toBeUndefined();
+    expect(eventsNamed('pythonUsed')[0].measurements).toBeUndefined();
   });
 });
