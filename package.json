@@ -94,7 +94,7 @@
       "gemdb": [
         {
           "id": "gemdbStatus",
-          "icon": "resources/icon.png",
+          "icon": "resources/gemdb-sidebar.svg",
           "name": "GemDB",
           "type": "tree"
         }
