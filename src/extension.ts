@@ -35,7 +35,13 @@ import { openRepl, runFile } from './repl';
 import { closeSessionFor, logoutAll, setInputHandler } from './session';
 import { GemDbStatusBar } from './statusBar';
 import { StatusViewProvider } from './statusView';
-import { initTelemetry, reportActivation, reportUnattendedSetupSkipped } from './telemetry';
+import {
+  SKIP_REASON,
+  TRIGGER,
+  initTelemetry,
+  reportActivation,
+  reportUnattendedSetupSkipped,
+} from './telemetry';
 
 export function activate(context: vscode.ExtensionContext): void {
   const activationStarted = Date.now();
@@ -355,20 +361,20 @@ async function prepareOnFirstRun(
   refresh: () => void,
 ): Promise<void> {
   if (isInstalled()) {
-    reportUnattendedSetupSkipped('alreadyInstalled');
+    reportUnattendedSetupSkipped(SKIP_REASON.alreadyInstalled);
     return;
   }
 
   // A remote or web window shares the marketplace install but not the machine
   // GemDB would be setting up. Only a local desktop window should act.
   if (vscode.env.remoteName !== undefined || vscode.env.uiKind !== vscode.UIKind.Desktop) {
-    reportUnattendedSetupSkipped('remoteWindow');
+    reportUnattendedSetupSkipped(SKIP_REASON.remoteWindow);
     return;
   }
 
   const marker = path.join(context.globalStorageUri.fsPath, 'setup-attempted');
   if (fs.existsSync(marker)) {
-    reportUnattendedSetupSkipped('markerPresent');
+    reportUnattendedSetupSkipped(SKIP_REASON.markerPresent);
     return;
   }
 
@@ -397,7 +403,7 @@ async function prepareOnFirstRun(
     // other runs a script under sudo — so there is no ordering between them to
     // get wrong. Neither rejects: both report failure by returning.
     const files = prepare(extensionPath);
-    const os = ensureOsConfigured(extensionPath, 'firstRun').catch(() => ({
+    const os = ensureOsConfigured(extensionPath, TRIGGER.firstRun).catch(() => ({
       ok: false,
       prompted: false,
     }));
@@ -405,10 +411,10 @@ async function prepareOnFirstRun(
     return { prepared, configured: osResult.ok, ranSetup: true };
   });
   if (outcome === undefined) {
-    reportUnattendedSetupSkipped('lockHeld');
+    reportUnattendedSetupSkipped(SKIP_REASON.lockHeld);
     return; // another window is doing it
   }
-  if (!outcome.ranSetup) reportUnattendedSetupSkipped('installedByOtherWindow');
+  if (!outcome.ranSetup) reportUnattendedSetupSkipped(SKIP_REASON.installedByOtherWindow);
 
   // Recorded whether it succeeded or was cancelled — either way this machine
   // has been offered setup, and a cancel is a decision to be respected.
@@ -476,7 +482,7 @@ async function autoStart(extensionPath: string, refresh: () => void): Promise<vo
   await withSetupLock(async () => {
     if (isRunning()) return;
     log('Starting the database, so it is ready when you are.');
-    await ensureRunning(extensionPath, 'autoStart');
+    await ensureRunning(extensionPath, TRIGGER.autoStart);
   });
   refresh();
 }

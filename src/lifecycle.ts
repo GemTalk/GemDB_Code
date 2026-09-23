@@ -54,7 +54,9 @@ import { isSupportedPlatform } from './platform';
 import { logoutAll } from './session';
 import { allowAutoStart } from './autoStart';
 import {
+  DATABASE_OUTCOME,
   DatabaseOutcome,
+  TRIGGER,
   Trigger,
   reportDatabaseStarted,
   reportSetupFinished,
@@ -163,7 +165,7 @@ export async function runSetup(extensionPath: string, trigger: Trigger): Promise
   const outcome = await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: trigger === 'installCommand' ? 'Installing GemDB' : 'Setting up GemDB',
+      title: trigger === TRIGGER.installCommand ? 'Installing GemDB' : 'Setting up GemDB',
       cancellable: true,
     },
     async (progress, token): Promise<SetupOutcome> => {
@@ -179,7 +181,10 @@ export async function runSetup(extensionPath: string, trigger: Trigger): Promise
           paused();
           return 'cancelled';
         }
-        reportFailure(trigger === 'installCommand' ? 'Installing GemDB' : 'Setting up GemDB', e);
+        reportFailure(
+          trigger === TRIGGER.installCommand ? 'Installing GemDB' : 'Setting up GemDB',
+          e,
+        );
         return 'failed';
       }
     },
@@ -211,12 +216,12 @@ export async function install(extensionPath: string): Promise<void> {
     return;
   }
 
-  const outcome = await runSetup(extensionPath, 'installCommand');
+  const outcome = await runSetup(extensionPath, TRIGGER.installCommand);
   if (outcome !== 'completed') return;
 
   // Starting is a separate act, and it is where consent is asked for: raising
   // shared memory needs sudo, and the processes it starts outlive the editor.
-  if (!(await ensureRunning(extensionPath, 'installCommand'))) return;
+  if (!(await ensureRunning(extensionPath, TRIGGER.installCommand))) return;
 
   void vscode.window
     .showInformationMessage(
@@ -241,7 +246,7 @@ export async function install(extensionPath: string): Promise<void> {
 export async function prepare(extensionPath: string): Promise<boolean> {
   if (!isSupportedPlatform() || !bundledGrailStamp(extensionPath)) return false;
 
-  const outcome = await runSetup(extensionPath, 'firstRun');
+  const outcome = await runSetup(extensionPath, TRIGGER.firstRun);
   if (outcome === 'completed') log('GemDB is ready to start.');
   return outcome === 'completed';
 }
@@ -273,7 +278,7 @@ function reportFailure(what: string, e: unknown): void {
 /** The explicit "Start GemDB" command. */
 export async function start(extensionPath: string): Promise<void> {
   if (!requireSupportedPlatform()) return;
-  await ensureRunning(extensionPath, 'startCommand');
+  await ensureRunning(extensionPath, TRIGGER.startCommand);
 }
 
 /**
@@ -293,7 +298,7 @@ export async function start(extensionPath: string): Promise<void> {
  */
 export async function ensureRunning(extensionPath: string, trigger: Trigger): Promise<boolean> {
   const startedAt = Date.now();
-  const failed = (outcome: Exclude<DatabaseOutcome, 'started'>): false => {
+  const failed = (outcome: Exclude<DatabaseOutcome, typeof DATABASE_OUTCOME.started>): false => {
     reportDatabaseStarted(trigger, outcome, 'no', Date.now() - startedAt, false);
     return false;
   };
@@ -302,8 +307,8 @@ export async function ensureRunning(extensionPath: string, trigger: Trigger): Pr
   // earlier "stop it". Running a cell counts: `ensureRunning` is the one path
   // to a running database, so it is the one place this belongs.
   allowAutoStart();
-  if (!requireSupportedPlatform()) return failed('unsupportedPlatform');
-  if (!requireGrailPayload(extensionPath)) return failed('missingPayload');
+  if (!requireSupportedPlatform()) return failed(DATABASE_OUTCOME.unsupportedPlatform);
+  if (!requireGrailPayload(extensionPath)) return failed(DATABASE_OUTCOME.missingPayload);
 
   // Files may still be missing if the automatic preparation was cancelled, or
   // never ran. Finishing it here is what lets a cancel be a pause: the download
@@ -311,9 +316,11 @@ export async function ensureRunning(extensionPath: string, trigger: Trigger): Pr
   if (!isInstalled()) {
     const outcome = await runSetup(extensionPath, trigger);
     if (outcome !== 'completed') {
-      return failed(outcome === 'cancelled' ? 'setupCancelled' : 'setupFailed');
+      return failed(
+        outcome === 'cancelled' ? DATABASE_OUTCOME.setupCancelled : DATABASE_OUTCOME.setupFailed,
+      );
     }
-    if (!isInstalled()) return failed('setupFailed');
+    if (!isInstalled()) return failed(DATABASE_OUTCOME.setupFailed);
   }
 
   // Staging Grail writes the shell command too, but only when the payload
@@ -330,7 +337,7 @@ export async function ensureRunning(extensionPath: string, trigger: Trigger): Pr
   }
 
   const osResult = await ensureOsConfigured(extensionPath, trigger);
-  if (!osResult.ok) return failed('osConfigDeclined');
+  if (!osResult.ok) return failed(DATABASE_OUTCOME.osConfigDeclined);
 
   return vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: 'Starting GemDB' },
@@ -362,11 +369,17 @@ export async function ensureRunning(extensionPath: string, trigger: Trigger): Pr
 
         await ensureMcpServing(extensionPath, progress);
         const didWork = osResult.prompted || startedStone || startedNetldi || filedGrail !== 'no';
-        reportDatabaseStarted(trigger, 'started', filedGrail, Date.now() - startedAt, didWork);
+        reportDatabaseStarted(
+          trigger,
+          DATABASE_OUTCOME.started,
+          filedGrail,
+          Date.now() - startedAt,
+          didWork,
+        );
         return true;
       } catch (e) {
         reportFailure('Starting GemDB', e);
-        return failed('startFailed');
+        return failed(DATABASE_OUTCOME.startFailed);
       }
     },
   );
@@ -431,7 +444,7 @@ async function ensureMcpServing(
  * that answers every tool call with a login failure.
  */
 export async function ensureMcpRunning(extensionPath: string): Promise<boolean> {
-  if (!(await ensureRunning(extensionPath, 'mcp'))) return false;
+  if (!(await ensureRunning(extensionPath, TRIGGER.mcp))) return false;
   // `ensureRunning` starts it when it is enabled, so this is the report rather
   // than a second attempt — except where the database was already up and the
   // router had been stopped by hand, which `ensureMcpServing` handles above.

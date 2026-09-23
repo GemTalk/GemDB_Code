@@ -42,7 +42,10 @@ vi.mock('../grail', () => ({
 }));
 
 const { runSetup } = await import('../lifecycle');
-const { initTelemetry } = await import('../telemetry');
+// Constants on the act side, literals on the assert side: the expectations pin
+// the wire value, so renaming one must fail here rather than silently split a
+// series in App Insights.
+const { TRIGGER, initTelemetry } = await import('../telemetry');
 
 describe('runSetup', () => {
   beforeEach(() => {
@@ -66,14 +69,14 @@ describe('runSetup', () => {
   });
 
   it('completes when every step succeeds', async () => {
-    const outcome = await runSetup('/ext', 'installCommand');
+    const outcome = await runSetup('/ext', TRIGGER.installCommand);
 
     expect(outcome).toBe('completed');
     expect(stageGrail).toHaveBeenCalledWith('/ext');
   });
 
   it('reports setupStarted and setupFinished around a completed attempt', async () => {
-    await runSetup('/ext', 'installCommand');
+    await runSetup('/ext', TRIGGER.installCommand);
 
     const started = __telemetry.filter((e) => e.name === 'setupStarted');
     const finished = __telemetry.filter((e) => e.name === 'setupFinished');
@@ -96,7 +99,7 @@ describe('runSetup', () => {
       return '/engine';
     });
 
-    const outcome = await runSetup('/ext', 'firstRun');
+    const outcome = await runSetup('/ext', TRIGGER.firstRun);
 
     expect(outcome).toBe('cancelled');
     expect(createDatabase).not.toHaveBeenCalled();
@@ -107,7 +110,7 @@ describe('runSetup', () => {
   it('is cancelled when a step throws "Download cancelled"', async () => {
     installEngine.mockRejectedValue(new Error('Download cancelled'));
 
-    const outcome = await runSetup('/ext', 'firstRun');
+    const outcome = await runSetup('/ext', TRIGGER.firstRun);
 
     expect(outcome).toBe('cancelled');
   });
@@ -115,7 +118,7 @@ describe('runSetup', () => {
   it('fails on any other error, without leaking it into telemetry', async () => {
     installEngine.mockRejectedValue(new Error('ECONNRESET reading /some/local/path'));
 
-    const outcome = await runSetup('/ext', 'firstRun');
+    const outcome = await runSetup('/ext', TRIGGER.firstRun);
 
     expect(outcome).toBe('failed');
     const finished = __telemetry.filter((e) => e.name === 'setupFinished');

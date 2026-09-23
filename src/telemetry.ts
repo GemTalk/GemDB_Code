@@ -62,16 +62,18 @@ import type { GemDbState } from './statusView';
  * Values name what the user did — a command id or a surface — never a
  * function, so a series survives a refactor.
  */
-export type Trigger =
-  | 'firstRun' // the unattended pass at activation
-  | 'autoStart' // the database coming up unasked
-  | 'installCommand' // gemdb.install
-  | 'startCommand' // gemdb.start
-  | 'sharedMemoryCommand' // gemdb.configureSharedMemory
-  | 'notebook' // a notebook cell batch
-  | 'shell' // Open GemDB Shell
-  | 'runFile' // Run Python File
-  | 'mcp'; // an agent, through the MCP provider
+export const TRIGGER = {
+  firstRun: 'firstRun', // the unattended pass at activation
+  autoStart: 'autoStart', // the database coming up unasked
+  installCommand: 'installCommand', // gemdb.install
+  startCommand: 'startCommand', // gemdb.start
+  sharedMemoryCommand: 'sharedMemoryCommand', // gemdb.configureSharedMemory
+  notebook: 'notebook', // a notebook cell batch
+  shell: 'shell', // Open GemDB Shell
+  runFile: 'runFile', // Run Python File
+  mcp: 'mcp', // an agent, through the MCP provider
+} as const;
+export type Trigger = (typeof TRIGGER)[keyof typeof TRIGGER];
 
 // Not a secret — a connection string only says where events land.
 const CONNECTION_STRING =
@@ -285,8 +287,14 @@ export function reportActivation(durationMs: number, state: GemDbState): void {
 }
 
 /** Why the unattended first-run setup at activation did not run. */
-export type SkipReason =
-  'alreadyInstalled' | 'remoteWindow' | 'markerPresent' | 'lockHeld' | 'installedByOtherWindow';
+export const SKIP_REASON = {
+  alreadyInstalled: 'alreadyInstalled',
+  remoteWindow: 'remoteWindow',
+  markerPresent: 'markerPresent',
+  lockHeld: 'lockHeld',
+  installedByOtherWindow: 'installedByOtherWindow',
+} as const;
+export type SkipReason = (typeof SKIP_REASON)[keyof typeof SKIP_REASON];
 
 /**
  * The unattended pass at activation bailed out before setup ran.
@@ -344,10 +352,21 @@ export function reportSetupFinished(
  * `missing: 'both'`, where the pair is the only thing that says which half
  * failed.
  */
-export type OsConfigOutcome = 'configured' | 'declined' | 'stillUnconfigured' | 'removeIpcUnset';
+export const OS_CONFIG_OUTCOME = {
+  configured: 'configured',
+  declined: 'declined',
+  stillUnconfigured: 'stillUnconfigured',
+  removeIpcUnset: 'removeIpcUnset',
+} as const;
+export type OsConfigOutcome = (typeof OS_CONFIG_OUTCOME)[keyof typeof OS_CONFIG_OUTCOME];
 
 /** What was short when the modal was shown — not what is still short after it. */
-export type OsConfigMissing = 'sharedMemory' | 'removeIpc' | 'both';
+export const OS_CONFIG_MISSING = {
+  sharedMemory: 'sharedMemory',
+  removeIpc: 'removeIpc',
+  both: 'both',
+} as const;
+export type OsConfigMissing = (typeof OS_CONFIG_MISSING)[keyof typeof OS_CONFIG_MISSING];
 
 /**
  * The shared-memory/RemoveIPC modal was shown, and how it went.
@@ -367,14 +386,16 @@ export function reportOsConfigPrompted(
   send(EVENT.osConfigPrompted, { trigger, outcome, missing });
 }
 
-export type DatabaseOutcome =
-  | 'started'
-  | 'unsupportedPlatform'
-  | 'missingPayload'
-  | 'setupCancelled'
-  | 'setupFailed'
-  | 'osConfigDeclined'
-  | 'startFailed';
+export const DATABASE_OUTCOME = {
+  started: 'started',
+  unsupportedPlatform: 'unsupportedPlatform',
+  missingPayload: 'missingPayload',
+  setupCancelled: 'setupCancelled',
+  setupFailed: 'setupFailed',
+  osConfigDeclined: 'osConfigDeclined',
+  startFailed: 'startFailed',
+} as const;
+export type DatabaseOutcome = (typeof DATABASE_OUTCOME)[keyof typeof DATABASE_OUTCOME];
 
 /** The last failure `reportDatabaseStarted` sent, so a repeat is silent. */
 let lastReportedFailure: DatabaseOutcome | undefined;
@@ -400,7 +421,7 @@ export function reportDatabaseStarted(
   durationMs: number,
   didWork: boolean,
 ): void {
-  if (outcome === 'started') {
+  if (outcome === DATABASE_OUTCOME.started) {
     lastReportedFailure = undefined;
     if (!didWork) return;
   } else {
@@ -410,7 +431,19 @@ export function reportDatabaseStarted(
   send(EVENT.databaseStarted, { trigger, outcome, filedGrail }, { durationMs });
 }
 
-export type Surface = 'notebook' | 'shell' | 'runFile';
+export const SURFACE = {
+  notebook: 'notebook',
+  shell: 'shell',
+  runFile: 'runFile',
+} as const;
+export type Surface = (typeof SURFACE)[keyof typeof SURFACE];
+
+/** How sure a `pythonUsed` event is that Python genuinely ran; see `reportPythonUsed`. */
+export const EVIDENCE = {
+  executed: 'executed',
+  launched: 'launched',
+} as const;
+export type Evidence = (typeof EVIDENCE)[keyof typeof EVIDENCE];
 
 /** Surfaces `pythonUsed` has already reported this window. */
 const seenSurfaces = new Set<Surface>();
@@ -431,7 +464,7 @@ const seenSurfaces = new Set<Surface>();
  * that a terminal was opened, which the host cannot confirm was ever typed
  * into.
  */
-export function reportPythonUsed(surface: Surface, evidence: 'executed' | 'launched'): void {
+export function reportPythonUsed(surface: Surface, evidence: Evidence): void {
   if (seenSurfaces.has(surface)) return;
   seenSurfaces.add(surface);
   const minutesSinceFirstSeen =

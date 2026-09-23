@@ -4,7 +4,15 @@ import { execFile } from 'child_process';
 import * as vscode from 'vscode';
 import { REQUIRED_SHARED_MEMORY_GB } from './config';
 import { log } from './log';
-import { OsConfigMissing, OsConfigOutcome, Trigger, reportOsConfigPrompted } from './telemetry';
+import {
+  OS_CONFIG_MISSING,
+  OS_CONFIG_OUTCOME,
+  OsConfigMissing,
+  OsConfigOutcome,
+  TRIGGER,
+  Trigger,
+  reportOsConfigPrompted,
+} from './telemetry';
 
 /**
  * Operating-system prerequisites for running the database engine.
@@ -155,7 +163,11 @@ export async function runEnsureOsConfigured(
   if (sharedMemoryOk && removeIpcOk) return { ok: true, prompted: false };
 
   const missing: OsConfigMissing =
-    !sharedMemoryOk && !removeIpcOk ? 'both' : !sharedMemoryOk ? 'sharedMemory' : 'removeIpc';
+    !sharedMemoryOk && !removeIpcOk
+      ? OS_CONFIG_MISSING.both
+      : !sharedMemoryOk
+        ? OS_CONFIG_MISSING.sharedMemory
+        : OS_CONFIG_MISSING.removeIpc;
 
   const steps: string[] = [];
   if (!sharedMemoryOk) {
@@ -179,7 +191,7 @@ export async function runEnsureOsConfigured(
       'This is the only permission GemDB asks for, and only once for this machine.',
   );
   if (!confirmed) {
-    world.report('declined', missing);
+    world.report(OS_CONFIG_OUTCOME.declined, missing);
     return { ok: false, prompted: true };
   }
 
@@ -190,7 +202,7 @@ export async function runEnsureOsConfigured(
         `Shared memory is still below ${REQUIRED_SHARED_MEMORY_GB} GB, so GemDB did not start. ` +
           'Run "GemDB: Configure Shared Memory" and try again.',
       );
-      world.report('stillUnconfigured', missing);
+      world.report(OS_CONFIG_OUTCOME.stillUnconfigured, missing);
       return { ok: false, prompted: true };
     }
     world.log('Shared memory configured');
@@ -206,12 +218,12 @@ export async function runEnsureOsConfigured(
       world.log(
         'RemoveIPC is still unset — the database will stop when you log out of this machine.',
       );
-      world.report('removeIpcUnset', missing);
+      world.report(OS_CONFIG_OUTCOME.removeIpcUnset, missing);
       return { ok: true, prompted: true };
     }
   }
 
-  world.report('configured', missing);
+  world.report(OS_CONFIG_OUTCOME.configured, missing);
   return { ok: true, prompted: true };
 }
 
@@ -271,9 +283,9 @@ export async function configureSharedMemory(extensionPath: string): Promise<void
   const configured = await isSharedMemoryConfigured();
   if (wasShort) {
     reportOsConfigPrompted(
-      'sharedMemoryCommand',
-      configured ? 'configured' : 'stillUnconfigured',
-      'sharedMemory',
+      TRIGGER.sharedMemoryCommand,
+      configured ? OS_CONFIG_OUTCOME.configured : OS_CONFIG_OUTCOME.stillUnconfigured,
+      OS_CONFIG_MISSING.sharedMemory,
     );
   }
   if (configured) {

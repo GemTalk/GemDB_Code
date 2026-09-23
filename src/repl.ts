@@ -4,7 +4,7 @@ import { shellQuote } from './osConfig';
 import { findNetldi, findStone } from './processes';
 import { ensureRunning } from './lifecycle';
 import { cliPath, ensureCliCurrent } from './cli';
-import { Trigger, reportPythonUsed } from './telemetry';
+import { EVIDENCE, SURFACE, TRIGGER, Trigger, reportPythonUsed } from './telemetry';
 
 /**
  * Make sure the database is up, starting it if it is not.
@@ -29,7 +29,7 @@ async function requireRunning(extensionPath: string, trigger: Trigger): Promise<
  */
 let replCounter = 0;
 export async function openRepl(extensionPath: string): Promise<void> {
-  if (!(await requireRunning(extensionPath, 'shell'))) return;
+  if (!(await requireRunning(extensionPath, TRIGGER.shell))) return;
   // The wrapper is this terminal's shell program, so it has to be there and
   // has to be this build — VS Code reports a missing one as a launch failure
   // with no hint of what GemDB should have done about it.
@@ -52,7 +52,7 @@ export async function openRepl(extensionPath: string): Promise<void> {
     iconPath: new vscode.ThemeIcon('symbol-namespace'),
   });
   terminal.show();
-  reportPythonUsed('shell', 'launched');
+  reportPythonUsed(SURFACE.shell, EVIDENCE.launched);
 }
 
 /**
@@ -72,7 +72,7 @@ export async function runFile(extensionPath: string, uri?: vscode.Uri): Promise<
     void vscode.window.showErrorMessage(`${path.basename(target.fsPath)} is not a Python file.`);
     return;
   }
-  if (!(await requireRunning(extensionPath, 'runFile'))) return;
+  if (!(await requireRunning(extensionPath, TRIGGER.runFile))) return;
   // Same guarantee as the shell: this terminal is about to be sent the
   // wrapper's path as a command line.
   if (!ensureCliCurrent(extensionPath)) {
@@ -98,5 +98,5 @@ export async function runFile(extensionPath: string, uri?: vscode.Uri): Promise<
   });
   terminal.show();
   terminal.sendText(`${shellQuote(cliPath())} ${shellQuote(target.fsPath)}`);
-  reportPythonUsed('runFile', 'launched');
+  reportPythonUsed(SURFACE.runFile, EVIDENCE.launched);
 }
