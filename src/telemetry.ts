@@ -385,20 +385,43 @@ export const OS_CONFIG_MISSING = {
 export type OsConfigMissing = (typeof OS_CONFIG_MISSING)[keyof typeof OS_CONFIG_MISSING];
 
 /**
+ * Every `trigger:outcome:missing` failure `reportOsConfigPrompted` has sent
+ * since the OS was last configured or the database last started, so a repeat
+ * is silent. A set rather than the last one, for the same reason as
+ * `reportedFailures`.
+ */
+const reportedOsConfigFailures = new Set<string>();
+
+/**
  * The shared-memory/RemoveIPC modal was shown, and how it went.
  *
  * Emitted only when the modal actually appeared, or when "Configure Shared
  * Memory" ran while shared memory was short (`sharedMemoryCommand`, the path
  * back after a decline) — never on the already-configured fast path, which is
- * silent by design and would just be volume. `trigger` is what earns this event: CLAUDE.md spends three
- * paragraphs on *where* to ask for shared memory and names two rejected
- * placements, and nobody has measured whether the current one works.
+ * silent by design and would just be volume. `trigger` is what earns this
+ * event: CLAUDE.md spends three paragraphs on *where* to ask for shared memory
+ * and names two rejected placements, and nobody has measured whether the
+ * current one works.
+ *
+ * A failure is sent once per `trigger`, `outcome` and `missing` until the OS
+ * is configured or the database next starts, for the reason
+ * `reportDatabaseStarted` dedups its own: after a decline the modal comes back
+ * on every `ensureRunning`, so a user who keeps saying no would otherwise send
+ * one event per cell batch. `sharedMemoryCommand` is exempt: each one is a
+ * sudo run the user asked for by name, so its volume is theirs to set.
  */
 export function reportOsConfigPrompted(
   trigger: Trigger,
   outcome: OsConfigOutcome,
   missing: OsConfigMissing,
 ): void {
+  if (outcome === OS_CONFIG_OUTCOME.configured) {
+    reportedOsConfigFailures.clear();
+  } else if (trigger !== TRIGGER.sharedMemoryCommand) {
+    const key = `${trigger}:${outcome}:${missing}`;
+    if (reportedOsConfigFailures.has(key)) return;
+    reportedOsConfigFailures.add(key);
+  }
   send(EVENT.osConfigPrompted, { trigger, outcome, missing });
 }
 
@@ -455,6 +478,7 @@ export function reportDatabaseStarted(
 ): void {
   if (outcome === DATABASE_OUTCOME.started) {
     reportedFailures.clear();
+    reportedOsConfigFailures.clear();
     if (!didWork) return;
   } else {
     const key = `${trigger}:${outcome}`;

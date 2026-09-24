@@ -99,7 +99,11 @@ during the download, which is the drop-out this pair measures.
 GemDB asked for permission to change an operating system setting, which needs
 the user's password. On first run the question comes up while the download is
 still going. Sent only when the dialog actually appeared, or when the user ran
-**GemDB: Configure Shared Memory** while shared memory was still too low.
+**GemDB: Configure Shared Memory** while shared memory was still too low. The
+dialog comes back every time the database is needed until the user agrees, but
+a failure is sent once for each trigger, outcome and `missing` until setup works
+or the database next starts. Running the command is not deduped: every run is
+sent.
 
 | Property  | Values                                                                        |
 | --------- | ----------------------------------------------------------------------------- |
