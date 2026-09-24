@@ -130,8 +130,8 @@ export class GemDbNotebookController {
     } catch (e) {
       // Everything that is not the Python code's own fault arrives here: the
       // database is stopped, the session dropped, Grail is missing. No
-      // source ever reached the database, so this is not `executed` evidence
-      // — that fires below, once a result has actually come back.
+      // result came back, so this is not `executed` evidence — that fires
+      // below, once one has.
       const message = errorMessage(e);
       log(`Notebook cell failed: ${message}`);
       this.endWithError(execution, message);
