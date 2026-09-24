@@ -25,23 +25,7 @@ or later. For a complete list, see [Requirements](#requirements).
    install GemDB Code. It takes you through setup, the GemDB Shell, a notebook, and stopping the
    database. To open it again, see [The guided walkthrough](#the-guided-walkthrough).
 
-4. **Make your first commit.** Click **New GemDB Notebook** at the top of the sidebar and run the
-   starter cell. If VS Code prompts you to pick a kernel, choose **GemDB (Python in the database)**.
-
-   ```python
-   # Python here runs inside your GemDB database.
-   # Everything reachable from gemdb.root is still there tomorrow.
-   import gemdb
-
-   gemdb.root["greeting"] = "Hello from GemDB!"
-   gemdb.commit()
-
-   gemdb.root["greeting"]
-   ```
-
-   Running the cell shows `'Hello from GemDB!'`.
-
-5. **Try the Brain Freeze demo.** You are ready to explore a working application. To get started,
+4. **Try the Brain Freeze demo.** You are ready to explore a working application. To get started,
    click [The Brain Freeze demo](#the-brain-freeze-demo).
 
 ## Features to check out
@@ -53,9 +37,26 @@ For more information, see [Python in the database](#python-in-the-database).
 
 ### Jupyter notebooks
 
+GemDB Code comes with a ready-made GemDB Notebook, with an example that shows GemDB in action. The
+Python kernel is built into the extension, so you do not need the Jupyter extension or a local
+Python install.
+
 Click **New GemDB Notebook** at the top of the GemDB Code sidebar to open a notebook with a starter
-cell, ready to run. The kernel is built into the extension, so you do not need the Jupyter extension
-or a local Python install. For more information, see [Notebooks](#notebooks).
+cell, ready to run. If VS Code prompts you to pick a kernel, choose **GemDB (Python in the
+database)**.
+
+```python
+# Python here runs inside your GemDB database.
+# Everything reachable from gemdb.root is still there tomorrow.
+import gemdb
+
+gemdb.root["greeting"] = "Hello from GemDB!"
+gemdb.commit()
+
+gemdb.root["greeting"]
+```
+
+Running the cell shows `'Hello from GemDB!'`. For more information, see [Notebooks](#notebooks).
 
 ### MCP server for AI agents
 
