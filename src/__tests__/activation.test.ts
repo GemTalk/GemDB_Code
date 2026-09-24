@@ -37,9 +37,10 @@ vi.mock('../processes', () => ({
   isListening: () => true,
   listProcesses: () => [],
 }));
-vi.mock('../osConfig', () => ({
+vi.mock('../osConfig', async (importOriginal) => ({
+  osConfigAllowsStart: (await importOriginal<typeof import('../osConfig')>()).osConfigAllowsStart,
   configureSharedMemory: async () => {},
-  ensureOsConfigured: async () => false,
+  ensureOsConfigured: async () => 'alreadyConfigured',
   isSharedMemoryConfigured: async () => false,
   isRemoveIpcConfigured: () => false,
   sharedMemoryLabel: async () => '',

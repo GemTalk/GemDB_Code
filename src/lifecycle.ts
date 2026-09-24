@@ -29,7 +29,7 @@ import {
   startMcpServer,
   stopMcpServer,
 } from './mcp';
-import { ensureOsConfigured } from './osConfig';
+import { OS_CONFIG_RESULT, ensureOsConfigured, osConfigAllowsStart } from './osConfig';
 import {
   databaseExists,
   databasePath,
@@ -339,8 +339,17 @@ export async function ensureRunning(extensionPath: string, trigger: Trigger): Pr
     log(`Could not write the gemdb command: ${errorMessage(e)}`);
   }
 
+  // Declining and saying yes to a script that did not take are different
+  // answers, and `databaseStarted` has to keep them apart.
   const osResult = await ensureOsConfigured(extensionPath, trigger);
-  if (!osResult.ok) return failed(DATABASE_OUTCOME.osConfigDeclined);
+  if (!osConfigAllowsStart(osResult)) {
+    return failed(
+      osResult === OS_CONFIG_RESULT.declined
+        ? DATABASE_OUTCOME.osConfigDeclined
+        : DATABASE_OUTCOME.osConfigFailed,
+    );
+  }
+  const osPrompted = osResult !== OS_CONFIG_RESULT.alreadyConfigured;
 
   return vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: 'Starting GemDB' },
@@ -372,7 +381,7 @@ export async function ensureRunning(extensionPath: string, trigger: Trigger): Pr
 
         await ensureMcpServing(extensionPath, progress);
         const didWork =
-          osResult.prompted || startedStone || startedNetldi || filedGrail !== FILED_GRAIL.no;
+          osPrompted || startedStone || startedNetldi || filedGrail !== FILED_GRAIL.no;
         reportDatabaseStarted(
           trigger,
           DATABASE_OUTCOME.started,

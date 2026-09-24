@@ -155,12 +155,28 @@ export interface OsConfigWorld {
   log: (message: string) => void;
 }
 
-export async function runEnsureOsConfigured(
-  world: OsConfigWorld,
-): Promise<{ ok: boolean; prompted: boolean }> {
+/**
+ * What `runEnsureOsConfigured` returns: how the modal ended, or
+ * `alreadyConfigured` when there was nothing to ask. Kept apart from
+ * `OS_CONFIG_OUTCOME` on purpose: that is `osConfigPrompted`'s vocabulary, sent
+ * only when the modal was shown, and the fast path is silent by design, so
+ * `alreadyConfigured` must be something `reportOsConfigPrompted` cannot accept.
+ */
+export const OS_CONFIG_RESULT = {
+  ...OS_CONFIG_OUTCOME,
+  alreadyConfigured: 'alreadyConfigured',
+} as const;
+export type OsConfigResult = (typeof OS_CONFIG_RESULT)[keyof typeof OS_CONFIG_RESULT];
+
+/** Whether the database may start. RemoveIPC is advisory, so `removeIpcUnset` starts too. */
+export function osConfigAllowsStart(result: OsConfigResult): boolean {
+  return result !== OS_CONFIG_RESULT.declined && result !== OS_CONFIG_RESULT.stillUnconfigured;
+}
+
+export async function runEnsureOsConfigured(world: OsConfigWorld): Promise<OsConfigResult> {
   const sharedMemoryOk = await world.sharedMemoryOk();
   const removeIpcOk = world.removeIpcOk();
-  if (sharedMemoryOk && removeIpcOk) return { ok: true, prompted: false };
+  if (sharedMemoryOk && removeIpcOk) return OS_CONFIG_RESULT.alreadyConfigured;
 
   const missing: OsConfigMissing =
     !sharedMemoryOk && !removeIpcOk
@@ -192,7 +208,7 @@ export async function runEnsureOsConfigured(
   );
   if (!confirmed) {
     world.report(OS_CONFIG_OUTCOME.declined, missing);
-    return { ok: false, prompted: true };
+    return OS_CONFIG_RESULT.declined;
   }
 
   if (!sharedMemoryOk) {
@@ -203,7 +219,7 @@ export async function runEnsureOsConfigured(
           'Run "GemDB: Configure Shared Memory" and try again.',
       );
       world.report(OS_CONFIG_OUTCOME.stillUnconfigured, missing);
-      return { ok: false, prompted: true };
+      return OS_CONFIG_RESULT.stillUnconfigured;
     }
     world.log('Shared memory configured');
   }
@@ -219,18 +235,19 @@ export async function runEnsureOsConfigured(
         'RemoveIPC is still unset — the database will stop when you log out of this machine.',
       );
       world.report(OS_CONFIG_OUTCOME.removeIpcUnset, missing);
-      return { ok: true, prompted: true };
+      return OS_CONFIG_RESULT.removeIpcUnset;
     }
   }
 
   world.report(OS_CONFIG_OUTCOME.configured, missing);
-  return { ok: true, prompted: true };
+  return OS_CONFIG_RESULT.configured;
 }
 
 /**
  * Bring the operating system up to what the engine needs, asking first.
  *
- * Returns true if the database may start. Shared memory is the gate: if it is
+ * Returns how it went (see `OsConfigResult`); `osConfigAllowsStart` says whether
+ * the database may start. Shared memory is the gate: if it is
  * still short after the setup script ran — a mistyped password, a cancelled
  * `sudo` — we refuse rather than let the start fail with an error about
  * segment allocation that means nothing to a new developer.
@@ -238,7 +255,7 @@ export async function runEnsureOsConfigured(
 export function ensureOsConfigured(
   extensionPath: string,
   trigger: Trigger,
-): Promise<{ ok: boolean; prompted: boolean }> {
+): Promise<OsConfigResult> {
   return runEnsureOsConfigured({
     sharedMemoryOk: isSharedMemoryConfigured,
     removeIpcOk: isRemoveIpcConfigured,

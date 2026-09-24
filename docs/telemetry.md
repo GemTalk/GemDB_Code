@@ -110,7 +110,7 @@ nothing, and the same failure is not sent twice in a row.
 | Property / measure | Values                                                                                                                              |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `trigger`          | see above                                                                                                                           |
-| `outcome`          | `started`, or why not: `setupCancelled`, `setupFailed`, `osConfigDeclined`, `startFailed`, `unsupportedPlatform`, `missingPayload` (the extension package is broken) |
+| `outcome`          | `started`, or why not: `setupCancelled`, `setupFailed`, `osConfigDeclined` (the user said no to the shared-memory change), `osConfigFailed` (they said yes, but shared memory is still too low: a wrong sudo password, a cancelled script), `startFailed`, `unsupportedPlatform`, `missingPayload` (the extension package is broken) |
 | `filedGrail`       | whether Python support was installed into the database this time: `no`, `firstTime`, `update`                                       |
 | `durationMs`       | how long it took                                                                                                                    |
 

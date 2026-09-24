@@ -33,14 +33,18 @@ vi.mock('../paths', () => ({
   mcpPath: () => '/mcp',
 }));
 
-const ensureOsConfigured = vi.fn(async (_extensionPath: string, _trigger: string) => ({
-  ok: true,
-  prompted: false,
-}));
-vi.mock('../osConfig', () => ({
-  ensureOsConfigured: (extensionPath: string, trigger: string) =>
-    ensureOsConfigured(extensionPath, trigger),
-}));
+const ensureOsConfigured = vi.fn(
+  async (_extensionPath: string, _trigger: string): Promise<string> => 'alreadyConfigured',
+);
+vi.mock('../osConfig', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../osConfig')>();
+  return {
+    OS_CONFIG_RESULT: actual.OS_CONFIG_RESULT,
+    osConfigAllowsStart: actual.osConfigAllowsStart,
+    ensureOsConfigured: (extensionPath: string, trigger: string) =>
+      ensureOsConfigured(extensionPath, trigger),
+  };
+});
 
 const findStone = vi.fn(() => true);
 const findNetldi = vi.fn(() => true);
@@ -79,7 +83,7 @@ describe('databaseStarted', () => {
     grailNeedsUpdate.mockReturnValue(false);
     grailInstalled.mockReturnValue(true);
     isInstalled.mockReturnValue(true);
-    ensureOsConfigured.mockResolvedValue({ ok: true, prompted: false });
+    ensureOsConfigured.mockResolvedValue('alreadyConfigured');
     findStone.mockReturnValue(true);
     findNetldi.mockReturnValue(true);
 
@@ -94,7 +98,7 @@ describe('databaseStarted', () => {
   });
 
   it('sends started when something was actually done, e.g. the os-config prompt fired', async () => {
-    ensureOsConfigured.mockResolvedValue({ ok: true, prompted: true });
+    ensureOsConfigured.mockResolvedValue('configured');
 
     const ok = await ensureRunning('/ext', TRIGGER.startCommand);
 
@@ -118,11 +122,23 @@ describe('databaseStarted', () => {
     expect(eventsNamed('databaseStarted')).toHaveLength(1);
   });
 
+  it('reports a script that did not take as osConfigFailed, not a decline', async () => {
+    // The user said yes and the sudo script ran, but shared memory is still
+    // short — a mistyped password, a cancelled script. Counting that as a
+    // decline would make a yes read as a no.
+    ensureOsConfigured.mockResolvedValue('stillUnconfigured');
+
+    expect(await ensureRunning('/ext', TRIGGER.startCommand)).toBe(false);
+    const events = eventsNamed('databaseStarted');
+    expect(events).toHaveLength(1);
+    expect(events[0].properties).toMatchObject({ outcome: 'osConfigFailed' });
+  });
+
   it('dedupes a repeated failure, reports again on a new one, and again on recovery', async () => {
     // These three phases share one `lastReportedFailure` (module state in
     // telemetry.ts, exactly as it is in a real window), so they run as one
     // sequence rather than as separate tests that would each need it reset.
-    ensureOsConfigured.mockResolvedValue({ ok: false, prompted: true });
+    ensureOsConfigured.mockResolvedValue('declined');
     const first = await ensureRunning('/ext', TRIGGER.notebook);
     const second = await ensureRunning('/ext', TRIGGER.notebook);
     const third = await ensureRunning('/ext', TRIGGER.notebook);
@@ -138,7 +154,7 @@ describe('databaseStarted', () => {
     expect(eventsNamed('databaseStarted')[1].properties).toMatchObject({ outcome: 'setupFailed' });
 
     isInstalled.mockReturnValue(true);
-    ensureOsConfigured.mockResolvedValue({ ok: true, prompted: true });
+    ensureOsConfigured.mockResolvedValue('configured');
     await ensureRunning('/ext', TRIGGER.notebook);
     expect(eventsNamed('databaseStarted')).toHaveLength(3);
     expect(eventsNamed('databaseStarted')[2].properties).toMatchObject({ outcome: 'started' });

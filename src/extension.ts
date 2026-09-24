@@ -27,7 +27,12 @@ import {
 import { isMcpRunning, startMcpServer, stopMcpServer } from './mcp';
 import { cloneBrainFreeze } from './demo';
 import { confirmMcpEnabled, registerMcpProvider, registerWithClient } from './mcpRegistration';
-import { configureSharedMemory, ensureOsConfigured, isSharedMemoryConfigured } from './osConfig';
+import {
+  configureSharedMemory,
+  ensureOsConfigured,
+  isSharedMemoryConfigured,
+  osConfigAllowsStart,
+} from './osConfig';
 import { isSupportedPlatform, setContext } from './platform';
 import { isRunning, isRunningAsync } from './processes';
 import { renameOwner } from './pythonQueries';
@@ -404,12 +409,12 @@ async function prepareOnFirstRun(
     // other runs a script under sudo — so there is no ordering between them to
     // get wrong. Neither rejects: both report failure by returning.
     const files = prepare(extensionPath);
-    const os = ensureOsConfigured(extensionPath, TRIGGER.firstRun).catch(() => ({
-      ok: false,
-      prompted: false,
-    }));
-    const [prepared, osResult] = await Promise.all([files, os]);
-    return { prepared, configured: osResult.ok, ranSetup: true };
+    const os = ensureOsConfigured(extensionPath, TRIGGER.firstRun).then(
+      osConfigAllowsStart,
+      () => false,
+    );
+    const [prepared, configured] = await Promise.all([files, os]);
+    return { prepared, configured, ranSetup: true };
   });
   if (outcome === undefined) {
     reportUnattendedSetupSkipped(SKIP_REASON.lockHeld);

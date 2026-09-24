@@ -403,6 +403,7 @@ export const DATABASE_OUTCOME = {
   setupCancelled: 'setupCancelled',
   setupFailed: 'setupFailed',
   osConfigDeclined: 'osConfigDeclined',
+  osConfigFailed: 'osConfigFailed',
   startFailed: 'startFailed',
 } as const;
 export type DatabaseOutcome = (typeof DATABASE_OUTCOME)[keyof typeof DATABASE_OUTCOME];
