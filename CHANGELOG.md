@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-09-23
+
+The bundled Python runtime and MCP server move forward. The engine is
+unchanged, so an existing database carries over as it is.
+
+### Added
+
+- **`gemdb.schema`, for the few schema changes that touch stored data.**
+  Editing a class is still all almost any change needs: adding an attribute,
+  no longer assigning one, or moving one between a parent and a child touches
+  no stored instance. The operations that do rewrite instances are now in one
+  module you import by name:
+
+  ```python
+  import gemdb.schema
+
+  gemdb.schema.layout(Account)              # what the class stores, by position
+  gemdb.schema.report()                     # every class with unused attributes
+  gemdb.schema.drop(Account, "balance")     # delete an attribute's values
+  gemdb.schema.rename(Account, "phone", "phones")
+  gemdb.schema.compact(Account)             # reclaim the space a drop left
+  ```
+
+  `rebase`, `drop_class` and `rename_class` cover a class that changed its
+  bases, was deleted, or was renamed. Everything except `layout` scans the
+  repository and commits its own work. Each one therefore refuses while your
+  session has uncommitted changes, rather than discarding them.
+
+### Changed
+
+- **A newer Python runtime.** 282 commits across about 110 pull requests since
+  1.5.0. Most of them bring standard-library behaviour closer to CPython's:
+  `OSError` subclasses carry the right `errno`, and `pathlib` gains
+  `Path.walk`, `is_mount` and `as_uri`. `os.path.realpath` now resolves
+  symlinks, and `shutil.rmtree` no longer follows them. Codecs, `eval` and
+  `exec` scoping, private-name mangling and `int.to_bytes`/`from_bytes` all
+  behave as CPython does.
+
+  Python now also compiles straight to GemStone's intermediate representation
+  by default, rather than by way of generated Smalltalk source. Your code
+  should behave exactly as it did. If it does not, that is a bug worth
+  reporting.
+
+- **The MCP server's Python search sees more.** `find_python_senders` now
+  finds calls in nested and function-local classes, and in methods compiled
+  straight to the intermediate representation. It also names the method each
+  hit is in, so `get_method_source` can open it. What a module writes to
+  `stderr` during `eval_python` now comes back in the result instead of being
+  dropped.
+
+- **The MCP server no longer refuses to modify GemStone's own classes.** The
+  refusal lived inside the server, so `execute_code` could always get past it.
+  The stone enforces the real boundary, and with `gemdb.mcp.readOnly` on,
+  agents log in as a user the stone does not let modify kernel classes. Leave
+  it off, and an agent can change kernel classes as easily as your own.
+
+- **A new icon.** The Marketplace and Extensions view icon is redrawn from the
+  GemDB mark's vector source, and the activity-bar icon is traced from the same
+  source, so the two now match. The activity bar used to show a scaled-down
+  copy of the full-colour PNG. It is now a single-colour mask that VS Code
+  recolours to fit your theme, like the other icons beside it.
+
+### Fixed
+
+- **Installing the Python runtime no longer runs a full garbage collection
+  every time.** A check meant to run one only when the repository was close to
+  full misread GemDB's database, which has no configured size limit, as always
+  full. A collection needs every connected session to agree to it. So with
+  another window or a GemDB Shell connected, the install could stall and then
+  fail with "Request for gcLock timed out".
+
+- **"builtin" is spelled "built-in"** in the extension's description.
+
+- **`scripts/unset-os-config.sh` gives a cleanup command that works.** Its
+  closing hint suggested `rm -rf ~/GemDB` for replaying first-run setup. That
+  fails part-way, because the engine unpacks some files read-only. The hint now
+  adds write permission first: `chmod -R u+w ~/GemDB && rm -rf ~/GemDB`.
+
 ## [1.5.0] - 2026-09-16
 
 ### Added
@@ -413,7 +491,8 @@ gets out of the way.
 - **`sys.exit(n)` exits 1 rather than `n`**, and **`input()` is not yet
   supported**. Both are upstream in Grail.
 
-[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.2.0...v1.3.0
