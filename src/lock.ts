@@ -101,3 +101,63 @@ function safeRead(file: string): string | undefined {
     return undefined;
   }
 }
+
+/**
+ * The name of the stone lock, shared with the generated `gemdb` wrapper.
+ *
+ * Exported because the wrapper takes the same lock in shell, and a lock each
+ * would not be a lock at all: both doors start the same stone -- the editor on
+ * activation, a terminal command on any invocation -- and two commands close
+ * together is all it takes. Two stoned processes held one extent0.dbf
+ * read-write for a week on a developer machine before anyone noticed, because
+ * gslist keys Stone rows by name and shows one row for two stones.
+ */
+export const STONE_LOCK_NAME = '.gemdb-stone.lock';
+
+function stoneLockPath(): string {
+  return path.join(rootPath(), STONE_LOCK_NAME);
+}
+
+/**
+ * Run `work` while holding the stone lock, or return undefined without running
+ * it if another process is starting the stone.
+ *
+ * A DIRECTORY rather than a file, unlike the setup lock above: `mkdir` is the
+ * atomic create-or-fail primitive available to both this and the shell
+ * wrapper, and `flock` is not on a stock macOS. The owning pid goes in a file
+ * inside it, so a lock left by a crash can be told from one held by a live
+ * process -- the same test the wrapper makes.
+ */
+export async function withStoneLock<T>(work: () => Promise<T>): Promise<T | undefined> {
+  const lock = stoneLockPath();
+  ensureRootPath();
+
+  try {
+    fs.mkdirSync(lock);
+  } catch {
+    const owner = Number(
+      (() => {
+        try {
+          return fs.readFileSync(path.join(lock, 'pid'), 'utf8').trim();
+        } catch {
+          return '';
+        }
+      })(),
+    );
+    if (owner && isAlive(owner)) {
+      log(`Another process (${owner}) is starting the database; leaving it to them.`);
+      return undefined;
+    }
+    // Debris from a crash, or a lock we cannot read: taking it is better than
+    // blocking every later start on a file nobody has heard of.
+    fs.rmSync(lock, { recursive: true, force: true });
+    fs.mkdirSync(lock);
+  }
+
+  try {
+    fs.writeFileSync(path.join(lock, 'pid'), `${process.pid}\n`);
+    return await work();
+  } finally {
+    fs.rmSync(lock, { recursive: true, force: true });
+  }
+}

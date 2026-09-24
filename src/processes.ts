@@ -12,6 +12,7 @@ import {
 } from './config';
 import { libraryPathVariable, sharedLibraryExtension } from './platform';
 import { log, logStep } from './log';
+import { withStoneLock } from './lock';
 import { EngineProcess, parseGslist } from './gslist';
 import { databaseConfPath, databaseLogPath, databasePath, enginePath, grailPath } from './paths';
 
@@ -102,14 +103,24 @@ export function isListening(processes = listProcesses()): boolean {
 }
 
 export async function startStone(): Promise<void> {
-  logStep(`Starting the database`);
-  const env = engineEnvironment();
-  await runEngineCommand(
-    path.join(env.GEMSTONE, 'bin', 'startstone'),
-    ['-l', path.join(databaseLogPath(), `${STONE_NAME}.log`), STONE_NAME],
-    env,
-    'Start database',
-  );
+  // Under the lock the generated `gemdb` wrapper also takes, because both
+  // doors start the same stone and nothing downstream refuses a second one.
+  // The re-check inside the lock is the point: whoever we queued behind was
+  // most likely starting it, and without this we would start another.
+  await withStoneLock(async () => {
+    if (isRunning()) {
+      log('The database is already running; nothing to start.');
+      return;
+    }
+    logStep(`Starting the database`);
+    const env = engineEnvironment();
+    await runEngineCommand(
+      path.join(env.GEMSTONE, 'bin', 'startstone'),
+      ['-l', path.join(databaseLogPath(), `${STONE_NAME}.log`), STONE_NAME],
+      env,
+      'Start database',
+    );
+  });
 }
 
 export async function startNetldi(): Promise<void> {
