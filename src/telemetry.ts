@@ -289,7 +289,10 @@ export function reportActivation(durationMs: number, state: GemDbState): void {
 /** Why the unattended first-run setup at activation did not run. */
 export const SKIP_REASON = {
   remoteWindow: 'remoteWindow',
-  markerPresent: 'markerPresent',
+  cancelledBefore: 'cancelledBefore',
+  failedBefore: 'failedBefore',
+  installedBefore: 'installedBefore',
+  uninstalled: 'uninstalled',
   lockHeld: 'lockHeld',
   installedByOtherWindow: 'installedByOtherWindow',
 } as const;
@@ -300,13 +303,16 @@ export type SkipReason = (typeof SKIP_REASON)[keyof typeof SKIP_REASON];
  *
  * Cadence: at most once per window activation, and only while GemDB is not
  * installed — an installed machine returns before reaching any of these, and
- * `activated{state}` already says so. `markerPresent` repeats on every
- * activation until the user resumes setup; that repetition is the signal
- * (how long they stay stuck), and it ends when they install.
+ * `activated{state}` already says so. The four marker reasons —
+ * `cancelledBefore`, `failedBefore`, `installedBefore`, `uninstalled` — say
+ * what the `setup-attempted` marker recorded, and each repeats on every
+ * activation until the user installs; that repetition is the signal (how long
+ * they stay there). `installedBefore` is a machine that had GemDB and lost it
+ * without uninstalling, most often a changed root path or engine version.
  *
  * Emitted only when it skips — the case where it runs instead is
  * `setupStarted{trigger: firstRun}`, and emitting both would double-count the
- * same activation. `markerPresent` is the highest-value reason here: it is
+ * same activation. `cancelledBefore` is the highest-value reason here: it is
  * exactly "this user is stuck behind their own earlier cancel", and it is
  * invisible today.
  */

@@ -241,17 +241,17 @@ export async function install(extensionPath: string): Promise<void> {
 /**
  * The unattended preparation run when the extension first activates.
  *
- * Does the inert work and stops. Returns false when the user cancelled, which
- * the caller records so it is never retried unasked — a cancel here is a
- * decision, not a hiccup, and the partly-downloaded archive is kept so that
- * choosing to continue later costs only the remaining bytes.
+ * Does the inert work and stops. Returns how it ended, which the caller
+ * records so it is never retried unasked — a cancel here is a decision, not a
+ * hiccup, and the partly-downloaded archive is kept so that choosing to
+ * continue later costs only the remaining bytes.
  */
-export async function prepare(extensionPath: string): Promise<boolean> {
-  if (!isSupportedPlatform() || !bundledGrailStamp(extensionPath)) return false;
+export async function prepare(extensionPath: string): Promise<SetupOutcome> {
+  if (!isSupportedPlatform() || !bundledGrailStamp(extensionPath)) return 'failed';
 
   const outcome = await runSetup(extensionPath, TRIGGER.firstRun);
   if (outcome === 'completed') log('GemDB is ready to start.');
-  return outcome === 'completed';
+  return outcome;
 }
 
 /** Log a failure and offer the log, in the one shape every step uses. */
@@ -666,8 +666,10 @@ export async function reinstallGrail(extensionPath: string): Promise<void> {
  * The database is the only irreplaceable part — the engine can be downloaded
  * again and Grail is inside the extension — so it is called out by name, and
  * removed only if the user says so explicitly.
+ *
+ * Resolves true once removal has begun, whether or not every step succeeded.
  */
-export async function uninstall(): Promise<void> {
+export async function uninstall(): Promise<boolean> {
   const choice = await vscode.window.showWarningMessage(
     'Remove GemDB?',
     {
@@ -680,11 +682,11 @@ export async function uninstall(): Promise<void> {
     'Remove everything, including my data',
     'Keep my database',
   );
-  if (choice === undefined) return;
+  if (choice === undefined) return false;
 
   if (findStone()) {
     void vscode.window.showErrorMessage('Stop GemDB before removing it.');
-    return;
+    return false;
   }
 
   logStep('Removing GemDB');
@@ -700,4 +702,5 @@ export async function uninstall(): Promise<void> {
   } catch (e) {
     void vscode.window.showErrorMessage(`Removing GemDB failed: ${errorMessage(e)}`);
   }
+  return true;
 }

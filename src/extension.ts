@@ -11,6 +11,7 @@ import {
   start,
   stop,
   uninstall,
+  type SetupOutcome,
 } from './lifecycle';
 import { autoStartSuppressed, initAutoStart, suppressAutoStart } from './autoStart';
 import { mcpEnabled, mcpReadOnly } from './config';
@@ -42,6 +43,7 @@ import { GemDbStatusBar } from './statusBar';
 import { StatusViewProvider } from './statusView';
 import {
   SKIP_REASON,
+  type SkipReason,
   Stopwatch,
   TRIGGER,
   initTelemetry,
@@ -181,7 +183,10 @@ export function activate(context: vscode.ExtensionContext): void {
         // Every session, not just this window's own: uninstalling deletes the
         // database each notebook is connected to.
         logoutAll();
-        await uninstall();
+        // Overwritten, never deleted: deleting it would restart the automatic
+        // download on the next window, which is exactly what removing GemDB
+        // asked not to happen.
+        if (await uninstall()) writeSetupMarker(context, 'uninstalled');
       }),
     ),
     vscode.commands.registerCommand('gemdb.openRepl', () => openRepl(extensionPath)),
@@ -334,6 +339,44 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 }
 
+/** What `setup-attempted` records: how the last unattended setup ended, or that GemDB was removed. */
+type SetupMarker = SetupOutcome | 'uninstalled';
+
+const MARKER_REASON: Record<SetupMarker, SkipReason> = {
+  cancelled: SKIP_REASON.cancelledBefore,
+  failed: SKIP_REASON.failedBefore,
+  completed: SKIP_REASON.installedBefore,
+  uninstalled: SKIP_REASON.uninstalled,
+};
+
+function markerPath(context: vscode.ExtensionContext): string {
+  return path.join(context.globalStorageUri.fsPath, 'setup-attempted');
+}
+
+/**
+ * What the marker records, or `'none'`. A marker that does not say how setup
+ * ended is no record at all, so it is treated as absent: setup is offered and
+ * the file is rewritten with the outcome.
+ */
+function readSetupMarker(context: vscode.ExtensionContext): SetupMarker | 'none' {
+  let value: string;
+  try {
+    value = fs.readFileSync(markerPath(context), 'utf8').trim();
+  } catch {
+    return 'none';
+  }
+  return Object.hasOwn(MARKER_REASON, value) ? (value as SetupMarker) : 'none';
+}
+
+function writeSetupMarker(context: vscode.ExtensionContext, value: SetupMarker): void {
+  try {
+    fs.mkdirSync(context.globalStorageUri.fsPath, { recursive: true });
+    fs.writeFileSync(markerPath(context), value);
+  } catch {
+    /* worst case it is offered once more */
+  }
+}
+
 /**
  * Get the machine ready the first time the extension activates, without asking.
  *
@@ -378,9 +421,9 @@ async function prepareOnFirstRun(
     return;
   }
 
-  const marker = path.join(context.globalStorageUri.fsPath, 'setup-attempted');
-  if (fs.existsSync(marker)) {
-    reportUnattendedSetupSkipped(SKIP_REASON.markerPresent);
+  const marker = readSetupMarker(context);
+  if (marker !== 'none') {
+    reportUnattendedSetupSkipped(MARKER_REASON[marker]);
     return;
   }
 
@@ -388,7 +431,11 @@ async function prepareOnFirstRun(
     // Re-check inside the lock: another window may have finished the whole
     // thing while this one was waiting to acquire it.
     if (isInstalled()) {
-      return { prepared: true, configured: await isSharedMemoryConfigured(), ranSetup: false };
+      return {
+        files: 'completed' as const,
+        configured: await isSharedMemoryConfigured(),
+        ranSetup: false,
+      };
     }
     log('First run: preparing GemDB. This downloads about 210 MB and uses about 820 MB of disk.');
 
@@ -413,8 +460,8 @@ async function prepareOnFirstRun(
       osConfigAllowsStart,
       () => false,
     );
-    const [prepared, configured] = await Promise.all([files, os]);
-    return { prepared, configured, ranSetup: true };
+    const [filesOutcome, configured] = await Promise.all([files, os]);
+    return { files: filesOutcome, configured, ranSetup: true };
   });
   if (outcome === undefined) {
     reportUnattendedSetupSkipped(SKIP_REASON.lockHeld);
@@ -422,17 +469,13 @@ async function prepareOnFirstRun(
   }
   if (!outcome.ranSetup) reportUnattendedSetupSkipped(SKIP_REASON.installedByOtherWindow);
 
-  // Recorded whether it succeeded or was cancelled — either way this machine
-  // has been offered setup, and a cancel is a decision to be respected.
-  try {
-    fs.mkdirSync(context.globalStorageUri.fsPath, { recursive: true });
-    fs.writeFileSync(marker, new Date().toISOString());
-  } catch {
-    /* worst case it is offered once more */
-  }
+  // Recorded however it ended — either way this machine has been offered
+  // setup, and a cancel is a decision to be respected. The outcome is what
+  // the marker holds, so a later skip can say which of those it was.
+  writeSetupMarker(context, outcome.files);
 
   refresh();
-  if (!outcome.prepared) return;
+  if (outcome.files !== 'completed') return;
 
   // Declining the permission is not a failure. The setting persists once made,
   // so it is normally asked once per machine and never again; if it is declined

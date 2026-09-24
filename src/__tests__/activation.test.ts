@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { __resetSettings, __setSetting, env } from '../__mocks__/vscode';
+import { __commands, __resetSettings, __setSetting, env } from '../__mocks__/vscode';
 import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 
 // `activate()` is synchronous, but everything after its two exits — the
@@ -14,16 +14,17 @@ import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 // `send`, real `baseProperties` merging, and real event names, recorded in
 // `__telemetry`.
 const isInstalled = vi.fn(() => true);
+const uninstall = vi.fn(async () => true);
 vi.mock('../lifecycle', () => ({
   isInstalled: () => isInstalled(),
   ensureMcpRunning: async () => false,
   ensureRunning: async () => false,
   install: async () => {},
-  prepare: () => false,
+  prepare: async () => 'failed',
   reinstallGrail: async () => {},
   start: async () => {},
   stop: async () => {},
-  uninstall: async () => {},
+  uninstall: () => uninstall(),
 }));
 vi.mock('../autoStart', () => ({
   autoStartSuppressed: () => true,
@@ -60,6 +61,7 @@ describe('activate()', () => {
     originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
     originalArch = Object.getOwnPropertyDescriptor(process, 'arch');
     isInstalled.mockReset().mockReturnValue(true);
+    uninstall.mockReset().mockResolvedValue(true);
     isRunning.mockReset().mockReturnValue(false);
     Object.defineProperty(process, 'platform', { value: 'darwin' });
     Object.defineProperty(process, 'arch', { value: 'arm64' });
@@ -167,17 +169,32 @@ describe('activate()', () => {
       expect(skipped()).toEqual([{ skipReason: 'remoteWindow' }]);
     });
 
-    it('reports markerPresent when an earlier cancel already recorded a marker', () => {
+    it.each([
+      ['cancelled', 'cancelledBefore'],
+      ['failed', 'failedBefore'],
+      ['completed', 'installedBefore'],
+      ['uninstalled', 'uninstalled'],
+    ])('reports %s recorded in the marker as %s', (recorded, skipReason) => {
       isInstalled.mockReturnValue(false);
       const context = fakeExtensionContext();
-      writeFileSync(
-        join(context.globalStorageUri.fsPath, 'setup-attempted'),
-        new Date().toISOString(),
-      );
+      writeFileSync(join(context.globalStorageUri.fsPath, 'setup-attempted'), recorded);
 
       activate(context);
 
-      expect(skipped()).toEqual([{ skipReason: 'markerPresent' }]);
+      expect(skipped()).toEqual([{ skipReason }]);
+    });
+
+    it('treats a marker that records no outcome as absent, and rewrites it', async () => {
+      isInstalled.mockReturnValue(false);
+      const context = fakeExtensionContext();
+      const marker = join(context.globalStorageUri.fsPath, 'setup-attempted');
+      writeFileSync(marker, new Date().toISOString());
+
+      activate(context);
+
+      // `prepare` is mocked to fail, so the rewritten marker says so.
+      await expect.poll(() => readFileSync(marker, 'utf8')).toBe('failed');
+      expect(skipped()).toEqual([]);
     });
 
     it('reports lockHeld when another window already owns the setup lock', async () => {
@@ -210,6 +227,31 @@ describe('activate()', () => {
       activate(fakeExtensionContext());
 
       await expect.poll(skipped).toEqual([{ skipReason: 'installedByOtherWindow' }]);
+    });
+  });
+
+  describe('gemdb.uninstall', () => {
+    it('overwrites the marker with uninstalled rather than deleting it', async () => {
+      const context = fakeExtensionContext();
+      const marker = join(context.globalStorageUri.fsPath, 'setup-attempted');
+      writeFileSync(marker, 'completed');
+      activate(context);
+
+      await __commands.get('gemdb.uninstall')?.();
+
+      expect(readFileSync(marker, 'utf8')).toBe('uninstalled');
+    });
+
+    it('leaves the marker alone when nothing was removed', async () => {
+      uninstall.mockResolvedValue(false);
+      const context = fakeExtensionContext();
+      const marker = join(context.globalStorageUri.fsPath, 'setup-attempted');
+      writeFileSync(marker, 'completed');
+      activate(context);
+
+      await __commands.get('gemdb.uninstall')?.();
+
+      expect(readFileSync(marker, 'utf8')).toBe('completed');
     });
   });
 });

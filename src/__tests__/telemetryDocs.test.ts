@@ -59,7 +59,7 @@ beforeAll(() => {
   initTelemetry(fakeExtensionContext(), false);
 
   reportActivation(1, GEMDB_STATE.running);
-  reportUnattendedSetupSkipped(SKIP_REASON.markerPresent);
+  reportUnattendedSetupSkipped(SKIP_REASON.cancelledBefore);
   reportSetupStarted(TRIGGER.firstRun);
   reportSetupFinished(TRIGGER.firstRun, SETUP_OUTCOME.completed, 1);
   reportOsConfigPrompted(TRIGGER.firstRun, OS_CONFIG_OUTCOME.configured, OS_CONFIG_MISSING.both);

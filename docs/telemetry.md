@@ -68,10 +68,16 @@ window. Sent at most once per window, and only while GemDB is not installed.
 
 | `skipReason`             | Meaning                                                                   |
 | ------------------------ | ------------------------------------------------------------------------- |
-| `markerPresent`          | Setup was already offered once and the user cancelled it. They have to resume it themselves. Repeats each time they open VS Code, so it shows how long users stay stuck. |
+| `cancelledBefore`        | Setup was already offered once and the user cancelled it. They have to resume it themselves. |
+| `failedBefore`           | Setup was already offered once and it failed, for example on a network error. It is not retried unasked. |
+| `installedBefore`        | GemDB was installed on this machine and no longer is, without an uninstall — most often a changed root path or engine version. |
+| `uninstalled`            | The user ran **GemDB: Uninstall**. Setup stays off until they install again. |
 | `remoteWindow`           | A remote or browser window, which is not the machine GemDB would set up.  |
 | `lockHeld`               | Another VS Code window is running setup.                                  |
 | `installedByOtherWindow` | Another window finished setup while this one waited.                      |
+
+The first four repeat each time the user opens VS Code until they install, so
+they show how long users stay in each state.
 
 ### `setupStarted` and `setupFinished`
 
