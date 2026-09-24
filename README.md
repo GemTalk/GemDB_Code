@@ -6,10 +6,9 @@ stored as they are, and every commit is an ACID (atomic, consistent, isolated, d
 Create objects, commit transactions, and explore your data without leaving your editor. The guided
 walkthrough takes you from install to your first commit.
 
-After you install the extension and it completes its initial installation of a database that is
-ready to go, you can either start testing out the GemDB Shell or default Jupyter notebook, or move
-on and explore the Brain Freeze demo. GemDB Code installs and runs one GemDB database under
-`~/GemDB`, with no server to install and no credentials to manage.
+GemDB Code runs one GemDB database under `~/GemDB`, with no server to install and no credentials to
+manage. After the setup finishes, you can start testing out the GemDB Shell or a GemDB Notebook, or
+move on and explore the Brain Freeze demo.
 
 GemDB Code runs on macOS with Apple Silicon and on Linux (x86-64 or ARM64) and needs VS Code 1.101
 or later. For a complete list, see [Requirements](#requirements).
@@ -42,7 +41,8 @@ or later. For a complete list, see [Requirements](#requirements).
 
    Running the cell shows `'Hello from GemDB!'`.
 
-5. You are ready to try the [Brain Freeze demo](#the-brain-freeze-demo).
+5. **Try the Brain Freeze demo.** You are ready to explore a working application. To get started,
+   click [The Brain Freeze demo](#the-brain-freeze-demo).
 
 ## Features to check out
 
@@ -149,7 +149,7 @@ GemDB Code. To open it again:
 
 1. Open the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), type `Open Walkthrough`, and
    choose **Welcome: Open Walkthrough...**.
-2. From the list, choose **Get Started with GemDB Code**. It is labeled **GemDB Code** and you can
+2. From the list, choose **Get Started with GemDB Code**. It is labeled **GemDB Code**, and you can
    type `GemDB` to narrow the list.
 
 ### The GemDB Code sidebar
@@ -197,12 +197,12 @@ machine-wide, it prompts you and waits for your permission:
 
 - **Raising shared memory** needs `sudo` and changes the machine for all software. GemDB Code checks
   whether the operating system allows at least 1 GB of shared memory when setup starts, while the
-  engine downloads, and again each time the database starts. If the shared memory setting is
+  engine downloads, and again each time the database starts. If the shared-memory setting is
   insufficient, GemDB Code prompts you for permission to raise the limit. This is often needed on
   macOS; most Linux systems already allow enough. When you choose **Configure**, GemDB Code opens a
   terminal where you type your password yourself. If you decline, the database cannot start, and the
-  **Shared memory** row in the GemDB Code sidebar shows that it cannot start until it has more
-  shared memory. To address this requirement, start the database again, click that row, or run
+  **Shared memory** row in the GemDB Code sidebar shows that the database cannot start until it has
+  more shared memory. To address this requirement, start the database again, click that row, or run
   **GemDB: Configure Shared Memory** from the Command Palette.
 - **On Linux, keeping the database alive after you log out** needs systemd's `RemoveIPC=no`, which
   also needs `sudo`. The same dialog includes it, and GemDB Code runs it in its own terminal. Most
@@ -213,15 +213,15 @@ machine-wide, it prompts you and waits for your permission:
   choose, and the command needs `git`.
 
 GemDB Code never edits your shell profile or any AI client's configuration files. For AI clients it
-copies the command or snippet for you to paste. For your shell profile, see
-[The `gemdb` command](#the-gemdb-command) for the line to add.
+copies the command or snippet for you to paste. For the line to add to your shell profile, see
+[The `gemdb` command](#the-gemdb-command).
 
 ### Starting and stopping the database
 
-The database runs as background processes that keep running after you close VS Code, so your data
-stays available to scripts, terminals and agents. When the extension activates, GemDB Code starts
-the database if it is set up and you have not stopped it yourself, so your first notebook cell does
-not have to wait. Running Python also starts the database if it is not running.
+The database keeps running in the background after you close VS Code, so your data stays available
+to scripts, terminals and agents. When the extension activates, GemDB Code starts the database if it
+is set up and you have not stopped it yourself, so your first notebook cell does not have to wait.
+Running Python also starts the database if it is not running.
 
 If you stop the database yourself, with the **Stop GemDB** button in the GemDB Code sidebar or the
 status bar, it stays stopped until something needs it again: you start it, you run Python in VS Code
@@ -293,8 +293,7 @@ with gemdb.transaction():
 changes. A script run with the `gemdb` command starts with uncommitted changes, so in a script, call
 `gemdb.commit()` or `gemdb.abort()` before the first `with gemdb.transaction():` block.
 
-Each shell, notebook and agent works in its own session, with a consistent view of the database. A
-session sees another session's commits after its own `refresh()`, `abort()` or `commit()`.
+Each session sees other sessions' commits after its own `refresh()`, `abort()` or `commit()`.
 
 ### The `gemdb` command
 
@@ -437,14 +436,14 @@ setting.
 ### Settings
 
 The default GemDB Code settings are designed to work on most systems, so most users do not need to
-change the default settings. These include settings for locating where GemDB Code stores files,
-controlling how Python support is updated, and setting up the MCP server for AI agents.
+change them. These include settings for locating where GemDB Code stores files, controlling how
+Python support is updated, and setting up the MCP server for AI agents.
 
 If you want to review them, open VS Code's Settings (Ctrl+, on Linux, or Cmd+, on macOS) and search
 for `gemdb`, or go to **Extensions** > **GemDB Code** in the list on the left. If you need to
-customize your setup, update the settings in your **User** settings rather than a workspace's so
-they apply to the GemDB database on your machine, not to a project. The following table lists all of
-the settings and the defaults.
+customize your setup, change them in your **User** settings rather than a workspace's so they apply
+to the GemDB database on your machine, not to a project. The following table lists all of the
+settings and the defaults.
 
 | Setting                         | Default   | What it does                                                                       |
 | ------------------------------- | --------- | ---------------------------------------------------------------------------------- |
@@ -536,10 +535,10 @@ the database keeps running after VS Code closes. Uninstall in this order:
 If you connected an AI agent outside VS Code, remove GemDB Code's entry from that client's
 configuration too. For Claude Code, run `claude mcp remove gemdb`.
 
-GemDB Code leaves the operating-system changes it asked you for in place, because other software may
-rely on them. To reverse them on Linux, delete `/etc/sysctl.d/60-gemdb.conf` (shared memory) and
-`/etc/systemd/logind.conf.d/gemdb.conf` (`RemoveIPC`) with `sudo`. The shared-memory limit returns
-to the system default at the next restart.
+GemDB Code leaves the operating-system changes you approved during setup in place, because other
+software may rely on them. To reverse them on Linux, delete `/etc/sysctl.d/60-gemdb.conf` (shared
+memory) and `/etc/systemd/logind.conf.d/gemdb.conf` (`RemoveIPC`) with `sudo`. The shared-memory
+limit returns to the system default at the next restart.
 
 ### Privacy
 
