@@ -18,9 +18,12 @@ CONTRIBUTING.md
 # is written for someone who installed the extension.
 docs/**
 # The full lockup is source art and a README banner, not something the running
-# extension ever loads — resources/icon.png is a crop of it. Shipping it would
-# put 25 KB of unreferenced image in every install.
+# extension ever loads. Shipping it would put 25 KB of unreferenced image in
+# every install. GemDB_Icon.svg is the mark's vector source: resources/icon.png
+# is rendered from it by scripts/render-icon.sh (regenerate it there, not by
+# hand), and resources/gemdb-sidebar.svg is traced from it.
 resources/GemDB.png
+resources/GemDB_Icon.svg
 **/*.map
 **/*.ts
 !out/**/*.js

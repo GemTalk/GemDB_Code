@@ -1,8 +1,8 @@
 {
   "name": "gemdb",
   "displayName": "GemDB Code",
-  "description": "Python with builtin transactional persistence (using true ACID semantics). When you have critical, complex data that must be consistent, use GemDB.",
-  "version": "1.5.0",
+  "description": "Python with built-in transactional persistence (using true ACID semantics). When you have critical, complex data that must be consistent, use GemDB.",
+  "version": "1.5.1",
   "publisher": "gemtalksystems",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -94,7 +94,7 @@
       "gemdb": [
         {
           "id": "gemdbStatus",
-          "icon": "resources/icon.png",
+          "icon": "resources/gemdb-sidebar.svg",
           "name": "GemDB",
           "type": "tree"
         }
@@ -366,6 +366,7 @@
     "koffi": "^2.15.1"
   },
   "devDependencies": {
+    "@eslint-community/eslint-plugin-eslint-comments": "^4.8.1",
     "@eslint/js": "^9.19.0",
     "@types/node": "^22.15",
     "@types/vscode": "^1.101.0",

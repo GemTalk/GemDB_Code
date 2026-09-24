@@ -57,7 +57,7 @@ function fakeContext(): Parameters<typeof activate>[0] {
       clear: () => {},
       prepend: () => {},
     },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- fake vscode.ExtensionContext, only a handful of its many fields are stubbed
   } as any;
 }
 
