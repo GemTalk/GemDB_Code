@@ -41,9 +41,9 @@ GemDB Code comes with a ready-made GemDB Notebook, with an example that shows Ge
 Python kernel is built into the extension, so you do not need the Jupyter extension or a local
 Python install.
 
-Click **New GemDB Notebook** at the top of the GemDB Code sidebar to open a notebook with a starter
-cell, ready to run. If VS Code prompts you to pick a kernel, choose **GemDB (Python in the
-database)**.
+Click **New GemDB Notebook** (the notebook icon) at the top of the GemDB Code sidebar to open a
+notebook with a starter cell, ready to run. If VS Code prompts you to pick a kernel, choose **GemDB
+(Python in the database)**.
 
 ```python
 # Python here runs inside your GemDB database.
@@ -164,7 +164,7 @@ a cell, a **Sessions** row also appears; if you do not see it, click **Refresh**
 The buttons along the top of the sidebar are:
 
 - **Start GemDB** (▷) or **Stop GemDB** (■), depending on whether the database is running
-- **Open GemDB Shell** and **New GemDB Notebook**
+- **Open GemDB Shell** (`>_`) and **New GemDB Notebook** (the notebook icon)
 - **Refresh**
 - **⋯**, a menu with everything else, including **Connect an AI Agent to GemDB** and **Uninstall
   GemDB**
@@ -482,8 +482,8 @@ as commands or in the sidebar.
 | ------------------------------------------------ | --------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | **GemDB: Start GemDB**                           | ▷ button, or click the **Stopped** row                                | Starts the database                                                               |
 | **GemDB: Stop GemDB**                            | ■ button                                                              | Stops the database (clicking **GemDB** in the status bar does the same)           |
-| **GemDB: Open GemDB Shell**                      | Terminal button, or click the **Running** row                         | Opens a Python shell inside the database                                          |
-| **GemDB: New GemDB Notebook**                    | Notebook button                                                       | Opens a notebook with a starter cell                                              |
+| **GemDB: Open GemDB Shell**                      | `>_` button, or click the **Running** row                             | Opens a Python shell inside the database                                          |
+| **GemDB: New GemDB Notebook**                    | Notebook icon button                                                  | Opens a notebook with a starter cell                                              |
 | **GemDB: Refresh**                               | ↻ button                                                              | Re-reads the state shown in the sidebar                                           |
 | **GemDB: Connect an AI Agent to GemDB**          | **⋯** menu, or click the **AI agent access** row                      | Turns on the MCP server and gives you a client's configuration                    |
 | **GemDB: Show Log**                              | **⋯** menu                                                            | Opens GemDB Code's log                                                            |
