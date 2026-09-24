@@ -321,16 +321,16 @@ export function reportUnattendedSetupSkipped(skipReason: SkipReason): void {
 }
 
 /**
- * Mirrors `lifecycle.ts`'s own `SetupOutcome`, kept as a separate type rather
- * than imported so this module stays a leaf: nothing it imports can create a
- * cycle back through a caller.
+ * How a `runSetup` attempt ended — its return value and `setupFinished{outcome}`.
+ * Defined here, not in `lifecycle.ts`, so the one definition sits on the leaf
+ * side of the lifecycle → telemetry import.
  */
 export const SETUP_OUTCOME = {
   completed: 'completed',
   cancelled: 'cancelled',
   failed: 'failed',
 } as const;
-type SetupOutcome = (typeof SETUP_OUTCOME)[keyof typeof SETUP_OUTCOME];
+export type SetupOutcome = (typeof SETUP_OUTCOME)[keyof typeof SETUP_OUTCOME];
 
 /**
  * `runSetup` started — a user choosing to download, every time. Repeats

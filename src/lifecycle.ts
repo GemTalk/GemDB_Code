@@ -58,6 +58,8 @@ import {
   DatabaseOutcome,
   FILED_GRAIL,
   FiledGrail,
+  SETUP_OUTCOME,
+  SetupOutcome,
   TRIGGER,
   Trigger,
   reportDatabaseStarted,
@@ -129,8 +131,6 @@ function requireGrailPayload(extensionPath: string): boolean {
   return false;
 }
 
-export type SetupOutcome = 'completed' | 'cancelled' | 'failed';
-
 /**
  * Cancelling reaches here two ways: the download throws, or a step between
  * downloads notices the token and returns. Both are the same decision and get
@@ -176,19 +176,19 @@ export async function runSetup(extensionPath: string, trigger: Trigger): Promise
         await prepareFiles(extensionPath, progress, token);
         if (token.isCancellationRequested) {
           paused();
-          return 'cancelled';
+          return SETUP_OUTCOME.cancelled;
         }
-        return 'completed';
+        return SETUP_OUTCOME.completed;
       } catch (e) {
         if (errorMessage(e) === 'Download cancelled') {
           paused();
-          return 'cancelled';
+          return SETUP_OUTCOME.cancelled;
         }
         reportFailure(
           trigger === TRIGGER.installCommand ? 'Installing GemDB' : 'Setting up GemDB',
           e,
         );
-        return 'failed';
+        return SETUP_OUTCOME.failed;
       }
     },
   );
@@ -220,7 +220,7 @@ export async function install(extensionPath: string): Promise<void> {
   }
 
   const outcome = await runSetup(extensionPath, TRIGGER.installCommand);
-  if (outcome !== 'completed') return;
+  if (outcome !== SETUP_OUTCOME.completed) return;
 
   // Starting is a separate act, and it is where consent is asked for: raising
   // shared memory needs sudo, and the processes it starts outlive the editor.
@@ -247,10 +247,10 @@ export async function install(extensionPath: string): Promise<void> {
  * continue later costs only the remaining bytes.
  */
 export async function prepare(extensionPath: string): Promise<SetupOutcome> {
-  if (!isSupportedPlatform() || !bundledGrailStamp(extensionPath)) return 'failed';
+  if (!isSupportedPlatform() || !bundledGrailStamp(extensionPath)) return SETUP_OUTCOME.failed;
 
   const outcome = await runSetup(extensionPath, TRIGGER.firstRun);
-  if (outcome === 'completed') log('GemDB is ready to start.');
+  if (outcome === SETUP_OUTCOME.completed) log('GemDB is ready to start.');
   return outcome;
 }
 
@@ -318,9 +318,11 @@ export async function ensureRunning(extensionPath: string, trigger: Trigger): Pr
   // picks up from the bytes already on disk.
   if (!isInstalled()) {
     const outcome = await runSetup(extensionPath, trigger);
-    if (outcome !== 'completed') {
+    if (outcome !== SETUP_OUTCOME.completed) {
       return failed(
-        outcome === 'cancelled' ? DATABASE_OUTCOME.setupCancelled : DATABASE_OUTCOME.setupFailed,
+        outcome === SETUP_OUTCOME.cancelled
+          ? DATABASE_OUTCOME.setupCancelled
+          : DATABASE_OUTCOME.setupFailed,
       );
     }
     if (!isInstalled()) return failed(DATABASE_OUTCOME.setupFailed);

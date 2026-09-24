@@ -11,7 +11,6 @@ import {
   start,
   stop,
   uninstall,
-  type SetupOutcome,
 } from './lifecycle';
 import { autoStartSuppressed, initAutoStart, suppressAutoStart } from './autoStart';
 import { mcpEnabled, mcpReadOnly } from './config';
@@ -42,7 +41,9 @@ import { closeSessionFor, logoutAll, setInputHandler } from './session';
 import { GemDbStatusBar } from './statusBar';
 import { StatusViewProvider } from './statusView';
 import {
+  SETUP_OUTCOME,
   SKIP_REASON,
+  type SetupOutcome,
   type SkipReason,
   Stopwatch,
   TRIGGER,
@@ -432,7 +433,7 @@ async function prepareOnFirstRun(
     // thing while this one was waiting to acquire it.
     if (isInstalled()) {
       return {
-        files: 'completed' as const,
+        files: SETUP_OUTCOME.completed,
         configured: await isSharedMemoryConfigured(),
         ranSetup: false,
       };
@@ -475,7 +476,7 @@ async function prepareOnFirstRun(
   writeSetupMarker(context, outcome.files);
 
   refresh();
-  if (outcome.files !== 'completed') return;
+  if (outcome.files !== SETUP_OUTCOME.completed) return;
 
   // Declining the permission is not a failure. The setting persists once made,
   // so it is normally asked once per machine and never again; if it is declined
