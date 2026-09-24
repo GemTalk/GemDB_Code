@@ -111,7 +111,8 @@ still going. Sent only when the dialog actually appeared, or when the user ran
 
 The database was brought up, or failed to come up. Sent only when something
 actually happened. Running a cell when the database is already up sends
-nothing, and the same failure is not sent twice in a row.
+nothing, and a failure is sent once for each trigger until the database next
+starts.
 
 | Property / measure | Values                                                                                                                              |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |

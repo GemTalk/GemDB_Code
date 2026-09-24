@@ -422,8 +422,13 @@ export const FILED_GRAIL = {
 } as const;
 export type FiledGrail = (typeof FILED_GRAIL)[keyof typeof FILED_GRAIL];
 
-/** The last failure `reportDatabaseStarted` sent, so a repeat is silent. */
-let lastReportedFailure: DatabaseOutcome | undefined;
+/**
+ * Every `trigger:outcome` failure `reportDatabaseStarted` has sent since the
+ * database last started, so a repeat is silent. A set rather than the last
+ * one: with only the last, two surfaces failing in turn (a notebook and a
+ * shell, both stuck at a declined sudo) would alternate keys and send every time.
+ */
+const reportedFailures = new Set<string>();
 
 /**
  * The database came up, or didn't, on `ensureRunning` — the one path
@@ -434,10 +439,12 @@ let lastReportedFailure: DatabaseOutcome | undefined;
  * - Sent only when `didWork` is true or the outcome is a failure. Most
  *   `ensureRunning` calls are no-ops — every notebook cell after the first
  *   goes through it again, with nothing left to do — and those send nothing.
- * - A failure is sent only when it differs from the last one reported,
- *   cleared on a successful start. Without this, a user stuck at the sudo
- *   prompt would emit one event per cell batch — the same unbounded volume
- *   `didWork` guards against, from the other direction.
+ * - A failure is sent once per `trigger` and `outcome` pair until the
+ *   database next starts — at most triggers × outcomes per failure streak.
+ *   Keyed on the pair, not the outcome, because `trigger` is what tells a
+ *   notebook batch from an explicit Start failing the same way. Without this,
+ *   a user stuck at the sudo prompt would emit one event per cell batch — the
+ *   same unbounded volume `didWork` guards against, from the other direction.
  */
 export function reportDatabaseStarted(
   trigger: Trigger,
@@ -447,11 +454,12 @@ export function reportDatabaseStarted(
   didWork: boolean,
 ): void {
   if (outcome === DATABASE_OUTCOME.started) {
-    lastReportedFailure = undefined;
+    reportedFailures.clear();
     if (!didWork) return;
   } else {
-    if (outcome === lastReportedFailure) return;
-    lastReportedFailure = outcome;
+    const key = `${trigger}:${outcome}`;
+    if (reportedFailures.has(key)) return;
+    reportedFailures.add(key);
   }
   send(EVENT.databaseStarted, { trigger, outcome, filedGrail }, { durationMs });
 }

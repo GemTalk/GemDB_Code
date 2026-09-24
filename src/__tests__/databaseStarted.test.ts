@@ -134,8 +134,8 @@ describe('databaseStarted', () => {
     expect(events[0].properties).toMatchObject({ outcome: 'osConfigFailed' });
   });
 
-  it('dedupes a repeated failure, reports again on a new one, and again on recovery', async () => {
-    // These three phases share one `lastReportedFailure` (module state in
+  it('dedupes a repeated failure per trigger, reports again on a new one, and again on recovery', async () => {
+    // These phases share one `reportedFailures` set (module state in
     // telemetry.ts, exactly as it is in a real window), so they run as one
     // sequence rather than as separate tests that would each need it reset.
     ensureOsConfigured.mockResolvedValue('declined');
@@ -145,18 +145,34 @@ describe('databaseStarted', () => {
     expect([first, second, third]).toEqual([false, false, false]);
     expect(eventsNamed('databaseStarted')).toHaveLength(1);
     expect(eventsNamed('databaseStarted')[0].properties).toMatchObject({
+      trigger: 'notebook',
       outcome: 'osConfigDeclined',
     });
 
+    // The same failure from another trigger is its own report — `trigger` is
+    // what tells a notebook batch from an explicit Start.
+    await ensureRunning('/ext', TRIGGER.startCommand);
+    expect(eventsNamed('databaseStarted')).toHaveLength(2);
+    expect(eventsNamed('databaseStarted')[1].properties).toMatchObject({
+      trigger: 'startCommand',
+      outcome: 'osConfigDeclined',
+    });
+
+    // Alternating between them sends nothing more: the dedup remembers every
+    // pair, not just the last, or two surfaces failing in turn would be unbounded.
+    await ensureRunning('/ext', TRIGGER.notebook);
+    await ensureRunning('/ext', TRIGGER.startCommand);
+    expect(eventsNamed('databaseStarted')).toHaveLength(2);
+
     isInstalled.mockReturnValue(false);
     await ensureRunning('/ext', TRIGGER.notebook);
-    expect(eventsNamed('databaseStarted')).toHaveLength(2);
-    expect(eventsNamed('databaseStarted')[1].properties).toMatchObject({ outcome: 'setupFailed' });
+    expect(eventsNamed('databaseStarted')).toHaveLength(3);
+    expect(eventsNamed('databaseStarted')[2].properties).toMatchObject({ outcome: 'setupFailed' });
 
     isInstalled.mockReturnValue(true);
     ensureOsConfigured.mockResolvedValue('configured');
     await ensureRunning('/ext', TRIGGER.notebook);
-    expect(eventsNamed('databaseStarted')).toHaveLength(3);
-    expect(eventsNamed('databaseStarted')[2].properties).toMatchObject({ outcome: 'started' });
+    expect(eventsNamed('databaseStarted')).toHaveLength(4);
+    expect(eventsNamed('databaseStarted')[3].properties).toMatchObject({ outcome: 'started' });
   });
 });
