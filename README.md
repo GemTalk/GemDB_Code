@@ -1,38 +1,31 @@
 # GemDB Code
 
-Write Python. Run it inside a GemDB database.
+GemDB Code installs GemDB, an object database, and lets you work with it using Python in VS Code.
+Unlike a SQL database, there are no tables to design and no SQL to write: your Python objects are
+stored as they are, and every commit is an ACID (atomic, consistent, isolated, durable) transaction.
+Create objects, commit transactions, and explore your data without leaving your editor. The guided
+walkthrough takes you from install to your first commit.
 
-GemDB Code installs GemDB, an object database, on your machine and lets you work with it from VS
-Code. Unlike a SQL database, there are no tables to design and no SQL to write: your Python objects
-are stored as they are, and every commit is an ACID (atomic, consistent, isolated, durable)
-transaction. Create objects, commit transactions, and explore your data without leaving your editor.
-The guided walkthrough takes you from install to your first commit.
+After you install the extension and it completes its initial installation of a database that is
+ready to go, you can either start testing out the GemDB Shell or default Jupyter notebook, or move
+on and explore the Brain Freeze demo. GemDB Code installs and runs one GemDB database under
+`~/GemDB`, with no server to install and no credentials to manage.
 
 GemDB Code runs on macOS with Apple Silicon and on Linux (x86-64 or ARM64) and needs VS Code 1.101
 or later. For a complete list, see [Requirements](#requirements).
 
 ## Start here
 
-1. **Open the GemDB Code sidebar.** Click the **GemDB Code** icon in the activity bar, the column of
-   icons on the far left of VS Code. The sidebar shows whether setup has finished and whether the
-   database is running, and its buttons open everything described below. See
+1. **Open the GemDB Code sidebar.** For more information, see
    [The GemDB Code sidebar](#the-gemdb-code-sidebar).
-2. **Let setup finish.** The first time GemDB Code runs, it downloads the database engine, creates
-   your database under `~/GemDB` and starts it. Progress appears in notifications at the bottom
-   right of VS Code. If the operating system needs a setting changed, a dialog prompts you for
-   permission to make the change. On most macOS systems, the prompt is to raise shared memory. On
-   Linux, while shared memory is usually already large enough, the dialog usually prompts you to set
-   `RemoveIPC=no`, which keeps the database running after you log out. Choose **Configure**, then
-   enter your password in the terminal that opens. Until you do, the database will not start. When
-   setup finishes, a notification offers **Open GemDB Shell** and **New Notebook**. See
-   [Setup and permissions](#setup-and-permissions).
+
+2. **Let initial setup finish.** If the operating system needs a setting changed, follow the
+   prompts. For more information, see [Setup and permissions](#setup-and-permissions).
+
 3. **Follow the walkthrough.** VS Code opens **Get Started with GemDB Code** the first time you
    install GemDB Code. It takes you through setup, the GemDB Shell, a notebook, and stopping the
-   database. To open it again:
-   1. Open the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), type `Open Walkthrough`, and
-      choose **Welcome: Open Walkthrough...**.
-   2. From the list, choose **Get Started with GemDB Code**. It is labeled **GemDB Code** and you
-      can type `GemDB` to narrow the list.
+   database. To open it again, see [The guided walkthrough](#the-guided-walkthrough).
+
 4. **Make your first commit.** Click **New GemDB Notebook** at the top of the sidebar and run the
    starter cell. If VS Code prompts you to pick a kernel, choose **GemDB (Python in the database)**.
 
@@ -47,39 +40,28 @@ or later. For a complete list, see [Requirements](#requirements).
    gemdb.root["greeting"]
    ```
 
-   The cell shows `'Hello from GemDB!'`. Now try it yourself: close the notebook, open a new one,
-   and run `import gemdb` and `gemdb.root["greeting"]` to read the value back. Then store something
-   of your own the same way, such as a dict or a list, and commit it.
+   Running the cell shows `'Hello from GemDB!'`.
 
-## What GemDB Code includes
+5. You are ready to try the [Brain Freeze demo](#the-brain-freeze-demo).
 
-### Built-in GemDB
-
-GemDB Code installs and runs one GemDB database for you, under `~/GemDB`. There is no database
-server to install, no connection string to configure, and no credentials to manage. The database
-keeps running after you close VS Code, so it is available whenever you need it. See
-[Starting and stopping the database](#starting-and-stopping-the-database).
+## Features to check out
 
 ### Python REPL: the GemDB Shell
 
 The GemDB Shell is a Python shell (a REPL, or read-eval-print loop) that runs inside the database.
-To open one, click **Open GemDB Shell** at the top of the GemDB Code sidebar. It has history, line
-editing, a Ctrl+C that interrupts running code, and `input()` and `print()` that behave the way you
-expect. For an example session and the Python API, see
-[Python in the database](#python-in-the-database).
+For more information, see [Python in the database](#python-in-the-database).
 
 ### Jupyter notebooks
 
 Click **New GemDB Notebook** at the top of the GemDB Code sidebar to open a notebook with a starter
 cell, ready to run. The kernel is built into the extension, so you do not need the Jupyter extension
-or a local Python install. See [Notebooks](#notebooks).
+or a local Python install. For more information, see [Notebooks](#notebooks).
 
 ### MCP server for AI agents
 
 GemDB Code includes an MCP (Model Context Protocol) server, so AI agents such as Claude Code or
-Cursor can explore your data, run Python in your database, and commit changes. It is off by default.
-To turn it on, choose **Connect an AI Agent to GemDB** from the sidebar's **⋯** menu, but read
-[Connecting an AI agent](#connecting-an-ai-agent) first.
+Cursor can explore your data, run Python in your database, and commit changes. For more information,
+see [Connecting an AI agent](#connecting-an-ai-agent).
 
 ---
 
@@ -89,6 +71,7 @@ The rest of this page covers the details behind each feature.
 
 - [Requirements](#requirements)
 - [Platform support](#platform-support)
+- [The guided walkthrough](#the-guided-walkthrough)
 - [The GemDB Code sidebar](#the-gemdb-code-sidebar)
 - [Setup and permissions](#setup-and-permissions)
 - [Starting and stopping the database](#starting-and-stopping-the-database)
@@ -157,6 +140,17 @@ GemDB Code ships its Python runtime with a native library built for each platfor
 so the extension is published per platform, and every supported platform is built and tested on its
 own architecture. On an unsupported platform, the Marketplace still lists GemDB Code but marks it as
 not available for that platform, and you cannot install it.
+
+### The guided walkthrough
+
+The walkthrough, **Get Started with GemDB Code**, takes you through setup, the GemDB Shell, a
+notebook, and stopping the database. VS Code opens it automatically only the first time you install
+GemDB Code. To open it again:
+
+1. Open the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), type `Open Walkthrough`, and
+   choose **Welcome: Open Walkthrough...**.
+2. From the list, choose **Get Started with GemDB Code**. It is labeled **GemDB Code** and you can
+   type `GemDB` to narrow the list.
 
 ### The GemDB Code sidebar
 
