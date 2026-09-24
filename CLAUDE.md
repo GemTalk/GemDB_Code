@@ -35,61 +35,13 @@ Never add `eslint-disable` or change a rule's severity to silence a lint error �
 GemDB automates aggressively, along one rule: **automate what is inert and
 reversible; ask about what is persistent or global.**
 
-- Download, unpack, create the database, stage Grail — all inside the root path,
-  all undone by deleting it. Runs unasked on first activation (`prepare`).
-- Raising shared memory — needs `sudo`, changes the machine for all software,
-  survives reboots. **Always prompts.** Do not automate this, whatever else
-  changes. Asked _at the start of first-run setup, concurrently with the
-  download_ — not at first use, and not after the download finishes. Two earlier
-  placements were worse: attached to "Open GemDB Shell" it arrived with no
-  visible connection to what was clicked; at the end of the download it arrived
-  two minutes after the user last thought about GemDB, by which point they have
-  moved on and it sits unanswered. Running it alongside the download spends
-  their attention while they still have it. `ensureRunning` still checks, as the
-  backstop for a decline or a machine that changed; nothing re-prompts on every
-  activation. Verified end to end on 2026-08-14. One known cost, accepted rather
-  than overlooked: being modal, the dialog dims the download's Cancel button
-  until it is answered. Dismissing the dialog frees it, and a non-modal prompt
-  would trade a rare, recoverable friction for the very thing the early
-  placement buys — a prompt that cannot be missed.
-- Starting the stone and NetLDI — those processes detach (`ppid` 1) and outlive
-  VS Code. Started on activation, so a new developer's first notebook cell does
-  not wait for a database; the status bar always says so, and clicking it stops
-  it. This is the one automated act that is not confined to the root path, and
-  it is only defensible because of `autoStart.ts`: a user who stops the database
-  is obeyed until they ask for one again. It never prompts — if shared memory is
-  unraised it stands down and leaves that to `ensureRunning`, where a `sudo`
-  dialog has a visible cause.
-
-- Starting the MCP server, and registering it with **this editor** — inert and
-  editor-owned, so both are automated *once the user has asked for the feature
-  at all*. `gemdb.mcp.enabled` is **off by default**, because a client that
-  reconnects repeatedly leaks a worker gem each time and can exhaust the
-  session limit — measured, and it locked a real database's owner out of it
-  (`docs/mcp-server.md`, "The session leak"). The default returns once the
-  router can cap its own workers. Given consent, running it is part of
-  `ensureRunning` (see `mcp.ts`), because "the database is running" and "an
-  agent can reach it" should be one state. Registering it uses VS Code's own
-  `registerMcpServerDefinitionProvider`, which is the same call as
-  `putCliOnPath` below: the definition lives only while the extension is
-  enabled. **Registering it with any other client is the other side of the
-  line** — Claude Code, Claude Desktop and Cursor are configured by JSON files
-  the user owns, so `gemdb.registerMcpClient` hands over the command or snippet
-  and stops at the clipboard. A failure to start the MCP server never fails
-  `ensureRunning`: every other step there is something the user's own work
-  needs, and a router that cannot bind must not be why a notebook cell will not
-  run. See [`docs/mcp-server.md`](docs/mcp-server.md).
-
-- Putting `gemdb` on the PATH of terminals VS Code opens —
-  `putCliOnPath` in `cli.ts`, applied to
-  `context.environmentVariableCollection`. Automated because VS Code owns the
-  reversal: the entry applies only to terminals this editor launches and goes
-  away when the extension is disabled. **Editing the user's shell profile
-  would be the other side of the line** — persistent, global, not ours to
-  undo — so the README asks rather than does. `clear()` before every
-  `prepend` because the collection is persisted across window reloads and
-  re-applied before activation; without it a reload stacks a second entry and
-  a changed root path leaves the old one in front.
+Two placements are fixed whatever else changes: raising shared memory
+(`sudo`, machine-wide, survives reboots) **always prompts**, and a failure to
+start the MCP server **never fails `ensureRunning`**. **Adding or changing an
+automated step? Read
+[`docs/automation-boundary.md`](docs/automation-boundary.md) first** — it
+records where each shipped step sits on the line and why, including what was
+measured about when to ask for shared memory.
 
 `ensureRunning` in `lifecycle.ts` is the single path to a running database,
 whether the user pressed Start or just ran a notebook cell. It finishes any
@@ -280,61 +232,6 @@ first-install path, and `startProcesses` before the stone starts, because an
 extension update reaches that line without preparing anything — engine
 downloaded, database present, Grail staged, so `isInstalled()` is true.
 
-**The MCP router is a logged-in session, so stop it before the stone.**
-`runStop` does, right after `logout` and before the NetLDI (the router forks
-its per-client workers through the listener). Left up, `stopstone` refuses over
-it and *every* ordinary "Stop GemDB" lands on the "Stop Anyway" modal that is
-meant for a notebook someone forgot about — GemDB blocking its own shutdown,
-less visibly than the bug that comment was written for. Stopping the router is
-enough for the workers as well, and that had to be measured rather than
-reasoned about: nothing closes them, they are separate gems, and the idle
-reaper that would eventually collect them is a `GsProcess` inside the router,
-so it dies with it. Measured 2026-09-07 — each worker's
-`System descriptionOfSession:` slot 21 (the client's pid) is the router's own
-pid, so a worker is an RPC gem whose client *is* the router and the engine ends
-it when the router goes; all of them were gone within four seconds.
-`src/__integration__/mcp.test.ts` asserts the session count returns to its
-baseline after a client has connected, so if that ever stops holding a test
-goes red rather than a user's database becoming unstoppable. The baseline is
-not zero: `SymbolGem` and `GcReclaim` hold sessions of their own.
-
-**Read-only is a database user, not a server mode.** `gemdb.mcp.readOnly` once
-set `McpRouter>>readOnly:`, which upstream deleted in 0.9.0 — and was right to:
-`execute_code` evaluates arbitrary Smalltalk, a test body is arbitrary
-Smalltalk, and a tool that compiles can be followed by one that runs, so a list
-of "safe" tools was the appearance of a boundary rather than one. What replaced
-it is enforced in the stone. `workerUserId:` names the GemStone user every
-worker gem logs in as, and the payload's `setup-read-only-user.sh` provisions
-`McpReadOnly`, whose UserProfile disables commits — which covers gems it forks
-in turn. `ensureReadOnlyUser` probes for that user and runs the script only if
-it is missing, because **re-running the script drops and recreates the user**,
-which is upstream's way to change a privilege set and exactly the wrong thing
-to do to a router serving with it. That probe reads topaz's **result line**,
-not its output: topaz echoes a script before running it, so searching the whole
-answer for a marker finds the probe's own source and both spellings with it —
-which answered "present" whatever the image held, provisioned nothing, and left
-every session open failing in the router with LookupError 2015. A failure to provision refuses to start the
-server rather than forking a read-write one: a user who asked for read-only and
-silently got read-write has no way to tell. Say what it bounds and no more —
-an agent still reads everything, and still spends a session.
-
-`--no-auth` is the other install flag, and also a choice rather than a limit:
-the pinned engine could compile `McpAuthRouter`, but nothing in GemDB can start
-it, so it would be code filed into every user's database that nothing can
-reach. Unlike Grail there is no GemDB-specific installer — the payload's own
-`install.sh` is run, because what justified one for Grail was skipping a C
-compile and there is nothing compiled here.
-
-**The payload's entry points are a list; everything they source is derived.**
-`ENTRYPOINTS` in `bundle-mcp.sh` names what something *outside* the payload
-runs, and a closure copies whatever those scripts source. A script named only
-in prose is copied by neither, which is why the build also scans every staged
-script for `./*.sh` and fails on a name it cannot find — that is how
-`setup-read-only-user.sh` arriving upstream stopped a build rather than
-shipping a payload whose own error messages pointed at a file it did not
-carry. When that scan fires, the fix is to widen `ENTRYPOINTS` or fix the
-reference, never to add a name to an exclusion list.
-
 ## What the shell is called
 
 The interactive Python prompt is **GemDB Shell** everywhere a user can see it:
@@ -364,36 +261,8 @@ Exceptions worth flagging, because they aren't derivable from the file itself:
   everything else GemDB does is confined to (and undone by deleting) the root
   path.
 
-`docs/` holds design notes that are not part of the shipped extension
-(`.vscodeignore` keeps them out of the `.vsix`): decisions taken, what was
-measured, and what is still open. Start with
-[`docs/reaching-windows.md`](docs/reaching-windows.md).
-[`docs/mcp-server.md`](docs/mcp-server.md) covers the bundled MCP server —
-what was measured about its gems, and why it registers itself with VS Code and
-refuses to touch any other client's configuration.
-**`docs/demo/` is one directory per demo, and each one is self-contained** —
-its `README.md`, its scripts, and anything else it needs, so a demo can be
-read in one place and lifted out in one move. Nothing in CI runs them, which
-is worth knowing before trusting one: every script in the Brain Freeze demo
-was committed unable to import its own siblings, and neither the repo gate nor
-the integration suite could have noticed.
-[`docs/demo/rabbit-in-the-hat/`](docs/demo/rabbit-in-the-hat/) is the
-five-minute demo of persistence and sessions; every command and output in it
-was measured, which is how the `runPath` gap below was found.
-Brain Freeze Insurance was the longer one — a Flask app that lives in the
-database. Per its PRD (FR-1.1, FR-8.2) it was always going to be its own
-public repo rather than ours, and it now is:
-[GemTalk/brain-freeze](https://github.com/GemTalk/brain-freeze), which also
-covers the notebook, the MCP surface and the schema change that the version
-here never did. `gemdb.cloneBrainFreeze` (`demo.ts`) is how a user gets it:
-the folder dialog is the consent, since a clone is persistent and outside the
-root path, and it never clones over a `brain-freeze` that is already there —
-that directory may hold the user's own commits. The version that lived here is committed at
-[`c9c261a`](https://github.com/GemTalk/GemDB_Code/tree/c9c261ac017fd7831cd29aa71b79da4ee8c1ed9b/docs/demo/brain-freeze),
-and is worth keeping in mind for one reason: it measured an older Grail commit
-than what's pinned now, and its own scripts print which behaviour the Grail in
-front of you has. That it was a directory able to travel is the other reason
-each demo is one.
+`docs/` holds design notes — decisions and measurements, not shipped.
+[`docs/README.md`](docs/README.md) says which one to read before which change.
 
 **Building on Grail, or touching the Python↔GCI bridge? Read
 [`docs/grail.md`](docs/grail.md) first** — it covers install/staging

@@ -5,7 +5,8 @@ so that an AI agent can reach the database GemDB installed, and so that it can
 do so without the user configuring anything.
 
 This note is the reasoning and the measurements. The user-facing shape is in
-the README; the invariants that must not be broken are in CLAUDE.md.
+the README; the invariants that must not be broken are in CLAUDE.md, except the
+MCP-specific ones, which are here.
 
 ## What the payload is
 
@@ -28,6 +29,16 @@ because each leg packages its own `.vsix`, and there is no
 `resources/install-mcp.sh`: what justified a GemDB-specific installer for Grail
 was skipping a C compile, and there is no compile here. GemDB runs
 `install.sh --grail --no-auth`, which is what a developer would run by hand.
+
+**The payload's entry points are a list; everything they source is derived.**
+`ENTRYPOINTS` in `bundle-mcp.sh` names what something *outside* the payload
+runs, and a closure copies whatever those scripts source. A script named only
+in prose is copied by neither, which is why the build also scans every staged
+script for `./*.sh` and fails on a name it cannot find — that is how
+`setup-read-only-user.sh` arriving upstream stopped a build rather than
+shipping a payload whose own error messages pointed at a file it did not
+carry. When that scan fires, the fix is to widen `ENTRYPOINTS` or fix the
+reference, never to add a name to an exclusion list.
 
 The two flags are the only decisions:
 
@@ -221,7 +232,8 @@ terminates them; sessions 5, 6 and 7 above were all gone within four seconds.
 That is why `stopMcpServer` names one gem and no more, and
 `mcp.test.ts` asserts the session count returns to its baseline after a client
 has connected, so the day it stops being true is the day a test goes red rather
-than the day a user cannot stop their database.
+than the day a user cannot stop their database. The baseline is
+not zero: `SymbolGem` and `GcReclaim` hold sessions of their own.
 
 The stop itself is `System stopSession:` on the recorded session id from a
 *linked* topaz login — clean, needs no NetLDI (already down by then in
@@ -312,6 +324,13 @@ upstream's documented way to change its privilege set and precisely the wrong
 thing to do to a router that is serving with it. If provisioning fails, the
 server does not start. Forking a read-write router for a user who asked for
 read-only would be a promise broken in the one direction they cannot check.
+
+`ensureReadOnlyUser` probes for that user and runs the script only if
+it is missing. That probe reads topaz's **result line**,
+not its output: topaz echoes a script before running it, so searching the whole
+answer for a marker finds the probe's own source and both spellings with it —
+which answered "present" whatever the image held, provisioned nothing, and left
+every session open failing in the router with LookupError 2015.
 
 Two honest limits, both upstream's words and worth repeating wherever this is
 described to a user: it bounds what a session can **change**, not what it can
