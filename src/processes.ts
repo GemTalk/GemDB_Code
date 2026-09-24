@@ -58,18 +58,31 @@ export function shimLibraryPath(): string {
   return path.join(grailPath(), 'src', 'c', 'shim', `libcpython_ua.${sharedLibraryExtension()}`);
 }
 
+/**
+ * How to run `gslist` against the installed engine, or undefined when there is
+ * no engine to ask. Shared by both readers so they cannot disagree about
+ * whether the database is up.
+ */
+function gslistInvocation():
+  | { file: string; args: string[]; options: { encoding: 'utf-8'; env: NodeJS.ProcessEnv } }
+  | undefined {
+  const gs = enginePath();
+  if (!gs) return undefined;
+  const file = path.join(gs, 'bin', 'gslist');
+  if (!fs.existsSync(file)) return undefined;
+  return {
+    file,
+    args: ['-cvl'],
+    options: { encoding: 'utf-8', env: { ...process.env, ...engineEnvironment() } },
+  };
+}
+
 /** Run `gslist -cvl` and return what the engine reports. Never throws. */
 export function listProcesses(): EngineProcess[] {
-  const gs = enginePath();
-  if (!gs) return [];
-  const gslist = path.join(gs, 'bin', 'gslist');
-  if (!fs.existsSync(gslist)) return [];
+  const gslist = gslistInvocation();
+  if (!gslist) return [];
   try {
-    const output = execFileSync(gslist, ['-cvl'], {
-      encoding: 'utf-8',
-      env: { ...process.env, ...engineEnvironment() },
-    });
-    return parseGslist(output);
+    return parseGslist(execFileSync(gslist.file, gslist.args, gslist.options));
   } catch {
     // gslist exits non-zero when nothing is running, which is not an error.
     return [];
@@ -84,15 +97,10 @@ const runGslist = promisify(execFile);
  * such as extension activation. Never throws, for the same reason.
  */
 export async function listProcessesAsync(): Promise<EngineProcess[]> {
-  const gs = enginePath();
-  if (!gs) return [];
-  const gslist = path.join(gs, 'bin', 'gslist');
-  if (!fs.existsSync(gslist)) return [];
+  const gslist = gslistInvocation();
+  if (!gslist) return [];
   try {
-    const { stdout } = await runGslist(gslist, ['-cvl'], {
-      encoding: 'utf-8',
-      env: { ...process.env, ...engineEnvironment() },
-    });
+    const { stdout } = await runGslist(gslist.file, gslist.args, gslist.options);
     return parseGslist(stdout);
   } catch {
     // gslist exits non-zero when nothing is running, which is not an error.
