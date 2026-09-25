@@ -8,6 +8,23 @@
       "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
       "outFiles": ["${workspaceFolder}/out/**/*.js"],
       "preLaunchTask": "npm: watch"
+    },
+    {
+      // What a new user sees: no settings, no trusted folders, no GemDB state in
+      // global storage, and none of your installed extensions (VS Code's
+      // built-ins still load, and so does this one). It still shares the real
+      // ~/GemDB. The profile persists between runs, trust you grant included;
+      // delete .vscode-test/ to start over.
+      "name": "Run GemDB (clean profile)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "--user-data-dir=${workspaceFolder}/.vscode-test/user-data",
+        "--disable-extensions"
+      ],
+      "outFiles": ["${workspaceFolder}/out/**/*.js"],
+      "preLaunchTask": "npm: watch"
     }
   ]
 }

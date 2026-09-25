@@ -84,6 +84,15 @@ export function isEngineVersionOverridden(): boolean {
  * The default is `~/GemDB`, not `~/Documents/GemDB`: on macOS `~/Documents` is
  * commonly synced to iCloud Drive, and letting a sync daemon copy a live
  * database extent out from under the engine corrupts it.
+ *
+ * Every `gemdb.*` setting is `"scope": "machine"` in package.json, because each
+ * one configures the machine's one database or its one MCP router, not a
+ * folder. Three things follow. A repository's `.vscode/settings.json` cannot
+ * set them — which matters most here, since uninstall deletes under this path
+ * and a cloned repository must not get to choose where that is. Settings Sync
+ * does not carry them to another machine, whose database is another database.
+ * And in a remote window they are read from the remote's settings, where the
+ * database is, rather than from the laptop's.
  */
 export function rootPath(): string {
   const raw = vscode.workspace.getConfiguration('gemdb').get<string>('rootPath', '~/GemDB');

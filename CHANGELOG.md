@@ -16,6 +16,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   database can be recreated. **Anything stored in it is lost, so copy out
   whatever you still need before updating.**
 
+- **Installing the Brain Freeze demo is one click, and it shows you where to
+  start.** The command is now **GemDB: Install Brain Freeze Demo**, and it is
+  a step in the Get Started walkthrough. It no longer asks where to put the
+  demo: it clones into `~/GemDB/brain-freeze`, beside your database, then
+  opens that folder and shows the demo's readme. An empty window is reused;
+  a window that already has a folder open is left alone, and the demo opens in
+  a new one. Running it again opens the copy you have rather than replacing
+  it. A copy cloned elsewhere by an earlier version is left where it is.
+
+- **GemDB keeps working in a folder you haven't trusted yet.** VS Code opens a
+  new folder in Restricted Mode, and GemDB used to switch off entirely there:
+  no status bar, no commands. It now stays on. Running Python from that folder
+  still waits for trust, and VS Code asks the first time you run a cell or
+  open a GemDB Shell. To stop being asked about folders GemDB installs, trust
+  `~/GemDB` once in **Workspaces: Manage Workspace Trust**.
+
+- **GemDB's settings are per-machine, and a folder's settings can no longer
+  change them.** Every `gemdb.*` setting configures this machine's database
+  or MCP server, so each now lives in your user settings only. A value in a
+  folder's `.vscode/settings.json` is ignored (VS Code marks it in the file),
+  which keeps a cloned repository from choosing where GemDB keeps — and on
+  uninstall deletes — its files. Settings Sync no longer copies them between
+  machines. If you had set one per folder, move it to your user settings.
+
 ## [1.5.1] - 2026-09-23
 
 The bundled Python runtime and MCP server move forward. The engine is

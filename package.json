@@ -37,31 +37,42 @@
   "activationEvents": [
     "onStartupFinished"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "GemDB's status, setup and database controls work in Restricted Mode. Running Python from this folder (notebook cells, Run File, the GemDB Shell) waits until you trust it, and VS Code asks you when you first try."
+    }
+  },
   "contributes": {
     "configuration": {
       "title": "GemDB Code",
       "properties": {
         "gemdb.rootPath": {
+          "scope": "machine",
           "type": "string",
           "default": "~/GemDB",
           "markdownDescription": "Directory that holds the GemDB database engine and your database. Deliberately **not** under `~/Documents`, which is often synced to iCloud — syncing a live database extent will corrupt it."
         },
         "gemdb.engineVersion": {
+          "scope": "machine",
           "type": "string",
           "default": "",
           "markdownDescription": "Advanced: override the pinned database engine version (e.g. `4.0.0.a3`). Leave empty to use the version this release of GemDB Code was built and tested against. A version that is not published at dl.gemdb.com cannot be downloaded — it must already be present under the root path."
         },
         "gemdb.reinstallPythonOnUpdate": {
+          "scope": "machine",
           "type": "boolean",
           "default": true,
           "description": "When a GemDB Code update ships a newer Python execution engine, reinstall it into your database automatically the next time GemDB Code starts."
         },
         "gemdb.mcp.enabled": {
+          "scope": "machine",
           "type": "boolean",
           "default": false,
           "markdownDescription": "Run GemDB's **MCP server**, so AI agents can query and change your database. It starts and stops with the database, listens on `127.0.0.1` only, and is registered with this editor automatically. Run **GemDB: Connect an AI Agent to GemDB** for the configuration other clients need.\n\n**Off by default while a session-accounting limitation is fixed upstream.** Each connected client is given its own database session, and one is not released until the client disconnects cleanly or 30 minutes pass — so a client that repeatedly reconnects or crashes can use up the limited number of sessions the database allows, and lock you out of it until they are reaped. Turn this on if you want agent access now; the GemDB panel shows what is connected."
         },
         "gemdb.mcp.port": {
+          "scope": "machine",
           "type": "number",
           "default": 50390,
           "minimum": 1,
@@ -69,6 +80,7 @@
           "markdownDescription": "Port the MCP server listens on, always bound to `127.0.0.1`. Deliberately not `8000` — that is what most development servers take, and the MCP server refuses a port already in use. Changing this needs **GemDB: Restart the MCP Server**, and every client configured with the old URL has to be updated."
         },
         "gemdb.mcp.readOnly": {
+          "scope": "machine",
           "type": "boolean",
           "default": false,
           "markdownDescription": "Run AI agents as a database user that cannot commit, so an agent can read and run code but nothing it does can be made permanent. Off by default: running Python in your database is most of why you would connect an agent to it. Enforced by GemStone rather than by hiding tools — the first time you turn this on, GemDB creates an `McpReadOnly` user in your database whose profile disables commits. It bounds what an agent can CHANGE, not what it can read or how much of the machine it can use. Changing this restarts the MCP server, which disconnects any connected agent."
@@ -163,7 +175,7 @@
       },
       {
         "command": "gemdb.cloneBrainFreeze",
-        "title": "Clone the Brain Freeze Demo",
+        "title": "Install Brain Freeze Demo",
         "category": "GemDB",
         "icon": "$(repo-clone)"
       },
@@ -325,6 +337,17 @@
             },
             "completionEvents": [
               "onCommand:gemdb.newNotebook"
+            ]
+          },
+          {
+            "id": "demo",
+            "title": "Explore a real application",
+            "description": "Brain Freeze is a small Flask app whose data, classes and views all live in the database. Installing it puts a copy beside your database, opens it, and shows its readme.\n[Install Brain Freeze Demo](command:gemdb.cloneBrainFreeze)",
+            "media": {
+              "markdown": "resources/walkthrough/demo.md"
+            },
+            "completionEvents": [
+              "onCommand:gemdb.cloneBrainFreeze"
             ]
           },
           {
