@@ -25,7 +25,7 @@ import {
   resetActiveNotebook,
 } from './notebook';
 import { isMcpRunning, startMcpServer, stopMcpServer } from './mcp';
-import { cloneBrainFreeze } from './demo';
+import { cloneBrainFreeze, initPendingReadme, showPromisedReadme } from './demo';
 import { confirmMcpEnabled, registerMcpProvider, registerWithClient } from './mcpRegistration';
 import {
   configureRemoveIpc,
@@ -61,6 +61,13 @@ export function activate(context: vscode.ExtensionContext): void {
   log(`GemDB ${context.extension.packageJSON.version as string} activated`);
 
   initAutoStart(context.globalStorageUri.fsPath);
+
+  // Installing the demo opens its folder, which is a restarted extension host
+  // or a new window — either way this activation, not the one that ran the
+  // command, is the one that can show its README. Before the platform gate:
+  // the demo is worth reading on a machine that cannot run it.
+  initPendingReadme(context.globalStorageUri.fsPath);
+  void showPromisedReadme();
 
   const statusBar = new GemDbStatusBar();
   const status = new StatusViewProvider(extensionPath, () => statusBar.refresh());
@@ -238,8 +245,8 @@ export function activate(context: vscode.ExtensionContext): void {
           .update('mcp.readOnly', next, vscode.ConfigurationTarget.Global);
       },
     ),
-    // Not wrapped in `refreshing`: a clone changes nothing the status view
-    // shows, and does not need a database at all.
+    // Not wrapped in `refreshing`: installing the demo changes nothing the
+    // status view shows, and does not need a database at all.
     vscode.commands.registerCommand('gemdb.cloneBrainFreeze', () => cloneBrainFreeze()),
     vscode.commands.registerCommand('gemdb.showLog', () => showLog()),
     vscode.commands.registerCommand(

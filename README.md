@@ -41,11 +41,12 @@ Then open the **GemDB Shell**, or a notebook with **GemDB** as the kernel. The
 database is already running — GemDB starts it for you.
 
 If you would rather read a working application than a blank prompt,
-**GemDB: Clone the Brain Freeze Demo** clones
+**GemDB: Install Brain Freeze Demo** clones
 [brain-freeze](https://github.com/GemTalk/brain-freeze) — a Flask app whose
-data, classes and views all live in the database — and asks where to put it.
-It needs `git`, touches nothing but the folder you choose, and its own readme
-takes it from there.
+data, classes and views all live in the database — into `~/GemDB/brain-freeze`,
+opens it (in this window if it is empty, a new one otherwise), and shows its
+readme, which takes it from there. It needs `git`, and running it again opens
+the copy you have rather than replacing it.
 
 ### What GemDB asks for, and what it doesn't
 

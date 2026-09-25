@@ -12,6 +12,7 @@ import { platformKey } from './platform';
  *   grail/                               Grail, staged out of the extension
  *   mcp/                                 the MCP server, staged out of the extension
  *   bin/                                 the generated `gemdb` command
+ *   brain-freeze/                        the demo, once installed (the user's own clone)
  *   locks/                               engine lock/monitor files
  *   log/                                 engine-global logs
  *   mcp-router.json                      the MCP router GemDB forked, if any

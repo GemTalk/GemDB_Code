@@ -163,7 +163,7 @@
       },
       {
         "command": "gemdb.cloneBrainFreeze",
-        "title": "Clone the Brain Freeze Demo",
+        "title": "Install Brain Freeze Demo",
         "category": "GemDB",
         "icon": "$(repo-clone)"
       },
@@ -325,6 +325,17 @@
             },
             "completionEvents": [
               "onCommand:gemdb.newNotebook"
+            ]
+          },
+          {
+            "id": "demo",
+            "title": "Explore a real application",
+            "description": "Brain Freeze is a small Flask app whose data, classes and views all live in the database. Installing it puts a copy beside your database, opens it, and shows its readme.\n[Install Brain Freeze Demo](command:gemdb.cloneBrainFreeze)",
+            "media": {
+              "markdown": "resources/walkthrough/demo.md"
+            },
+            "completionEvents": [
+              "onCommand:gemdb.cloneBrainFreeze"
             ]
           },
           {

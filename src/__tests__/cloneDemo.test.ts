@@ -1,50 +1,60 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
-import { BRAIN_FREEZE_DIR, BRAIN_FREEZE_URL, CloneWorld, runCloneDemo } from '../demo';
+import {
+  BRAIN_FREEZE_DIR,
+  BRAIN_FREEZE_URL,
+  CloneWorld,
+  README_PROMISE_MS,
+  brainFreezePath,
+  initPendingReadme,
+  runCloneDemo,
+  takePromisedReadme,
+} from '../demo';
 
 /**
  * A stand-in editor and git that record what was asked of them.
  *
  * What is under test is the order and the refusals — that nothing is cloned
  * over a directory that already exists, that a cancelled clone is not reported
- * as a failure, and that a partial clone is always removed — so the fake keeps
- * a transcript rather than a set of spies.
+ * as a failure, that a partial clone is always removed, and that the window
+ * the demo opens in is chosen rather than asked about — so the fake keeps a
+ * transcript rather than a set of spies.
  */
 function makeWorld(options: {
-  parent?: string;
   /** Paths that already exist before the command runs. */
   existing?: string[];
   clone?: 'cloned' | 'cancelled' | Error;
-  /** What the user presses on the notification, if anything. */
-  answer?: string;
+  /** The folders open in the window the command runs in. */
+  folders?: string[];
 }): { calls: string[]; world: CloneWorld; errors: string[] } {
   const calls: string[] = [];
   const errors: string[] = [];
   const existing = new Set(options.existing ?? []);
 
   const world: CloneWorld = {
-    pickParent: () => {
-      calls.push('pickParent');
-      return Promise.resolve(options.parent);
-    },
-    exists: (target) => existing.has(target),
-    clone: (url, target) => {
-      calls.push(`clone(${url} -> ${target})`);
+    target,
+    exists: (t) => existing.has(t),
+    clone: (url, t) => {
+      calls.push(`clone(${url} -> ${t})`);
       const outcome = options.clone ?? 'cloned';
       if (outcome instanceof Error) return Promise.reject(outcome);
       return Promise.resolve(outcome);
     },
-    discard: (target) => calls.push(`discard(${target})`),
-    ask: (message, ...choices) => {
-      calls.push(`ask(${message} [${choices.join('|')}])`);
-      return Promise.resolve(options.answer);
-    },
+    discard: (t) => calls.push(`discard(${t})`),
     reportError: (message) => {
       calls.push('reportError');
       errors.push(message);
     },
-    openFolder: (target, newWindow) => {
-      calls.push(`openFolder(${target}, newWindow=${String(newWindow)})`);
+    openFolders: () => options.folders ?? [],
+    showReadme: (t) => {
+      calls.push(`showReadme(${t})`);
+      return Promise.resolve();
+    },
+    promiseReadme: (t) => calls.push(`promiseReadme(${t})`),
+    openFolder: (t, newWindow) => {
+      calls.push(`openFolder(${t}, newWindow=${String(newWindow)})`);
       return Promise.resolve();
     },
     log: () => {},
@@ -52,65 +62,115 @@ function makeWorld(options: {
   return { calls, world, errors };
 }
 
-const parent = '/home/dev/code';
-const target = path.join(parent, BRAIN_FREEZE_DIR);
+const root = '/home/dev/GemDB';
+const target = brainFreezePath(root);
 
-describe('the Brain Freeze clone command', () => {
-  it('clones nothing when the folder dialog is dismissed', async () => {
-    // The dialog is where the user consents to a write outside the root path,
-    // so dismissing it has to mean nothing happened at all.
-    const { calls, world } = makeWorld({ parent: undefined });
-    await runCloneDemo(world);
-    expect(calls).toEqual(['pickParent']);
+describe('installing the Brain Freeze demo', () => {
+  it('clones into brain-freeze under the root path', () => {
+    // Under the root path is what puts the clone on the automated side of the
+    // line: it is undone by deleting the directory GemDB already owns.
+    expect(target).toBe(path.join(root, BRAIN_FREEZE_DIR));
   });
 
-  it('clones into brain-freeze under the chosen folder', async () => {
-    const { calls, world } = makeWorld({ parent, answer: undefined });
+  it('clones, then opens the demo in an empty window without asking', async () => {
+    // An empty window has nothing to lose to a workspace change, so reusing it
+    // is not a question. The README is promised before the folder opens,
+    // because nothing after `openFolder` runs in the window that shows it.
+    const { calls, world } = makeWorld({});
     await runCloneDemo(world);
-    expect(calls).toContain(`clone(${BRAIN_FREEZE_URL} -> ${target})`);
-    // Dismissing the "cloned" notification leaves the clone on disk and opens
-    // nothing: the work is done, and where to look at it is a second question.
-    expect(calls.filter((c) => c.startsWith('openFolder'))).toEqual([]);
+    expect(calls).toEqual([
+      `clone(${BRAIN_FREEZE_URL} -> ${target})`,
+      `promiseReadme(${target})`,
+      `openFolder(${target}, newWindow=false)`,
+    ]);
+  });
+
+  it('leaves a window with a folder open alone and opens a new one', async () => {
+    const { calls, world } = makeWorld({ folders: ['/home/dev/work'] });
+    await runCloneDemo(world);
+    expect(calls).toContain(`openFolder(${target}, newWindow=true)`);
+  });
+
+  it('shows the README in place when the demo is already open here', async () => {
+    // Opening a folder that is already open would do nothing visible, and the
+    // README would be promised to a window that is never coming.
+    const { calls, world } = makeWorld({
+      existing: [target],
+      folders: ['/home/dev/work', `${target}/`],
+    });
+    await runCloneDemo(world);
+    expect(calls).toEqual([`showReadme(${target})`]);
   });
 
   it('opens what is already there rather than cloning over it', async () => {
     // A second run is most likely someone who wants the demo they already
     // have, and that directory may hold their own commits.
-    const { calls, world } = makeWorld({ parent, existing: [target], answer: 'Open' });
+    const { calls, world } = makeWorld({ existing: [target] });
     await runCloneDemo(world);
     expect(calls.some((c) => c.startsWith('clone('))).toBe(false);
     expect(calls.some((c) => c.startsWith('discard('))).toBe(false);
     expect(calls).toContain(`openFolder(${target}, newWindow=false)`);
   });
 
-  it('opens in a new window when that is the button pressed', async () => {
-    const { calls, world } = makeWorld({ parent, answer: 'Open in New Window' });
-    await runCloneDemo(world);
-    expect(calls).toContain(`openFolder(${target}, newWindow=true)`);
-  });
-
   it('names git in the error and removes the partial clone', async () => {
     // A missing git arrives as a spawn error, not a non-zero exit, and the
     // message has to say what GemDB was trying to run.
-    const { calls, world, errors } = makeWorld({
-      parent,
-      clone: new Error('spawn git ENOENT'),
-    });
+    const { calls, world, errors } = makeWorld({ clone: new Error('spawn git ENOENT') });
     await runCloneDemo(world);
     expect(calls).toContain(`discard(${target})`);
     expect(calls).toContain('reportError');
     expect(errors[0]).toContain('git');
     expect(calls.some((c) => c.startsWith('openFolder'))).toBe(false);
+    expect(calls.some((c) => c.startsWith('promiseReadme'))).toBe(false);
   });
 
   it('treats a cancelled clone as a cancellation, not a failure', async () => {
     // A killed git leaves its half-written directory behind, and that leftover
-    // would meet the "already exists" branch on the next run — which offers to
-    // open it as though it were a working checkout.
-    const { calls, world, errors } = makeWorld({ parent, clone: 'cancelled' });
+    // would meet the "already exists" branch on the next run — which opens it
+    // as though it were a working checkout.
+    const { calls, world, errors } = makeWorld({ clone: 'cancelled' });
     await runCloneDemo(world);
     expect(calls).toContain(`discard(${target})`);
     expect(errors).toEqual([]);
     expect(calls.some((c) => c.startsWith('openFolder'))).toBe(false);
+  });
+});
+
+describe('the README promised to the window that opens the demo', () => {
+  let storage: string;
+  let note: string;
+
+  beforeEach(() => {
+    storage = fs.mkdtempSync(path.join(os.tmpdir(), 'gemdb-readme-'));
+    note = path.join(storage, 'pending-demo-readme');
+    initPendingReadme(storage);
+  });
+
+  afterEach(() => fs.rmSync(storage, { recursive: true, force: true }));
+
+  it('is kept once, by the window that has the demo open', () => {
+    fs.writeFileSync(note, target);
+    expect(takePromisedReadme([target])).toBe(target);
+    // Once: reopening the folder later is a visit, not an install.
+    expect(takePromisedReadme([target])).toBeUndefined();
+  });
+
+  it('is left for its window by any other window that activates first', () => {
+    // The demo's window may still be starting, or waiting on its trust prompt;
+    // an unrelated window taking the note would leave it with nothing.
+    fs.writeFileSync(note, target);
+    expect(takePromisedReadme(['/home/dev/work'])).toBeUndefined();
+    expect(takePromisedReadme([target])).toBe(target);
+  });
+
+  it('expires rather than surprising a visit to the folder next week', () => {
+    fs.writeFileSync(note, target);
+    const writtenAt = fs.statSync(note).mtimeMs;
+    expect(takePromisedReadme([target], writtenAt + README_PROMISE_MS + 1)).toBeUndefined();
+    expect(fs.existsSync(note)).toBe(false);
+  });
+
+  it('is nothing when no note was left', () => {
+    expect(takePromisedReadme([target])).toBeUndefined();
   });
 });

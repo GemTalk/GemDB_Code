@@ -36,6 +36,24 @@ goes away when the extension is disabled. Call `clear()` before `prepend`:
 the collection persists across reloads, so skipping it stacks duplicate
 entries and keeps a stale root path first.
 
+**Installing the Brain Freeze demo** (`demo.ts`) — cloning it, opening it, and
+showing its README, once the user picks the command. The clone lands at
+`<rootPath>/brain-freeze`, which is what moves it here from "Asked": it used
+to clone wherever a folder dialog said, which was a persistent write outside
+the root path, and the dialog was the consent. With the location fixed it is
+one more directory GemDB owns. Two things keep it on this side:
+
+- a second run opens the existing clone and never clones over it, since it
+  may hold the user's commits — for the same reason `uninstall` never removes
+  the root path wholesale;
+- the window is chosen, not asked about: an empty window is reused, and a
+  window with a folder open is left alone while the demo gets a new one.
+  Replacing someone's workspace unasked is the one step here that would not be
+  reversible by closing something.
+
+VS Code's Workspace Trust prompt still appears for the fresh clone, and should:
+it is the editor's question, not GemDB's, and there is no API to answer it.
+
 ## Asked
 
 **Raising shared memory — always prompts; never automate it.** It needs
