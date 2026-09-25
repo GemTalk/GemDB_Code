@@ -13,7 +13,8 @@ whether it's working and prioritize fixes. These events carry only
 non-identifying, extension-level information: things like which platform
 GemDB is running on, how long an operation took, or whether an operation
 succeeded or failed. They never carry the contents of your work (see "What
-we do not collect" below).
+we do not collect" below). [docs/telemetry.md](docs/telemetry.md) lists every
+event and what each of its properties can say.
 
 VS Code automatically attaches its own common properties to every event:
 `common.extname`, `common.extversion`, `common.vscodemachineid`,
@@ -49,17 +50,22 @@ is used in.
 
 File paths, file names, notebook URIs or titles, Python source code, notebook
 cell contents, query text, database contents, GemStone session or cache
-names, usernames, email addresses, environment variables, or your IP address
-(see "Approximate location" above for what Azure derives from it before
-discarding it).
+names, usernames, email addresses, environment variables, error messages, or
+exception text, or your IP address (see "Approximate location" above for
+what Azure derives from it before discarding it). Events that record a
+failure — for example, whether setup or a database start succeeded — carry
+only a short classified reason (such as "cancelled" or "failed"), never the
+underlying error's own text, because GemStone errors can embed file paths.
 
 ## Why we collect it
 
-To understand aggregate usage — for example, which platforms GemDB runs on,
-which regions it is used in, and how activation performs — so we can
-prioritize fixes and improvements.
-This relies on legitimate interest (GDPR Art. 6(1)(f)); it is not used for
-advertising or profiling.
+To understand GemDB's usage in aggregate: whether setup and startup succeed
+and how long they take, which platforms GemDB runs on and which regions it is
+used in, and which features people actually use. That lets us prioritize
+fixes and improvements. We do not use it to see what any individual does with
+their data or code (see "What we do not collect"), and it is never used for
+advertising or profiling. This relies on legitimate interest (GDPR Art.
+6(1)(f)).
 
 ## How it is transmitted and stored
 
@@ -92,5 +98,5 @@ and delete the matching records.
 
 ## Changes
 
-Last updated: 2026-09-15. Changes to this notice will be published in this
+Last updated: 2026-09-23. Changes to this notice will be published in this
 repository.

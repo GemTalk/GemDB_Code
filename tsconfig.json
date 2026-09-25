@@ -14,7 +14,6 @@
     // bundles in out/, and tsc's only job here is type checking. noEmit
     // rather than an outDir because out/ is where those bundles live
     "noEmit": true,
-    "rootDir": "src",
     "sourceMap": true,
     "strict": true,
     "esModuleInterop": true,
@@ -24,6 +23,6 @@
     // we name the two type libraries this project actually needs.
     "types": ["node", "vscode"]
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "__mocks__/**/*.ts"],
   "exclude": ["node_modules", "out", "grail"]
 }

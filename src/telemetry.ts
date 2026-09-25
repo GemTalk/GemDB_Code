@@ -2,34 +2,52 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { TelemetryReporter } from '@vscode/extension-telemetry';
+import type { GemDbState } from './statusView';
 
 /**
  * GemDB's telemetry: one named function per thing worth counting.
  *
- * Two rules a future edit can break, neither visible from a call site:
+ * Four rules a future edit can break, none visible from a call site:
  *
- * 1. **This module must never reach `out/gemdb-shell.js`.** That bundle is
- *    built from the same sources with `vscode` aliased to `cliVscode.ts`;
- *    there is no extension host there, so nothing would enforce the user's
- *    telemetry setting. ESLint's shell-graph denylist catches a direct
- *    import at save time; esbuild's metafile check catches everything else.
- * 2. **Never `sendDangerousTelemetryEvent`** or its siblings. They bypass the
- *    user's preference by design, for CI. Shipping one is a Marketplace
- *    violation.
- * 3. **No event may be emitted per cell, per print, or per keystroke.** A user
- *    exploring data runs hundreds of cells. The shape instead is a
- *    once-per-window `first*` event for funnel membership plus one aggregated
- *    `sessionSummary` carrying counts as measures. There is no
- *    `sessionSummary` event yet, so do not build the counter machinery ahead
- *    of it; when it lands, this module should expose `count*()` functions
- *    that mutate in-memory state while only `reportSessionSummary()` sends,
- *    so this rule holds by construction rather than by discipline.
+ * 1. **This module must never reach `out/gemdb-shell.js`** — no extension host
+ *    there enforces the user's telemetry setting (CLAUDE.md, "`gemdb` with no
+ *    arguments IS the GemDB Shell"). `no-restricted-imports` in
+ *    `eslint.config.mjs` denies it to every shell-graph file, `session.ts` and
+ *    `pythonQueries.ts` permanently (they get an injected sink instead);
+ *    `assertNoTelemetryInShellBundle` in `esbuild.mjs` checks the built graph
+ *    and is the guard that actually holds.
+ * 2. **Never `sendDangerousTelemetryEvent`** or its siblings: they bypass the
+ *    user's setting by design, and shipping one violates Marketplace policy.
+ * 3. **Events are facts, not funnels: no `first*` events.** First-ness is
+ *    `min(timestamp) by machineId` at query time. Volume is bounded by each
+ *    event's cadence, stated on its `report*` function — never per cell, per
+ *    print or per keystroke.
+ * 4. **Property values name what the user did** — a command id or a surface,
+ *    as `TRIGGER` and `SURFACE` spell them — never a function, so a rename
+ *    cannot silently split a series.
  *
- *    `deactivate()` is best-effort — VS Code allows it limited time and it
- *    never runs on a crash — so a `sessionSummary` event must be sent
- *    *before* `context.subscriptions` are disposed, since disposing the
- *    reporter is what flushes queued events.
+ * `docs/telemetry.md` describes every event for people who read the data;
+ * change it with this file. `telemetryDocs.test.ts` fails when it falls behind.
  */
+
+/**
+ * What caused a lifecycle step to happen, shared by every event that needs one.
+ *
+ * Values name what the user did — a command id or a surface — never a
+ * function, so a series survives a refactor.
+ */
+export const TRIGGER = {
+  firstRun: 'firstRun', // the unattended pass at activation
+  autoStart: 'autoStart', // the database coming up unasked
+  installCommand: 'installCommand', // gemdb.install
+  startCommand: 'startCommand', // gemdb.start
+  sharedMemoryCommand: 'sharedMemoryCommand', // gemdb.configureSharedMemory
+  notebook: 'notebook', // a notebook cell batch
+  shell: 'shell', // Open GemDB Shell
+  runFile: 'runFile', // Run Python File
+  mcp: 'mcp', // an agent, through the MCP provider
+} as const;
+export type Trigger = (typeof TRIGGER)[keyof typeof TRIGGER];
 
 // Not a secret — a connection string only says where events land.
 const CONNECTION_STRING =
@@ -39,14 +57,21 @@ const CONNECTION_STRING =
   'ApplicationId=0459d5a4-2436-4702-9979-c274a9da9b37';
 
 /**
- * Every event GemDB can emit. Private, and `send` is typed to it, so a name
- * cannot be typo'd and no event can exist without a `report*` function below
- * that says what it means.
+ * Every event GemDB can emit. `send` is typed to it, so a name cannot be
+ * typo'd, and `send` is private, so no event can exist without a `report*`
+ * function below that says what it means. Exported only so the docs test can
+ * list it.
  */
-const EVENT = {
+export const EVENT = {
   activated: 'activated',
+  unattendedSetupSkipped: 'unattendedSetupSkipped',
+  setupStarted: 'setupStarted',
+  setupFinished: 'setupFinished',
+  osConfigPrompted: 'osConfigPrompted',
+  databaseStarted: 'databaseStarted',
+  pythonUsed: 'pythonUsed',
 } as const;
-type EventName = (typeof EVENT)[keyof typeof EVENT];
+export type EventName = (typeof EVENT)[keyof typeof EVENT];
 
 let reporter: TelemetryReporter | undefined;
 
@@ -59,6 +84,9 @@ let reporter: TelemetryReporter | undefined;
  */
 let baseProperties: Record<string, string> = {};
 
+/** When this machine was first seen, for `pythonUsed`'s `minutesSinceFirstSeen`. */
+let firstSeenAtMs: number | undefined;
+
 const FIRST_SEEN_FILE = 'first-seen';
 
 /**
@@ -70,12 +98,22 @@ const FIRST_SEEN_FILE = 'first-seen';
  *   all. Without this, such a user would reach first Python in seconds and
  *   inflate conversion as a phantom new install.
  */
-type InstallDaySource = 'firstSeen' | 'reinstall';
+export const INSTALL_DAY_SOURCE = {
+  firstSeen: 'firstSeen',
+  reinstall: 'reinstall',
+} as const;
+type InstallDaySource = (typeof INSTALL_DAY_SOURCE)[keyof typeof INSTALL_DAY_SOURCE];
 
 interface InstallDay {
   /** UTC date only (`YYYY-MM-DD`) — no timestamp, no path. */
   installDay: string;
   installDaySource: InstallDaySource;
+  /**
+   * The raw ISO timestamp behind `installDay`, kept only in memory —
+   * `minutesSinceFirstSeen` needs sub-day precision, and `installDay` itself
+   * is deliberately date-only so it never carries one.
+   */
+  firstSeenAt: string;
 }
 
 function utcDateOnly(iso: string): string {
@@ -101,22 +139,27 @@ export function resolveInstallDay(storageDir: string, databaseExists: boolean): 
   const firstSeenPath = path.join(storageDir, FIRST_SEEN_FILE);
   try {
     const contents = fs.readFileSync(firstSeenPath, 'utf8');
-    return { installDay: utcDateOnly(contents), installDaySource: 'firstSeen' };
+    return {
+      installDay: utcDateOnly(contents),
+      installDaySource: INSTALL_DAY_SOURCE.firstSeen,
+      firstSeenAt: contents,
+    };
   } catch {
     /* no first-seen file yet — resolve it below and record one */
   }
 
-  const today = utcDateOnly(new Date().toISOString());
+  const now = new Date().toISOString();
   const installDay: InstallDay = {
-    installDay: today,
-    installDaySource: databaseExists ? 'reinstall' : 'firstSeen',
+    installDay: utcDateOnly(now),
+    installDaySource: databaseExists ? INSTALL_DAY_SOURCE.reinstall : INSTALL_DAY_SOURCE.firstSeen,
+    firstSeenAt: now,
   };
 
   // Matches setup-attempted's own posture: worst case, this is offered once
   // more next activation. A failure here must never fail activation.
   try {
     fs.mkdirSync(storageDir, { recursive: true });
-    fs.writeFileSync(firstSeenPath, new Date().toISOString());
+    fs.writeFileSync(firstSeenPath, now);
   } catch {
     /* worst case it is resolved again next activation */
   }
@@ -148,10 +191,18 @@ export function initTelemetry(context: vscode.ExtensionContext, databaseExists: 
   // install — `common.extversion` is the same in both — so say which one
   // this is. Every query that reports on users has to exclude anything but
   // 'production'.
-  const { installDay, installDaySource } = resolveInstallDay(
+  const { installDay, installDaySource, firstSeenAt } = resolveInstallDay(
     context.globalStorageUri.fsPath,
     databaseExists,
   );
+  // The write in resolveInstallDay is not atomic, so a crash or a full disk
+  // during first activation can leave a zero-byte or truncated first-seen
+  // file; `new Date(...).getTime()` on that is NaN, and NaN !== undefined
+  // would slide past reportPythonUsed's guard and send NaN as a measure. Every
+  // reader gets `undefined` instead by validating once, here, rather than at
+  // each call site.
+  const parsedFirstSeenAtMs = new Date(firstSeenAt).getTime();
+  firstSeenAtMs = Number.isFinite(parsedFirstSeenAtMs) ? parsedFirstSeenAtMs : undefined;
   // `daysSinceInstall` is deliberately not sent: it is derivable at query time
   // from `installDay` and the event's own timestamp, and a dimension repeated
   // on every event forever is not free. `installDay` itself is not optional
@@ -200,12 +251,295 @@ function send(
 }
 
 /**
- * The extension host finished activating.
+ * Elapsed time on the monotonic clock, for every `durationMs` sent here.
  *
- * @param durationMs wall-clock time since the first statement of `activate()`,
+ * Not `Date.now()` deltas: setup and `ensureRunning` can take minutes, long
+ * enough for an NTP step or a manual clock change to skew one or make it
+ * negative. The clock is hidden so no caller can subtract a `Date.now()` from
+ * a `performance.now()`. It does not advance while the machine sleeps, so a
+ * download spanning a laptop nap reports the time GemDB was actually running.
+ */
+export class Stopwatch {
+  private readonly startedAt = performance.now();
+
+  static start(): Stopwatch {
+    return new Stopwatch();
+  }
+
+  elapsedMs(): number {
+    return Math.round(performance.now() - this.startedAt);
+  }
+}
+
+/**
+ * The extension host finished activating — once per window activation.
+ *
+ * @param durationMs time since the first statement of `activate()`,
  *   measured before the detached `prepareOnFirstRun` tail, which can run for
  *   minutes and is not activation.
+ * @param state what `activate()` found on the way in — reusing
+ *   `GemDbState`, the same vocabulary the status view publishes as
+ *   `gemdb.state`, so this and the view can never drift apart. Doubles every
+ *   activation as a health sample and gives the funnel its denominator.
  */
-export function reportActivation(durationMs: number): void {
-  send(EVENT.activated, undefined, { activationMs: durationMs });
+export function reportActivation(durationMs: number, state: GemDbState): void {
+  send(EVENT.activated, { state }, { activationMs: durationMs });
+}
+
+/** Why the unattended first-run setup at activation did not run. */
+export const SKIP_REASON = {
+  remoteWindow: 'remoteWindow',
+  cancelledBefore: 'cancelledBefore',
+  failedBefore: 'failedBefore',
+  installedBefore: 'installedBefore',
+  uninstalled: 'uninstalled',
+  attemptedBefore: 'attemptedBefore',
+  lockHeld: 'lockHeld',
+  installedByOtherWindow: 'installedByOtherWindow',
+} as const;
+export type SkipReason = (typeof SKIP_REASON)[keyof typeof SKIP_REASON];
+
+/**
+ * The unattended pass at activation bailed out before setup ran.
+ *
+ * Cadence: at most once per window activation, and only while GemDB is not
+ * installed — an installed machine returns before reaching any of these, and
+ * `activated{state}` already says so. The five marker reasons —
+ * `cancelledBefore`, `failedBefore`, `installedBefore`, `uninstalled`,
+ * `attemptedBefore` — say
+ * what the `setup-attempted` marker recorded, and each repeats on every
+ * activation until the user installs; that repetition is the signal (how long
+ * they stay there). `installedBefore` is a machine that had GemDB and lost it
+ * without uninstalling, most often a changed root path or engine version.
+ * `attemptedBefore` is a marker that does not say how setup ended: every
+ * release through 1.5.1 wrote a timestamp instead, so it is kept apart rather
+ * than guessed into one of the other four.
+ *
+ * Emitted only when it skips — the case where it runs instead is
+ * `setupStarted{trigger: firstRun}`, and emitting both would double-count the
+ * same activation. `cancelledBefore` is the highest-value reason here: it is
+ * exactly "this user is stuck behind their own earlier cancel", and it is
+ * invisible today.
+ */
+export function reportUnattendedSetupSkipped(skipReason: SkipReason): void {
+  send(EVENT.unattendedSetupSkipped, { skipReason });
+}
+
+/**
+ * How a `runSetup` attempt ended — its return value and `setupFinished{outcome}`.
+ * Defined here, not in `lifecycle.ts`, so the one definition sits on the leaf
+ * side of the lifecycle → telemetry import.
+ */
+export const SETUP_OUTCOME = {
+  completed: 'completed',
+  cancelled: 'cancelled',
+  failed: 'failed',
+} as const;
+export type SetupOutcome = (typeof SETUP_OUTCOME)[keyof typeof SETUP_OUTCOME];
+
+/**
+ * `runSetup` started — a user choosing to download, every time. Repeats
+ * freely and is meant to: cancelling and later pressing Resume is two
+ * attempts, both visible, not a special case.
+ */
+export function reportSetupStarted(trigger: Trigger): void {
+  send(EVENT.setupStarted, { trigger });
+}
+
+/**
+ * `runSetup` finished, paired with the `setupStarted` for the same attempt.
+ *
+ * A start with no matching finish — the user quit VS Code mid-download — is
+ * the drop-out this pair exists to measure, so never collapse this into a
+ * single event. Never pass `errorMessage(e)` here: GemStone errors embed
+ * paths, and a classified failure reason is phase 3's `stepFailed`, not this.
+ */
+export function reportSetupFinished(
+  trigger: Trigger,
+  outcome: SetupOutcome,
+  durationMs: number,
+): void {
+  send(EVENT.setupFinished, { trigger, outcome }, { durationMs });
+}
+
+/**
+ * How the modal ended.
+ *
+ * `removeIpcUnset` is not a softer `stillUnconfigured`, and the two must not
+ * be merged: shared memory is a hard gate, so `stillUnconfigured` means the
+ * database did not start, while RemoveIPC is advisory, so `removeIpcUnset`
+ * means it started and will not survive a logout. Reusing one name for both
+ * would also make them indistinguishable in the case that produces each —
+ * `missing: 'both'`, where the pair is the only thing that says which half
+ * failed.
+ */
+export const OS_CONFIG_OUTCOME = {
+  configured: 'configured',
+  declined: 'declined',
+  stillUnconfigured: 'stillUnconfigured',
+  removeIpcUnset: 'removeIpcUnset',
+} as const;
+export type OsConfigOutcome = (typeof OS_CONFIG_OUTCOME)[keyof typeof OS_CONFIG_OUTCOME];
+
+/** What was short when the modal was shown — not what is still short after it. */
+export const OS_CONFIG_MISSING = {
+  sharedMemory: 'sharedMemory',
+  removeIpc: 'removeIpc',
+  both: 'both',
+} as const;
+export type OsConfigMissing = (typeof OS_CONFIG_MISSING)[keyof typeof OS_CONFIG_MISSING];
+
+/**
+ * Every `trigger:outcome:missing` failure `reportOsConfigPrompted` has sent
+ * since the OS was last configured or the database last started, so a repeat
+ * is silent. A set rather than the last one, for the same reason as
+ * `reportedFailures`.
+ */
+const reportedOsConfigFailures = new Set<string>();
+
+/**
+ * The shared-memory/RemoveIPC modal was shown, and how it went.
+ *
+ * Emitted only when the modal actually appeared, or when "Configure Shared
+ * Memory" ran while shared memory was short (`sharedMemoryCommand`, the path
+ * back after a decline) — never on the already-configured fast path, which is
+ * silent by design and would just be volume. `trigger` is what earns this
+ * event: CLAUDE.md spends three paragraphs on *where* to ask for shared memory
+ * and names two rejected placements, and nobody has measured whether the
+ * current one works.
+ *
+ * A failure is sent once per `trigger`, `outcome` and `missing` until the OS
+ * is configured or the database next starts, for the reason
+ * `reportDatabaseStarted` dedups its own: after a decline the modal comes back
+ * on every `ensureRunning`, so a user who keeps saying no would otherwise send
+ * one event per cell batch. `sharedMemoryCommand` is exempt: each one is a
+ * sudo run the user asked for by name, so its volume is theirs to set.
+ */
+export function reportOsConfigPrompted(
+  trigger: Trigger,
+  outcome: OsConfigOutcome,
+  missing: OsConfigMissing,
+): void {
+  if (outcome === OS_CONFIG_OUTCOME.configured) {
+    reportedOsConfigFailures.clear();
+  } else if (trigger !== TRIGGER.sharedMemoryCommand) {
+    const key = `${trigger}:${outcome}:${missing}`;
+    if (reportedOsConfigFailures.has(key)) return;
+    reportedOsConfigFailures.add(key);
+  }
+  send(EVENT.osConfigPrompted, { trigger, outcome, missing });
+}
+
+export const DATABASE_OUTCOME = {
+  started: 'started',
+  unsupportedPlatform: 'unsupportedPlatform',
+  missingPayload: 'missingPayload',
+  setupCancelled: 'setupCancelled',
+  setupFailed: 'setupFailed',
+  osConfigDeclined: 'osConfigDeclined',
+  osConfigFailed: 'osConfigFailed',
+  startFailed: 'startFailed',
+} as const;
+export type DatabaseOutcome = (typeof DATABASE_OUTCOME)[keyof typeof DATABASE_OUTCOME];
+
+/** Whether `ensureRunning` filed Grail into the database this time, and why. */
+export const FILED_GRAIL = {
+  no: 'no',
+  firstTime: 'firstTime',
+  update: 'update',
+} as const;
+export type FiledGrail = (typeof FILED_GRAIL)[keyof typeof FILED_GRAIL];
+
+/**
+ * Every `trigger:outcome` failure `reportDatabaseStarted` has sent since the
+ * database last started, so a repeat is silent. A set rather than the last
+ * one: with only the last, two surfaces failing in turn (a notebook and a
+ * shell, both stuck at a declined sudo) would alternate keys and send every time.
+ */
+const reportedFailures = new Set<string>();
+
+/**
+ * The database came up, or didn't, on `ensureRunning` — the one path
+ * everything that needs one goes through.
+ *
+ * Bounded twice over, both load-bearing:
+ *
+ * - Sent only when `didWork` is true or the outcome is a failure. Most
+ *   `ensureRunning` calls are no-ops — every notebook cell after the first
+ *   goes through it again, with nothing left to do — and those send nothing.
+ * - A failure is sent once per `trigger` and `outcome` pair until the
+ *   database next starts — at most triggers × outcomes per failure streak.
+ *   Keyed on the pair, not the outcome, because `trigger` is what tells a
+ *   notebook batch from an explicit Start failing the same way. Without this,
+ *   a user stuck at the sudo prompt would emit one event per cell batch — the
+ *   same unbounded volume `didWork` guards against, from the other direction.
+ */
+export function reportDatabaseStarted(
+  trigger: Trigger,
+  outcome: DatabaseOutcome,
+  filedGrail: FiledGrail,
+  durationMs: number,
+  didWork: boolean,
+): void {
+  if (outcome === DATABASE_OUTCOME.started) {
+    reportedFailures.clear();
+    reportedOsConfigFailures.clear();
+    if (!didWork) return;
+  } else {
+    const key = `${trigger}:${outcome}`;
+    if (reportedFailures.has(key)) return;
+    reportedFailures.add(key);
+  }
+  send(EVENT.databaseStarted, { trigger, outcome, filedGrail }, { durationMs });
+}
+
+export const SURFACE = {
+  notebook: 'notebook',
+  shell: 'shell',
+  runFile: 'runFile',
+} as const;
+export type Surface = (typeof SURFACE)[keyof typeof SURFACE];
+
+/** How sure a `pythonUsed` event is that Python genuinely ran; see `reportPythonUsed`. */
+export const EVIDENCE = {
+  executed: 'executed',
+  launched: 'launched',
+} as const;
+export type Evidence = (typeof EVIDENCE)[keyof typeof EVIDENCE];
+
+/** Surfaces `pythonUsed` has already reported this window. */
+const seenSurfaces = new Set<Surface>();
+
+/**
+ * Python ran, or a surface that runs it was opened — once per window per
+ * surface, at most three events total.
+ *
+ * This is the shape the design settles on deliberately, in place of a
+ * once-ever `firstPythonRun`: the funnel terminus falls out of
+ * `min(timestamp) by machineId`, retention falls out of
+ * `count(distinct day)`, and repeat usage is never discarded. No persisted
+ * marker means no gap or duplicate if global storage is lost.
+ *
+ * `evidence` says how sure this is a genuine run: `executed` means source
+ * was sent to the database and a result came back (including a Python-level
+ * error returned in band — that is still a real run); `launched` means only
+ * that a terminal was opened, which the host cannot confirm was ever typed
+ * into.
+ */
+export function reportPythonUsed(surface: Surface, evidence: Evidence): void {
+  if (seenSurfaces.has(surface)) return;
+  seenSurfaces.add(surface);
+  // Wall-clock on purpose, unlike `Stopwatch`: first-seen is persisted and
+  // this spans restarts, which no monotonic clock can. Clamped because a clock
+  // set back since first-seen was recorded would otherwise send a negative
+  // age; rounded to whole minutes, the same coarsening `installDay` applies.
+  const minutesSinceFirstSeen =
+    firstSeenAtMs !== undefined
+      ? Math.max(0, Math.round((Date.now() - firstSeenAtMs) / 60_000))
+      : undefined;
+  send(
+    EVENT.pythonUsed,
+    { surface, evidence },
+    minutesSinceFirstSeen !== undefined ? { minutesSinceFirstSeen } : undefined,
+  );
 }

@@ -27,18 +27,33 @@ import {
 import { isMcpRunning, startMcpServer, stopMcpServer } from './mcp';
 import { cloneBrainFreeze } from './demo';
 import { confirmMcpEnabled, registerMcpProvider, registerWithClient } from './mcpRegistration';
-import { configureSharedMemory, ensureOsConfigured, isSharedMemoryConfigured } from './osConfig';
+import {
+  configureSharedMemory,
+  ensureOsConfigured,
+  isSharedMemoryConfigured,
+  osConfigAllowsStart,
+} from './osConfig';
 import { isSupportedPlatform, setContext } from './platform';
-import { isRunning } from './processes';
+import { isRunning, isRunningAsync } from './processes';
 import { renameOwner } from './pythonQueries';
 import { openRepl, runFile } from './repl';
 import { closeSessionFor, logoutAll, setInputHandler } from './session';
 import { GemDbStatusBar } from './statusBar';
 import { StatusViewProvider } from './statusView';
-import { initTelemetry, reportActivation } from './telemetry';
+import {
+  SETUP_OUTCOME,
+  SKIP_REASON,
+  type SetupOutcome,
+  type SkipReason,
+  Stopwatch,
+  TRIGGER,
+  initTelemetry,
+  reportActivation,
+  reportUnattendedSetupSkipped,
+} from './telemetry';
 
 export function activate(context: vscode.ExtensionContext): void {
-  const activationStarted = Date.now();
+  const stopwatch = Stopwatch.start();
   initTelemetry(context, isInstalled());
 
   const extensionPath = context.extensionPath;
@@ -169,7 +184,10 @@ export function activate(context: vscode.ExtensionContext): void {
         // Every session, not just this window's own: uninstalling deletes the
         // database each notebook is connected to.
         logoutAll();
-        await uninstall();
+        // Overwritten, never deleted: deleting it would restart the automatic
+        // download on the next window, which is exactly what removing GemDB
+        // asked not to happen.
+        if (await uninstall()) writeSetupMarker(context, 'uninstalled');
       }),
     ),
     vscode.commands.registerCommand('gemdb.openRepl', () => openRepl(extensionPath)),
@@ -289,7 +307,7 @@ export function activate(context: vscode.ExtensionContext): void {
       `GemDB does not support ${process.platform}/${process.arch} yet — ` +
         'macOS on Apple Silicon only.',
     );
-    reportActivation(Date.now() - activationStarted);
+    reportActivation(stopwatch.elapsedMs(), 'unsupportedPlatform');
     return;
   }
 
@@ -303,11 +321,65 @@ export function activate(context: vscode.ExtensionContext): void {
   putCliOnPath(context.environmentVariableCollection);
 
   status.refresh();
-  reportActivation(Date.now() - activationStarted);
+  // Reported off the synchronous activation path: `isRunningAsync()` spawns
+  // `gslist`, and the state it reports is not worth stalling every window's
+  // activation for. `activationMs` is still captured synchronously above, so
+  // it keeps measuring activation itself rather than this report's own cost.
+  const activationMs = stopwatch.elapsedMs();
+  void (async () => {
+    const state = isInstalled()
+      ? (await isRunningAsync())
+        ? 'running'
+        : 'stopped'
+      : 'notInstalled';
+    reportActivation(activationMs, state);
+  })();
 
   void prepareOnFirstRun(context, extensionPath, () => status.refresh()).then(() =>
     autoStart(extensionPath, () => status.refresh()),
   );
+}
+
+/** What `setup-attempted` records: how the last unattended setup ended, or that GemDB was removed. */
+type SetupMarker = SetupOutcome | 'uninstalled' | 'attempted';
+
+const MARKER_REASON: Record<SetupMarker, SkipReason> = {
+  cancelled: SKIP_REASON.cancelledBefore,
+  failed: SKIP_REASON.failedBefore,
+  completed: SKIP_REASON.installedBefore,
+  uninstalled: SKIP_REASON.uninstalled,
+  // Releases through 1.5.1 wrote a timestamp however setup ended: it was
+  // offered, but the outcome was not recorded. Never written, only read.
+  attempted: SKIP_REASON.attemptedBefore,
+};
+
+function markerPath(context: vscode.ExtensionContext): string {
+  return path.join(context.globalStorageUri.fsPath, 'setup-attempted');
+}
+
+/**
+ * What the marker records, or `'none'` when there is no marker. A marker that
+ * does not say how setup ended still says it was offered, so it reads as
+ * `'attempted'` and setup is not offered again: that covers every marker
+ * written before outcomes were recorded, and a truncated write fails safe.
+ */
+function readSetupMarker(context: vscode.ExtensionContext): SetupMarker | 'none' {
+  let value: string;
+  try {
+    value = fs.readFileSync(markerPath(context), 'utf8').trim();
+  } catch {
+    return 'none';
+  }
+  return Object.hasOwn(MARKER_REASON, value) ? (value as SetupMarker) : 'attempted';
+}
+
+function writeSetupMarker(context: vscode.ExtensionContext, value: SetupMarker): void {
+  try {
+    fs.mkdirSync(context.globalStorageUri.fsPath, { recursive: true });
+    fs.writeFileSync(markerPath(context), value);
+  } catch {
+    /* worst case it is offered once more */
+  }
 }
 
 /**
@@ -342,19 +414,34 @@ async function prepareOnFirstRun(
   extensionPath: string,
   refresh: () => void,
 ): Promise<void> {
+  // No `unattendedSetupSkipped` event here, on purpose: every installed machine
+  // takes this return on every activation, so it would double event volume and
+  // bury the rare skip reasons. `activated{state}` already records it.
   if (isInstalled()) return;
 
   // A remote or web window shares the marketplace install but not the machine
   // GemDB would be setting up. Only a local desktop window should act.
-  if (vscode.env.remoteName !== undefined || vscode.env.uiKind !== vscode.UIKind.Desktop) return;
+  if (vscode.env.remoteName !== undefined || vscode.env.uiKind !== vscode.UIKind.Desktop) {
+    reportUnattendedSetupSkipped(SKIP_REASON.remoteWindow);
+    return;
+  }
 
-  const marker = path.join(context.globalStorageUri.fsPath, 'setup-attempted');
-  if (fs.existsSync(marker)) return;
+  const marker = readSetupMarker(context);
+  if (marker !== 'none') {
+    reportUnattendedSetupSkipped(MARKER_REASON[marker]);
+    return;
+  }
 
   const outcome = await withSetupLock(async () => {
     // Re-check inside the lock: another window may have finished the whole
     // thing while this one was waiting to acquire it.
-    if (isInstalled()) return { prepared: true, configured: await isSharedMemoryConfigured() };
+    if (isInstalled()) {
+      return {
+        files: SETUP_OUTCOME.completed,
+        configured: await isSharedMemoryConfigured(),
+        ranSetup: false,
+      };
+    }
     log('First run: preparing GemDB. This downloads about 210 MB and uses about 820 MB of disk.');
 
     // The download and the permission prompt run side by side, deliberately.
@@ -374,23 +461,26 @@ async function prepareOnFirstRun(
     // other runs a script under sudo — so there is no ordering between them to
     // get wrong. Neither rejects: both report failure by returning.
     const files = prepare(extensionPath);
-    const os = ensureOsConfigured(extensionPath).catch(() => false);
-    const [prepared, configured] = await Promise.all([files, os]);
-    return { prepared, configured };
+    const os = ensureOsConfigured(extensionPath, TRIGGER.firstRun).then(
+      osConfigAllowsStart,
+      () => false,
+    );
+    const [filesOutcome, configured] = await Promise.all([files, os]);
+    return { files: filesOutcome, configured, ranSetup: true };
   });
-  if (outcome === undefined) return; // another window is doing it
-
-  // Recorded whether it succeeded or was cancelled — either way this machine
-  // has been offered setup, and a cancel is a decision to be respected.
-  try {
-    fs.mkdirSync(context.globalStorageUri.fsPath, { recursive: true });
-    fs.writeFileSync(marker, new Date().toISOString());
-  } catch {
-    /* worst case it is offered once more */
+  if (outcome === undefined) {
+    reportUnattendedSetupSkipped(SKIP_REASON.lockHeld);
+    return; // another window is doing it
   }
+  if (!outcome.ranSetup) reportUnattendedSetupSkipped(SKIP_REASON.installedByOtherWindow);
+
+  // Recorded however it ended — either way this machine has been offered
+  // setup, and a cancel is a decision to be respected. The outcome is what
+  // the marker holds, so a later skip can say which of those it was.
+  writeSetupMarker(context, outcome.files);
 
   refresh();
-  if (!outcome.prepared) return;
+  if (outcome.files !== SETUP_OUTCOME.completed) return;
 
   // Declining the permission is not a failure. The setting persists once made,
   // so it is normally asked once per machine and never again; if it is declined
@@ -446,7 +536,7 @@ async function autoStart(extensionPath: string, refresh: () => void): Promise<vo
   await withSetupLock(async () => {
     if (isRunning()) return;
     log('Starting the database, so it is ready when you are.');
-    await ensureRunning(extensionPath);
+    await ensureRunning(extensionPath, TRIGGER.autoStart);
   });
   refresh();
 }
