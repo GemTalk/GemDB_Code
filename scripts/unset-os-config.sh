@@ -89,9 +89,9 @@ Linux)
   fi
 
   # The kernel's own default since 3.16: ULONG_MAX - (1 << 24), i.e. no
-  # practical limit. Note this is *larger* than what setSharedMemoryLinux.sh
-  # writes -- on a current kernel that script is a formality, and only matters
-  # on a distribution that still ships the old 32 MB cap.
+  # practical limit, and far above the 1 GB setSharedMemoryLinux.sh asks for
+  # -- which is why that script leaves it alone on a current kernel, and only
+  # changes anything on a distribution that still ships the old 32 MB cap.
   echo
   sysctl -w kernel.shmmax=18446744073692774399 kernel.shmall=18446744073692774399
   shmmax=$(sysctl -n kernel.shmmax)
