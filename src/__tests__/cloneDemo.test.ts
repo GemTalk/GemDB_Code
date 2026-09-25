@@ -156,8 +156,8 @@ describe('the README promised to the window that opens the demo', () => {
   });
 
   it('is left for its window by any other window that activates first', () => {
-    // The demo's window may still be starting, or waiting on its trust prompt;
-    // an unrelated window taking the note would leave it with nothing.
+    // The demo's window may still be starting; an unrelated window taking the
+    // note would leave it with nothing.
     fs.writeFileSync(note, target);
     expect(takePromisedReadme(['/home/dev/work'])).toBeUndefined();
     expect(takePromisedReadme([target])).toBe(target);

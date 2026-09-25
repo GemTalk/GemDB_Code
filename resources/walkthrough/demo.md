@@ -12,8 +12,11 @@ folder, and shows its readme, which takes it from there.
 
 - **An empty window** opens the demo in place. **A window with a folder open**
   is left alone, and the demo gets a new window.
-- **VS Code asks whether you trust the folder**, as it does for any freshly
-  cloned repository. The readme appears once you say yes.
+- **The readme appears straight away.** VS Code opens a freshly cloned
+  folder in Restricted Mode, and asks whether you trust it the first time you
+  run a cell or open a terminal there. To skip that question for everything
+  GemDB installs, trust `~/GemDB` once in **Workspaces: Manage Workspace
+  Trust**.
 - **Running it again** opens the copy you already have. It never clones over
   it, so your own changes are safe.
 

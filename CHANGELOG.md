@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a new one. Running it again opens the copy you have rather than replacing
   it. A copy cloned elsewhere by an earlier version is left where it is.
 
+- **GemDB keeps working in a folder you haven't trusted yet.** VS Code opens a
+  new folder in Restricted Mode, and GemDB used to switch off entirely there:
+  no status bar, no commands. It now stays on. Running Python from that folder
+  still waits for trust, and VS Code asks the first time you run a cell or
+  open a GemDB Shell. To stop being asked about folders GemDB installs, trust
+  `~/GemDB` once in **Workspaces: Manage Workspace Trust**.
+
 - **GemDB's settings are per-machine, and a folder's settings can no longer
   change them.** Every `gemdb.*` setting configures this machine's database
   or MCP server, so each now lives in your user settings only. A value in a

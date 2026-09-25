@@ -37,6 +37,12 @@
   "activationEvents": [
     "onStartupFinished"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "GemDB's status, setup and database controls work in Restricted Mode. Running Python from this folder (notebook cells, Run File, the GemDB Shell) waits until you trust it, and VS Code asks you when you first try."
+    }
+  },
   "contributes": {
     "configuration": {
       "title": "GemDB Code",

@@ -132,13 +132,13 @@ async function openDemo(world: CloneWorld): Promise<void> {
 /**
  * How long a promised README stays promised.
  *
- * Long enough for a Workspace Trust prompt to sit unanswered for a while — the
- * extension does not run in Restricted Mode, so it activates in the new window
- * only once the user trusts the clone — and short enough that a note left by a
- * window that never got there does not open a README on some unrelated visit
- * to the folder next week.
+ * The window that opens the demo activates GemDB within seconds, trusted or
+ * not — GemDB runs in Restricted Mode, and a fresh clone opens in it by
+ * default — so this only has to outlast a slow start. What it guards against
+ * is a note left by a window that never got there (closed, crashed) opening a
+ * README on some unrelated visit to the folder later.
  */
-export const README_PROMISE_MS = 60 * 60 * 1000;
+export const README_PROMISE_MS = 10 * 60 * 1000;
 
 let pendingPath: string | undefined;
 
@@ -169,8 +169,8 @@ function promiseReadme(target: string): void {
  * promise when it is kept or has expired.
  *
  * A note for a folder this window does not have is left alone: it may be for
- * a window that is still starting, or waiting on its trust prompt, and this
- * window taking it would leave that one with nothing.
+ * a window that is still starting, and this window taking it would leave that
+ * one with nothing.
  */
 export function takePromisedReadme(folders: string[], now = Date.now()): string | undefined {
   if (!pendingPath) return undefined;
@@ -191,7 +191,14 @@ export function takePromisedReadme(folders: string[], now = Date.now()): string 
   return target;
 }
 
-/** Open the demo's README rendered, which is how a walkthrough reads. */
+/**
+ * Open the demo's README rendered, which is how a walkthrough reads.
+ *
+ * This works in Restricted Mode, which is where a fresh clone opens, so the
+ * README is there before any question about trust is. That question comes
+ * from VS Code itself, the first time the user runs a cell or opens a
+ * terminal, which is the moment it is about something.
+ */
 async function showReadme(target: string): Promise<void> {
   const readme = path.join(target, 'README.md');
   if (!fs.existsSync(readme)) return;
