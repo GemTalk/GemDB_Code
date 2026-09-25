@@ -5,6 +5,7 @@ esbuild.mjs
 tsconfig*.json
 vitest*.mts
 .vscode/**
+.vscode-test/**
 .github/**
 .gitignore
 .prettierrc.json
