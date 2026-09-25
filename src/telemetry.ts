@@ -293,6 +293,7 @@ export const SKIP_REASON = {
   failedBefore: 'failedBefore',
   installedBefore: 'installedBefore',
   uninstalled: 'uninstalled',
+  attemptedBefore: 'attemptedBefore',
   lockHeld: 'lockHeld',
   installedByOtherWindow: 'installedByOtherWindow',
 } as const;
@@ -303,12 +304,16 @@ export type SkipReason = (typeof SKIP_REASON)[keyof typeof SKIP_REASON];
  *
  * Cadence: at most once per window activation, and only while GemDB is not
  * installed — an installed machine returns before reaching any of these, and
- * `activated{state}` already says so. The four marker reasons —
- * `cancelledBefore`, `failedBefore`, `installedBefore`, `uninstalled` — say
+ * `activated{state}` already says so. The five marker reasons —
+ * `cancelledBefore`, `failedBefore`, `installedBefore`, `uninstalled`,
+ * `attemptedBefore` — say
  * what the `setup-attempted` marker recorded, and each repeats on every
  * activation until the user installs; that repetition is the signal (how long
  * they stay there). `installedBefore` is a machine that had GemDB and lost it
  * without uninstalling, most often a changed root path or engine version.
+ * `attemptedBefore` is a marker that does not say how setup ended: every
+ * release through 1.5.1 wrote a timestamp instead, so it is kept apart rather
+ * than guessed into one of the other four.
  *
  * Emitted only when it skips — the case where it runs instead is
  * `setupStarted{trigger: firstRun}`, and emitting both would double-count the

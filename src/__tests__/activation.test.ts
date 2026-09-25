@@ -184,17 +184,19 @@ describe('activate()', () => {
       expect(skipped()).toEqual([{ skipReason }]);
     });
 
-    it('treats a marker that records no outcome as absent, and rewrites it', async () => {
+    it('reports a marker that records no outcome as attemptedBefore, and leaves it', async () => {
       isInstalled.mockReturnValue(false);
       const context = fakeExtensionContext();
       const marker = join(context.globalStorageUri.fsPath, 'setup-attempted');
-      writeFileSync(marker, new Date().toISOString());
+      // What every release through 1.5.1 wrote, however setup ended.
+      const legacy = new Date().toISOString();
+      writeFileSync(marker, legacy);
 
       activate(context);
 
-      // `prepare` is mocked to fail, so the rewritten marker says so.
-      await expect.poll(() => readFileSync(marker, 'utf8')).toBe('failed');
-      expect(skipped()).toEqual([]);
+      await expect.poll(skipped).toEqual([{ skipReason: 'attemptedBefore' }]);
+      expect(eventsNamed('setupStarted')).toEqual([]);
+      expect(readFileSync(marker, 'utf8')).toBe(legacy);
     });
 
     it('reports lockHeld when another window already owns the setup lock', async () => {

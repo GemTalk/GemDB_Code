@@ -341,13 +341,16 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 /** What `setup-attempted` records: how the last unattended setup ended, or that GemDB was removed. */
-type SetupMarker = SetupOutcome | 'uninstalled';
+type SetupMarker = SetupOutcome | 'uninstalled' | 'attempted';
 
 const MARKER_REASON: Record<SetupMarker, SkipReason> = {
   cancelled: SKIP_REASON.cancelledBefore,
   failed: SKIP_REASON.failedBefore,
   completed: SKIP_REASON.installedBefore,
   uninstalled: SKIP_REASON.uninstalled,
+  // Releases through 1.5.1 wrote a timestamp however setup ended: it was
+  // offered, but the outcome was not recorded. Never written, only read.
+  attempted: SKIP_REASON.attemptedBefore,
 };
 
 function markerPath(context: vscode.ExtensionContext): string {
@@ -355,9 +358,10 @@ function markerPath(context: vscode.ExtensionContext): string {
 }
 
 /**
- * What the marker records, or `'none'`. A marker that does not say how setup
- * ended is no record at all, so it is treated as absent: setup is offered and
- * the file is rewritten with the outcome.
+ * What the marker records, or `'none'` when there is no marker. A marker that
+ * does not say how setup ended still says it was offered, so it reads as
+ * `'attempted'` and setup is not offered again: that covers every marker
+ * written before outcomes were recorded, and a truncated write fails safe.
  */
 function readSetupMarker(context: vscode.ExtensionContext): SetupMarker | 'none' {
   let value: string;
@@ -366,7 +370,7 @@ function readSetupMarker(context: vscode.ExtensionContext): SetupMarker | 'none'
   } catch {
     return 'none';
   }
-  return Object.hasOwn(MARKER_REASON, value) ? (value as SetupMarker) : 'none';
+  return Object.hasOwn(MARKER_REASON, value) ? (value as SetupMarker) : 'attempted';
 }
 
 function writeSetupMarker(context: vscode.ExtensionContext, value: SetupMarker): void {
