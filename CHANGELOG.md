@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a new one. Running it again opens the copy you have rather than replacing
   it. A copy cloned elsewhere by an earlier version is left where it is.
 
+- **GemDB's settings are per-machine, and a folder's settings can no longer
+  change them.** Every `gemdb.*` setting configures this machine's database
+  or MCP server, so each now lives in your user settings only. A value in a
+  folder's `.vscode/settings.json` is ignored (VS Code marks it in the file),
+  which keeps a cloned repository from choosing where GemDB keeps — and on
+  uninstall deletes — its files. Settings Sync no longer copies them between
+  machines. If you had set one per folder, move it to your user settings.
+
 ## [1.5.1] - 2026-09-23
 
 The bundled Python runtime and MCP server move forward. The engine is
