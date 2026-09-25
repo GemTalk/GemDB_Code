@@ -13,20 +13,20 @@ Status: **design notes, nothing implemented.** Claims are marked as measured
 where they were checked on 2026-08-22 against the 3.7.5 kits and this
 repository, and as unverified where they still need a Windows machine.
 
-**Re-checked on 2026-09-16 against 4.0.0.a2**, where GemDB's pin now sits
+**Re-checked on 2026-09-24 against 4.0.0.a3**, where GemDB's pin now sits
 (first checked on 2026-09-12 against 4.0.0.Alpha1, which the catalog has since
-withdrawn). Nothing below changes in kind — there is still no Windows server,
-and there is still a Windows client kit — but three details moved. The kits
-come from `dl.gemdb.com/<version>/` rather than the public catalog, so every
-URL here names a host that does not carry 4.0. The client is
-`GemStone64BitClient4.0.0.a2-x86.Windows_NT.zip` (32.7 MB), carrying
-`libgcits-4.0.0.a2-64.dll`. And Intel macOS, which this document treats as a
-beneficiary of the same work, no longer has an engine published at all — so the
-Docker and remote-server options below are the *only* routes to it, not a
-shortcut past a missing shim.
+withdrawn, and again on 2026-09-16 against 4.0.0.a2). Nothing below changes in
+kind — there is still no Windows server, and there is still a Windows client
+kit — but three details moved. The kits come from `dl.gemdb.com/<version>/`
+rather than the public catalog, so every URL here names a host that does not
+carry 4.0. The client is `GemStone64BitClient4.0.0.a3-x86.Windows_NT.zip`
+(32.7 MB), carrying `libgcits-4.0.0.a3-64.dll`. And Intel macOS, which this
+document treats as a beneficiary of the same work, no longer has an engine
+published at all — so the Docker and remote-server options below are the
+*only* routes to it, not a shortcut past a missing shim.
 
-**The catalog keeps one alpha at a time**, so a version named here is a
-snapshot: `4.0.0.Alpha1` 404s today. Read the names below as "the kit of the
+**Nothing promises the catalog keeps an old alpha**, so a version named here is
+a snapshot: `4.0.0.Alpha1` 404s today. Read the names below as "the kit of the
 pinned version", not as URLs to paste.
 
 ## What is actually platform-specific

@@ -220,10 +220,13 @@ meet.** 4.0.0.Alpha1 was withdrawn from the catalog on 2026-09-16, the day
 4.0.0.a2 replaced it, so every database in the field was written by an engine
 that can no longer be downloaded. Measured that day: an Alpha1 extent still
 reads `compatibilityLevel: 855` under a2, so the a2 stone starts on it and only
-the logins fail. The guard is what turns that into a sentence.
+the logins fail. Measured again on 2026-09-24 for a2 → a3, the same way: 855
+either way, the a3 stone starts on an a2 extent, `gslist` says OK, and the
+login fails with 4045. So every pin move orphans every existing database, and
+the guard is what turns that into a sentence.
 
 There is no upgrade to offer instead: 3.7.5 shipped `bin/upgradeImage`, and no
-4.0 alpha ships one (checked again on a2), so converting the image is not
+4.0 alpha ships one (checked again on a3), so converting the image is not
 something GemDB could do on a user's behalf. The guard reads the repository's
 version with
 `copydbf -i` and refuses, naming both versions and the directory to delete.
