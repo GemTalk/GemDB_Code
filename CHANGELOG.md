@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **GemDB now runs GemStone 4.0.0.a3, and an existing database cannot come with
+  it.** A database created by GemDB 1.5.1 or earlier was written by 4.0.0.a2,
+  and there is still no in-place upgrade between alphas. When the new engine
+  first starts, GemDB will stop and name the directory to delete, so the
+  database can be recreated. **Anything stored in it is lost, so copy out
+  whatever you still need before updating.**
+
 ## [1.5.1] - 2026-09-23
 
 The bundled Python runtime and MCP server move forward. The engine is

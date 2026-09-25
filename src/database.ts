@@ -122,7 +122,7 @@ export function removeDatabase(): void {
  * Pure, so the parsing can be tested without a database. `copydbf` prints a
  * block of file facts; the line that matters is
  *
- *     GemStone Version: 4.0.0.a2, Tue Sep 15 12:05:05 2026 (branch HEAD), 0fa9b443
+ *     GemStone Version: 4.0.0.a3, Wed Sep 23 14:35:44 2026 (branch HEAD), 0b873ee1
  *
  * and only the part before the first comma identifies the release.
  */
@@ -167,14 +167,15 @@ export class DatabaseVersionError extends Error {}
  * error that names neither the cause nor the cure.
  *
  * The same holds one alpha to the next, and that is the case a user actually
- * meets now: measured 2026-09-16, an Alpha1 extent still reads
+ * meets: measured 2026-09-16, an Alpha1 extent still reads
  * `compatibilityLevel: 855` under the a2 engine, so the a2 stone starts on it
- * and every login fails exactly as above. Alpha1 was withdrawn from the
- * catalog the same day a2 arrived, so every existing database is on the far
- * side of this guard.
+ * and every login fails exactly as above. Measured again 2026-09-24 for a2 ->
+ * a3, with the same result: 855 either way, the a3 stone starts on an a2
+ * extent, `gslist` says OK, and the login fails with 4045. So every pin move
+ * puts every existing database on the far side of this guard.
  *
  * There is no in-place upgrade to offer instead: 3.7.5 shipped
- * `bin/upgradeImage`, and no 4.0 alpha ships one (checked again on a2), so
+ * `bin/upgradeImage`, and no 4.0 alpha ships one (checked again on a3), so
  * converting the image is not something GemDB could do on the user's behalf
  * even if it wanted to. Saying
  * so and stopping is the honest move, and at this stage of the product — very
