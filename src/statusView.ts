@@ -331,8 +331,12 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
         description: 'not configured',
         tooltip:
           'systemd will destroy the database’s shared memory when you log out of this machine. ' +
-          'GemDB offers to fix this when it starts.',
+          'Click to fix it — this runs a setup script with sudo.',
         icon: warn('warning'),
+        command: {
+          command: 'gemdb.configureRemoveIpc',
+          title: 'Keep the Database Running After Logout',
+        },
       });
     }
 
