@@ -205,6 +205,11 @@
         "command": "gemdb.configureSharedMemory",
         "title": "Configure Shared Memory",
         "category": "GemDB"
+      },
+      {
+        "command": "gemdb.configureRemoveIpc",
+        "title": "Keep the Database Running After Logout",
+        "category": "GemDB"
       }
     ],
     "menus": {
@@ -276,6 +281,10 @@
         {
           "command": "gemdb.runFile",
           "when": "resourceLangId == python"
+        },
+        {
+          "command": "gemdb.configureRemoveIpc",
+          "when": "isLinux"
         }
       ]
     },

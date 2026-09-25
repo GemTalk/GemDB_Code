@@ -28,6 +28,7 @@ import { isMcpRunning, startMcpServer, stopMcpServer } from './mcp';
 import { cloneBrainFreeze } from './demo';
 import { confirmMcpEnabled, registerMcpProvider, registerWithClient } from './mcpRegistration';
 import {
+  configureRemoveIpc,
   configureSharedMemory,
   ensureOsConfigured,
   isSharedMemoryConfigured,
@@ -244,6 +245,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(
       'gemdb.configureSharedMemory',
       refreshing(() => configureSharedMemory(extensionPath)),
+    ),
+    vscode.commands.registerCommand(
+      'gemdb.configureRemoveIpc',
+      refreshing(() => configureRemoveIpc(extensionPath)),
     ),
   );
 

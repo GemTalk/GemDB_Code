@@ -101,15 +101,31 @@ describe('runEnsureOsConfigured', () => {
     expect(reported).toEqual([{ outcome: 'configured', missing: 'both' }]);
   });
 
-  it('reports RemoveIPC staying unset without blocking the start', async () => {
+  it('does not ask about RemoveIPC alone when shared memory is already enough', async () => {
     const { calls, reported, world } = makeWorld({ sharedMemory: 'ok', removeIpc: 'unset' });
+
+    // Stock Linux: shared memory is already far above what the engine needs,
+    // and RemoveIPC is advisory. A sudo modal here would open a terminal for a
+    // setting that does not stop the database starting (issue #45); the
+    // status view offers it instead.
+    expect(await runEnsureOsConfigured(world)).toBe('alreadyConfigured');
+    expect(calls).toEqual([]);
+    expect(reported).toEqual([]);
+  });
+
+  it('reports RemoveIPC staying unset without blocking the start', async () => {
+    const { calls, world } = makeWorld({ sharedMemory: 'fixed', removeIpc: 'unset' });
 
     // Advisory: the database still starts (`osConfigAllowsStart` is true) — but the
     // outcome may not say `configured`, which would claim a fix that did not
     // take and over-count the very thing this event exists to measure.
     expect(await runEnsureOsConfigured(world)).toBe('removeIpcUnset');
-    expect(calls).toEqual(['confirm', 'runRemoveIpcScript', 'report(removeIpcUnset)']);
-    expect(reported).toEqual([{ outcome: 'removeIpcUnset', missing: 'removeIpc' }]);
+    expect(calls).toEqual([
+      'confirm',
+      'runSharedMemoryScript',
+      'runRemoveIpcScript',
+      'report(removeIpcUnset)',
+    ]);
   });
 
   it('distinguishes a half-configured machine from one where nothing took', async () => {
@@ -123,16 +139,28 @@ describe('runEnsureOsConfigured', () => {
     expect(reported).toEqual([{ outcome: 'removeIpcUnset', missing: 'both' }]);
   });
 
-  it('counts the steps it is about to ask for rather than hardcoding two', async () => {
-    const one = makeWorld({ sharedMemory: 'short', confirm: false });
-    await runEnsureOsConfigured(one.world);
-    expect(one.messages[0]).toContain('needs one change');
-    expect(one.messages[0]).toContain(`at least ${REQUIRED_SHARED_MEMORY_GB} GB`);
-    expect(one.messages[0]).not.toContain('RemoveIPC=no');
+  it('asks only for shared memory when logout survival is already set', async () => {
+    const { messages, world } = makeWorld({ sharedMemory: 'short', confirm: false });
 
-    const two = makeWorld({ sharedMemory: 'short', removeIpc: 'unset', confirm: false });
-    await runEnsureOsConfigured(two.world);
-    expect(two.messages[0]).toContain('needs 2 changes');
-    expect(two.messages[0]).toContain('RemoveIPC=no');
+    await runEnsureOsConfigured(world);
+
+    expect(messages[0]).toContain('needs one change');
+    expect(messages[0]).toContain(`at least ${REQUIRED_SHARED_MEMORY_GB} GB`);
+    expect(messages[0]).not.toContain('RemoveIPC=no');
+  });
+
+  it('offers logout survival as recommended, not as something the database needs', async () => {
+    const { messages, world } = makeWorld({
+      sharedMemory: 'short',
+      removeIpc: 'unset',
+      confirm: false,
+    });
+
+    await runEnsureOsConfigured(world);
+
+    const [needed, recommended] = messages[0].split('recommended change');
+    expect(needed).toContain('needs one change');
+    expect(needed).not.toContain('RemoveIPC=no');
+    expect(recommended).toContain('RemoveIPC=no');
   });
 });

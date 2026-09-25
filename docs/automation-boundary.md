@@ -54,6 +54,15 @@ activation. Verified end to end on 2026-08-14.
 Known cost: the modal dialog disables the download's Cancel button until
 answered. Accepted, since a non-modal prompt could be missed.
 
+**Setting `RemoveIPC=no` (Linux only) — offered, never raises the modal by
+itself.** Also `sudo` and machine-wide, but advisory: without it the database
+still starts, it just does not survive a logout. It joins the shared-memory
+modal when that is being asked anyway. Otherwise the status view's "Survives
+logout" row offers it (`gemdb.configureRemoveIpc`). It used to raise the modal
+alone, which on stock Linux (where shared memory is already far above 1 GB)
+meant every Linux user was asked for `sudo` over a setting that blocks
+nothing (issue #45).
+
 **Configuring other MCP clients** (Claude Code, Claude Desktop, Cursor). Their
 config files belong to the user, so `gemdb.registerMcpClient` copies the
 command or snippet to the clipboard and stops.

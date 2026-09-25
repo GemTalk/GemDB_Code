@@ -44,6 +44,7 @@ Several events carry `trigger`, which records what the user did to cause it:
 | `installCommand`      | ran **GemDB: Set Up GemDB**                                  |
 | `startCommand`        | ran **GemDB: Start GemDB**                               |
 | `sharedMemoryCommand` | ran **GemDB: Configure Shared Memory**                  |
+| `removeIpcCommand`    | ran **GemDB: Keep the Database Running After Logout**   |
 | `notebook`            | ran a notebook cell                                     |
 | `shell`               | ran **GemDB: Open GemDB Shell**                         |
 | `runFile`             | ran **GemDB: Run Python File in GemDB**                 |
@@ -99,17 +100,20 @@ during the download, which is the drop-out this pair measures.
 
 GemDB asked for permission to change an operating system setting, which needs
 the user's password. On first run the question comes up while the download is
-still going. Sent only when the dialog actually appeared, or when the user ran
-**GemDB: Configure Shared Memory** while shared memory was still too low. The
-dialog comes back every time the database is needed until the user agrees, but
-a failure is sent once for each trigger, outcome and `missing` until setup works
-or the database next starts. Running the command is not deduped: every run is
+still going. The dialog appears only when shared memory is too low; RemoveIPC
+is added to it when that is unset too, but never raises it alone. Sent only
+when the dialog actually appeared, when the user ran **GemDB: Configure Shared
+Memory** while shared memory was still too low, or when they ran **GemDB: Keep
+the Database Running After Logout** while RemoveIPC was unset. The dialog comes
+back every time the database is needed until the user agrees, but a failure is
+sent once for each trigger, outcome and `missing` until setup works or the
+database next starts. Running either command is not deduped: every run is
 sent.
 
 | Property  | Values                                                                        |
 | --------- | ----------------------------------------------------------------------------- |
 | `trigger` | see above                                                                     |
-| `missing` | what needed changing: `sharedMemory`, `removeIpc` (Linux only), or `both`     |
+| `missing` | what needed changing: `sharedMemory`, `removeIpc` (Linux only, from the command), or `both` |
 | `outcome` | `configured`: it worked.<br>`declined`: the user said no.<br>`stillUnconfigured`: shared memory is still too low, so the database cannot start.<br>`removeIpcUnset`: the database starts, but will stop when the user logs out. |
 
 ### `databaseStarted`

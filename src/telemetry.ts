@@ -42,6 +42,7 @@ export const TRIGGER = {
   installCommand: 'installCommand', // gemdb.install
   startCommand: 'startCommand', // gemdb.start
   sharedMemoryCommand: 'sharedMemoryCommand', // gemdb.configureSharedMemory
+  removeIpcCommand: 'removeIpcCommand', // gemdb.configureRemoveIpc
   notebook: 'notebook', // a notebook cell batch
   shell: 'shell', // Open GemDB Shell
   runFile: 'runFile', // Run Python File
@@ -400,9 +401,11 @@ const reportedOsConfigFailures = new Set<string>();
 /**
  * The shared-memory/RemoveIPC modal was shown, and how it went.
  *
- * Emitted only when the modal actually appeared, or when "Configure Shared
+ * Emitted only when the modal actually appeared, when "Configure Shared
  * Memory" ran while shared memory was short (`sharedMemoryCommand`, the path
- * back after a decline) — never on the already-configured fast path, which is
+ * back after a decline), or when the status view's RemoveIPC fix ran while it
+ * was unset (`removeIpcCommand`, the only route to it once shared memory is
+ * fine) — never on the already-configured fast path, which is
  * silent by design and would just be volume. `trigger` is what earns this
  * event: CLAUDE.md spends three paragraphs on *where* to ask for shared memory
  * and names two rejected placements, and nobody has measured whether the
@@ -412,8 +415,9 @@ const reportedOsConfigFailures = new Set<string>();
  * is configured or the database next starts, for the reason
  * `reportDatabaseStarted` dedups its own: after a decline the modal comes back
  * on every `ensureRunning`, so a user who keeps saying no would otherwise send
- * one event per cell batch. `sharedMemoryCommand` is exempt: each one is a
- * sudo run the user asked for by name, so its volume is theirs to set.
+ * one event per cell batch. `sharedMemoryCommand` and `removeIpcCommand` are
+ * exempt: each one is a sudo run the user asked for by name, so its volume is
+ * theirs to set.
  */
 export function reportOsConfigPrompted(
   trigger: Trigger,
@@ -422,7 +426,7 @@ export function reportOsConfigPrompted(
 ): void {
   if (outcome === OS_CONFIG_OUTCOME.configured) {
     reportedOsConfigFailures.clear();
-  } else if (trigger !== TRIGGER.sharedMemoryCommand) {
+  } else if (trigger !== TRIGGER.sharedMemoryCommand && trigger !== TRIGGER.removeIpcCommand) {
     const key = `${trigger}:${outcome}:${missing}`;
     if (reportedOsConfigFailures.has(key)) return;
     reportedOsConfigFailures.add(key);
