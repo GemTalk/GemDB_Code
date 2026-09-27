@@ -342,10 +342,21 @@ function runTopaz(script: string, label: string): Promise<string> {
   });
 }
 
-/** The login preamble every script below shares. */
+/**
+ * The login preamble every script below shares.
+ *
+ * The stone is named by `localhost`, not bare. The router's worker gems take
+ * their stone NRS from this login (`defaultStoneNRSFromCurrent`), and a bare
+ * name makes the kernel fill in the machine's hostname — which need not
+ * resolve (a Mac on a cable modem names itself from its ISP's PTR record:
+ * 4136, getaddrinfo), and which, where it resolves to the LAN address, had
+ * the stone drop the login (4136, rejectCode Invalid). Both measured
+ * 2026-09-27; filed upstream as mcp_server#56. GemDB's own sessions name
+ * `localhost` for the same reason (`stoneNrs` in session.ts).
+ */
 function topazLogin(): string {
   return [
-    `set gemstone ${STONE_NAME}`,
+    `set gemstone !tcp@localhost#server!${STONE_NAME}`,
     `set username ${DB_USER}`,
     `set password ${DB_PASSWORD}`,
     'login',
