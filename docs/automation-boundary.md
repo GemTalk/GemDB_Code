@@ -55,6 +55,27 @@ The fresh clone opens in Restricted Mode, and VS Code asks about trust the
 first time the user runs a cell or opens a terminal there. That question stays
 VS Code's: see "Workspace Trust" under "Asked".
 
+**Connecting Claude Code to the MCP server — on request only** (`claudeCode.ts`).
+Picking Claude Code from **Connect an AI Agent to GemDB** runs
+`claude mcp remove` and then `claude mcp add` at local scope in the workspace
+folder, and shows what ran and the command that undoes it. It used to copy the
+command instead, like the other clients. Three things moved it:
+
+- the pick is the consent, and it is a request for exactly this;
+- Claude Code's own CLI writes its own file, so GemDB edits nothing it does
+  not own, and the undo is one command;
+- the paste it replaced did not work for most users: the Claude Code VS Code
+  extension ships its own `claude` and does not put it on the PATH, so
+  pasting into a terminal said "command not found". GemDB finds the bundled
+  one.
+
+Local scope, not user, because every Claude Code session connects to every
+server it is configured with, and each connection holds one of the database's
+ten sessions. At user scope, every Claude Code window in every project would
+spend one. GemDB never uses `claude mcp get` or `list` to look before
+changing anything, because both connect to the server to report its status.
+It runs only in a trusted folder (see "Workspace Trust" under "Asked").
+
 ## Asked
 
 **Raising shared memory — always prompts; never automate it.** It needs
@@ -82,20 +103,23 @@ alone, which on stock Linux (where shared memory is already far above 1 GB)
 meant every Linux user was asked for `sudo` over a setting that blocks
 nothing (issue #45).
 
-**Configuring other MCP clients** (Claude Code, Claude Desktop, Cursor). Their
-config files belong to the user, so `gemdb.registerMcpClient` copies the
-command or snippet to the clipboard and stops.
+**Configuring Claude Desktop and Cursor for the MCP server.** Their config
+files belong to the user, and neither has a CLI that would do the edit for us,
+so `gemdb.registerMcpClient` copies the snippet to the clipboard and stops.
 
 **Workspace Trust — VS Code asks, GemDB never does.** GemDB declares
-`"limited"` Restricted Mode support and adds no trust checks of its own,
-because VS Code already asks at the two points where a folder's code would
-run: before a notebook cell executes (its notebook execution service calls
+`"limited"` Restricted Mode support and adds almost no trust checks of its
+own, because VS Code already asks at the two points where a folder's code
+would run: before a notebook cell executes (its notebook execution service calls
 `requestWorkspaceTrust` for every kernel, not just Jupyter's) and before a
 terminal process starts, which covers the GemDB Shell and Run File. Both
 read from the VS Code 1.139.1 bundle on 2026-09-25. What is left runs no folder
 content — setup, start and stop, the status view, the README preview — and
 machine-scoped settings mean a folder's `.vscode/settings.json` cannot steer
-it. `manifest.test.ts` holds both halves.
+it. `manifest.test.ts` holds both halves. The one exception is connecting
+Claude Code, which runs Claude Code's CLI with the folder as its working
+directory, outside both of VS Code's gates. It checks `isTrusted` and, in an
+untrusted folder, offers the trust editor or the clipboard instead.
 
 Two things GemDB deliberately does not do. It does not prompt for trust
 itself: the stable API can only read trust (`isTrusted`,

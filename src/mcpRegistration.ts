@@ -1,4 +1,12 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
+import {
+  type ClaudeCodeOutcome,
+  addArgs,
+  connectClaudeCodeHere,
+  removeArgs,
+  spelled,
+} from './claudeCode';
 import { mcpEnabled, mcpReadOnly } from './config';
 import { log } from './log';
 import { bundledMcpStamp, mcpLabel, mcpUrl } from './mcp';
@@ -16,19 +24,21 @@ import { isSupportedPlatform } from './platform';
  * enabled, it is scoped to this editor, and disabling GemDB takes it away.
  * Nothing is written to a file the user would have to find and undo.
  *
- * **Every other client is handed the details, never configured.** Claude Code,
- * Claude Desktop and Cursor are each configured by a JSON file the user owns —
- * `~/.claude.json`, `claude_desktop_config.json`, `~/.cursor/mcp.json` — and
- * editing those is the other side of the line: persistent, global, outside the
- * root path, and not ours to undo. It is the same call the README makes about
- * the shell profile, which asks rather than does. So `registerWithClient`
- * offers the exact command or snippet for the client the user picks, puts it on
- * the clipboard, and stops there.
+ * **Claude Code is configured on request, by its own CLI.** Picking it from
+ * "Connect an AI Agent to GemDB" runs `claude mcp add` for this folder — see
+ * `claudeCode.ts` for why that one client, why local scope, and why only when
+ * asked. The pick is the consent, Claude Code's CLI does the writing, and the
+ * undo is one command GemDB shows. When it cannot run (no folder, an untrusted
+ * one, no `claude` to be found) it falls back to the clipboard below.
  *
- * The asymmetry is not timidity. A user who runs `claude mcp add` has chosen
- * to add a server to their agent; GemDB writing that file on their behalf, from
- * an editor they opened to write Python, is a different act with the same
- * result and no consent.
+ * **Every other client is handed the details, never configured.** Claude
+ * Desktop and Cursor are configured by a JSON file the user owns —
+ * `claude_desktop_config.json`, `~/.cursor/mcp.json` — with no CLI of their
+ * own to do it, and GemDB editing those files is the other side of the line:
+ * persistent, global, outside the root path, and not ours to undo. It is the
+ * same call the README makes about the shell profile, which asks rather than
+ * does. So `registerWithClient` offers the exact snippet for the client the
+ * user picks, puts it on the clipboard, and stops there.
  */
 
 /** The id in `contributes.mcpServerDefinitionProviders`; the two must match. */
@@ -129,9 +139,12 @@ interface ClientRecipe {
 const CLIENT_RECIPES: ClientRecipe[] = [
   {
     label: 'Claude Code',
-    detail: 'a `claude mcp add` command',
+    detail: 'added for this folder, by Claude Code’s own CLI',
     snippet: (url) => `claude mcp add --transport http gemdb ${url}`,
-    instruction: 'Paste it into a terminal. Add `--scope project` to share it through .mcp.json.',
+    instruction:
+      'Paste it into a terminal in the project you use Claude Code in. It applies to that project ' +
+      'only. `--scope user` would apply it to every project, at the cost of one database session ' +
+      'for every Claude Code session you run.',
     documentation: 'https://docs.claude.com/en/docs/claude-code/mcp',
   },
   {
@@ -198,10 +211,9 @@ export async function confirmMcpEnabled(): Promise<boolean> {
 }
 
 /**
- * Show the server's address and hand over the configuration for one client.
- *
- * Deliberately ends at the clipboard. See the note at the top of this file for
- * why GemDB does not write these files itself.
+ * Show the server's address and connect one client: Claude Code by running its
+ * CLI, the rest by the clipboard. See the note at the top of this file for why
+ * GemDB treats them differently.
  */
 export async function registerWithClient(): Promise<void> {
   const url = mcpUrl();
@@ -223,16 +235,99 @@ export async function registerWithClient(): Promise<void> {
   );
   if (!picked) return;
 
-  const snippet = picked.recipe.snippet(url);
+  if (picked.label === 'Claude Code') {
+    await reportClaudeCode(await connectClaudeCodeHere(url), picked.recipe, url);
+    return;
+  }
+  await copyRecipe(picked.recipe, url);
+}
+
+/**
+ * Put one client's configuration on the clipboard and say what to do with it.
+ *
+ * `why`, when given, is the reason GemDB is copying rather than doing — shown
+ * first, so a user who expected Claude Code to be connected learns why it was
+ * not before reading instructions for doing it by hand.
+ */
+async function copyRecipe(recipe: ClientRecipe, url: string, why?: string): Promise<void> {
+  const snippet = recipe.snippet(url);
   await vscode.env.clipboard.writeText(snippet);
 
   const choice = await vscode.window.showInformationMessage(
-    `Copied the ${picked.label} configuration for GemDB's MCP server.`,
-    { modal: true, detail: `${snippet}\n\n${picked.recipe.instruction}` },
-    ...(picked.recipe.documentation ? ['Open the Docs'] : []),
+    `Copied the ${recipe.label} configuration for GemDB's MCP server.`,
+    {
+      modal: true,
+      detail: [why, snippet, recipe.instruction].filter(Boolean).join('\n\n'),
+    },
+    ...(recipe.documentation ? ['Open the Docs'] : []),
   );
-  if (choice === 'Open the Docs' && picked.recipe.documentation) {
-    await vscode.env.openExternal(vscode.Uri.parse(picked.recipe.documentation));
+  if (choice === 'Open the Docs' && recipe.documentation) {
+    await vscode.env.openExternal(vscode.Uri.parse(recipe.documentation));
+  }
+}
+
+/** Tell the user what connecting Claude Code did, or hand them the command. */
+async function reportClaudeCode(
+  outcome: ClaudeCodeOutcome,
+  recipe: ClientRecipe,
+  url: string,
+): Promise<void> {
+  switch (outcome.kind) {
+    case 'cancelled':
+      return;
+    case 'connected': {
+      log(`Claude Code is connected to GemDB in ${outcome.folder}.`);
+      // Modal, like the clipboard path, because what it carries — the command
+      // that ran and the one that undoes it — is the part a user needs to be
+      // able to read, and a toast that fades takes both with it.
+      void vscode.window.showInformationMessage(
+        `${outcome.replaced ? 'Updated' : 'Connected'} Claude Code to GemDB in ${path.basename(outcome.folder)}.`,
+        {
+          modal: true,
+          detail:
+            'Start a new Claude Code session to use it: a session that is already running ' +
+            'loaded its MCP servers when it started.\n\n' +
+            `GemDB ran, in ${outcome.folder}:\n${spelled(addArgs(url))}\n\n` +
+            'It applies to this folder only. To undo it:\n' +
+            spelled(removeArgs()),
+        },
+      );
+      return;
+    }
+    case 'untrusted': {
+      const choice = await vscode.window.showWarningMessage(
+        'GemDB connects Claude Code by running its CLI in this folder, and VS Code has not been told to trust it.',
+        'Manage Workspace Trust',
+        'Copy the Command',
+      );
+      if (choice === 'Manage Workspace Trust') {
+        await vscode.commands.executeCommand('workbench.trust.manage');
+      } else if (choice === 'Copy the Command') {
+        await copyRecipe(recipe, url);
+      }
+      return;
+    }
+    case 'noFolder':
+      await copyRecipe(
+        recipe,
+        url,
+        'Open a folder and GemDB adds it for you: Claude Code is connected one project at a time.',
+      );
+      return;
+    case 'noClaude':
+      await copyRecipe(
+        recipe,
+        url,
+        'GemDB could not find Claude Code: neither the Claude Code extension nor a `claude` on the PATH.',
+      );
+      return;
+    case 'failed':
+      await copyRecipe(
+        recipe,
+        url,
+        `Claude Code could not add the server (see the GemDB log):\n${outcome.output}`,
+      );
+      return;
   }
 }
 
