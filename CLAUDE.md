@@ -235,6 +235,20 @@ first-install path, and `startProcesses` before the stone starts, because an
 extension update reaches that line without preparing anything — engine
 downloaded, database present, Grail staged, so `isInstalled()` is true.
 
+**GemDB runs in Restricted Mode and adds no trust checks — keep it that
+way.** `capabilities.untrustedWorkspaces` is `"limited"`: without it GemDB is
+disabled in any folder the user has not trusted, and in VS Code 1.139.1 a new
+folder opens restricted with only a banner, so GemDB would vanish silently —
+status bar, commands, and the demo's README with them. It is safe without
+gates of its own because VS Code asks for trust before any notebook cell
+executes (whoever's kernel) and before any terminal starts (the Shell, Run
+File). So **a new feature that runs folder content some other way** — spawning
+a process on a workspace file, reading workspace config — needs an
+`isTrusted` check, and **every new setting needs `"scope": "machine"`**, or a
+cloned repository's `.vscode/settings.json` can choose the root path that
+uninstall deletes under. `manifest.test.ts` enforces the second; details in
+`docs/automation-boundary.md`.
+
 ## What the shell is called
 
 The interactive Python prompt is **GemDB Shell** everywhere a user can see it:
@@ -259,10 +273,15 @@ Exceptions worth flagging, because they aren't derivable from the file itself:
   and `gciLibraryError.ts` so upstream fixes can be pulled in with a plain
   `cp`. ESLint ignores it; keep it that way, and send fixes upstream rather
   than patching here.
-- **`demo.ts` is the one command that writes outside the root path** —
-  cloning the Brain Freeze demo needs a folder-dialog consent, since
-  everything else GemDB does is confined to (and undone by deleting) the root
-  path.
+- **`demo.ts` installs the Brain Freeze demo into `<rootPath>/brain-freeze`
+  and asks nothing** — the root path is what makes that automatable, so do
+  not reintroduce a folder picker without moving the step back to "Asked" in
+  `docs/automation-boundary.md`. It is the one directory under the root path
+  that holds the user's own work (their commits to the demo), which is why
+  `uninstall` removes the engine, Grail and the MCP payload by name and never
+  the root path wholesale. Its README is shown by the *next* activation, not
+  the command — `openFolder` restarts or replaces the extension host — via a
+  note in global storage (`takePromisedReadme`).
 
 `docs/` holds design notes — decisions and measurements, not shipped.
 [`docs/README.md`](docs/README.md) says which one to read before which change.

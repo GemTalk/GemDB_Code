@@ -11,9 +11,19 @@ export default tseslint.config(
     // its own, since (unlike Prettier 3) it does not read .gitignore: out/**
     // is this project's own bundle, grail/** and mcp/** are third-party
     // payloads staged by bundle-grail.sh and bundle-mcp.sh, dist/** is
-    // packages fetched from CI by fetch-vsix.sh, and .test-extent/** is the
-    // database extent build-test-extent.sh builds for the integration suite.
-    ignores: ['out/**', 'grail/**', 'mcp/**', 'dist/**', '.test-extent/**', 'src/gci/**'],
+    // packages fetched from CI by fetch-vsix.sh, .test-extent/** is the
+    // database extent build-test-extent.sh builds for the integration suite,
+    // and .vscode-test/** is the editor profile the clean-profile launch
+    // configuration runs in.
+    ignores: [
+      'out/**',
+      'grail/**',
+      'mcp/**',
+      'dist/**',
+      '.test-extent/**',
+      '.vscode-test/**',
+      'src/gci/**',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

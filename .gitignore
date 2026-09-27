@@ -24,6 +24,10 @@ mcp/
 # a user's database is theirs and Grail is installed into it.
 .test-extent/
 
+# The VS Code profile "Run GemDB (clean profile)" in .vscode/launch.json
+# starts with. Delete it to start over as a new user.
+.vscode-test/
+
 # Release packages downloaded from CI by scripts/fetch-vsix.sh. Built
 # elsewhere, published from here, kept nowhere.
 dist/
