@@ -91,6 +91,13 @@ runtime and MCP server move forward with it.
   counts as a change, so two sessions calling the same function for the first
   time no longer conflict when they commit.
 
+- **The MCP server starts on a Mac whose network name doesn't resolve.** Its
+  agent sessions reached the database by your computer's network name. A Mac
+  connected straight to a cable modem often takes that name from its internet
+  provider, and nothing can look it up, so every agent session failed to log
+  in and the server never started. It now reaches the database through
+  `localhost`, as the rest of GemDB always has.
+
 - **`logging` accepts `exc_info`.** Frameworks such as Flask pass it when they
   log an exception. `logging` used to raise a `TypeError` about `exc_info`
   instead, so the exception being reported was never recorded, and an error in
