@@ -56,9 +56,10 @@ first time the user runs a cell or opens a terminal there. That question stays
 VS Code's: see "Workspace Trust" under "Asked".
 
 **Connecting Claude Code to the MCP server — on request only** (`claudeCode.ts`).
-Picking Claude Code from **Connect an AI Agent to GemDB** runs
-`claude mcp remove` and then `claude mcp add` at local scope in the workspace
-folder, and shows what ran and the command that undoes it. It used to copy the
+Picking Claude Code from **Connect an AI Agent to GemDB** runs `claude mcp add`
+at local scope in the first workspace folder, and shows what ran and the
+command that undoes it. If a `gemdb` entry already exists there, it asks before
+replacing it, since the user may have written that one themselves. It used to copy the
 command instead, like the other clients. Three things moved it:
 
 - the pick is the consent, and it is a request for exactly this;

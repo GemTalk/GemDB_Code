@@ -4,6 +4,7 @@ import {
   type ClaudeCodeOutcome,
   addArgs,
   connectClaudeCodeHere,
+  connectableFolderHere,
   removeArgs,
   spelled,
 } from './claudeCode';
@@ -118,6 +119,8 @@ export function registerMcpProvider(
 }
 
 interface ClientRecipe {
+  /** What the code matches on, so a relabelled menu item keeps its behaviour. */
+  id: 'claudeCode' | 'claudeDesktop' | 'cursor' | 'url';
   label: string;
   detail: string;
   /** What goes on the clipboard. */
@@ -138,8 +141,9 @@ interface ClientRecipe {
  */
 const CLIENT_RECIPES: ClientRecipe[] = [
   {
+    id: 'claudeCode',
     label: 'Claude Code',
-    detail: 'added for this folder, by Claude Code’s own CLI',
+    detail: 'a `claude mcp add` command',
     snippet: (url) => `claude mcp add --transport http gemdb ${url}`,
     instruction:
       'Paste it into a terminal in the project you use Claude Code in. It applies to that project ' +
@@ -148,6 +152,7 @@ const CLIENT_RECIPES: ClientRecipe[] = [
     documentation: 'https://docs.claude.com/en/docs/claude-code/mcp',
   },
   {
+    id: 'claudeDesktop',
     label: 'Claude Desktop',
     detail: 'JSON for claude_desktop_config.json',
     snippet: (url) => JSON.stringify({ mcpServers: { gemdb: { type: 'http', url } } }, null, 2),
@@ -155,12 +160,14 @@ const CLIENT_RECIPES: ClientRecipe[] = [
       'Merge it into claude_desktop_config.json (Settings → Developer → Edit Config), then restart Claude Desktop.',
   },
   {
+    id: 'cursor',
     label: 'Cursor',
     detail: 'JSON for ~/.cursor/mcp.json',
     snippet: (url) => JSON.stringify({ mcpServers: { gemdb: { url } } }, null, 2),
     instruction: 'Merge it into ~/.cursor/mcp.json, or the workspace .cursor/mcp.json.',
   },
   {
+    id: 'url',
     label: 'Something else',
     detail: 'just the URL',
     snippet: (url) => url,
@@ -219,10 +226,17 @@ export async function registerWithClient(): Promise<void> {
   const url = mcpUrl();
   const readOnly = mcpReadOnly();
 
+  // Worked out now rather than written into the recipe: whether GemDB can do
+  // it for you depends on this window, and a menu that promises "added for
+  // you" and then copies a command has told the user something untrue.
+  const claudeFolder = connectableFolderHere();
   const picked = await vscode.window.showQuickPick(
     CLIENT_RECIPES.map((recipe) => ({
       label: recipe.label,
-      description: recipe.detail,
+      description:
+        recipe.id === 'claudeCode' && claudeFolder
+          ? `added for ${path.basename(claudeFolder)} by Claude Code’s own CLI`
+          : recipe.detail,
       recipe,
     })),
     {
@@ -235,7 +249,7 @@ export async function registerWithClient(): Promise<void> {
   );
   if (!picked) return;
 
-  if (picked.label === 'Claude Code') {
+  if (picked.recipe.id === 'claudeCode') {
     await reportClaudeCode(await connectClaudeCodeHere(url), picked.recipe, url);
     return;
   }
@@ -280,7 +294,7 @@ async function reportClaudeCode(
       // Modal, like the clipboard path, because what it carries — the command
       // that ran and the one that undoes it — is the part a user needs to be
       // able to read, and a toast that fades takes both with it.
-      void vscode.window.showInformationMessage(
+      await vscode.window.showInformationMessage(
         `${outcome.replaced ? 'Updated' : 'Connected'} Claude Code to GemDB in ${path.basename(outcome.folder)}.`,
         {
           modal: true,
@@ -325,7 +339,10 @@ async function reportClaudeCode(
       await copyRecipe(
         recipe,
         url,
-        `Claude Code could not add the server (see the GemDB log):\n${outcome.output}`,
+        (outcome.removedOld
+          ? 'GemDB removed the old "gemdb" entry, and Claude Code then could not add the new one, ' +
+            'so Claude Code has no GemDB server for this folder now. Paste this to add it'
+          : 'Claude Code could not add the server') + ` (see the GemDB log):\n${outcome.output}`,
       );
       return;
   }

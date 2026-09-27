@@ -261,10 +261,9 @@ Code calls it when it is about to start the server, so an agent's first tool
 call brings the database up the same way a notebook's first cell does.
 
 **Claude Code is connected on request, by its own CLI.** Picking Claude Code
-from **GemDB: Connect an AI Agent to GemDB** runs `claude mcp remove gemdb
---scope local`, then `claude mcp add --transport http --scope local gemdb
-<url>`, in the workspace folder. It then shows what ran and the command that
-undoes it. All of this was measured against Claude Code 2.1.283:
+from **GemDB: Connect an AI Agent to GemDB** runs `claude mcp add --transport
+http --scope local gemdb <url>` in the first workspace folder. It then shows
+what ran and the command that undoes it. All of this was measured against Claude Code 2.1.283:
 
 - **Which `claude`.** The Claude Code VS Code extension's bundled CLI
   (`resources/native-binary/claude` in its install directory) comes first,
@@ -272,17 +271,26 @@ undoes it. All of this was measured against Claude Code 2.1.283:
   the command GemDB used to copy failed for most people who pasted it. The
   location inside the extension is not documented, so a layout change there
   falls through to the PATH, and then to the clipboard.
-- **Local scope.** It is keyed by the working directory, so the entry reaches
-  Claude Code sessions in this project only. Every Claude Code session
+- **Local scope, in the first folder.** Local scope is keyed by the working
+  directory, so the entry reaches Claude Code sessions in this project only.
+  The first folder because the Claude Code panel uses `workspaceFolders[0]`
+  (or the home directory in an empty window) wherever it needs a root, read
+  from its 2.1.283 `extension.js`. In a multi-root window, any other folder
+  would register GemDB where the panel never looks. Every Claude Code session
   connects to every server it is configured with, so user scope would make
   every Claude Code window in every project spend one of the database's ten
   sessions, and each restart would leave a worker behind (see "The session
   leak" above). Project scope would commit a `127.0.0.1` URL for teammates
   who may not run GemDB.
-- **Remove, then add.** `add` fails, with exit 1, when the name already exists
-  in that scope, and there is no upsert. So running it again is how a
-  changed port gets picked up. `get` and `list` are not used to look first:
-  both connect to the server to report its status, which costs a worker gem.
+- **Add first; replace only when asked.** `add` fails, with exit 1 and
+  "already exists in local config", when the name is taken, and there is no
+  upsert. Only that answer leads to a remove, and only after the user agrees,
+  because the entry may be one they wrote for something else. Replacing is
+  how a changed port gets picked up. Any other failure removes nothing, so an
+  add that fails can't cost a working entry. If the add fails *after* a
+  remove, the message says the old entry is gone. `get` and `list` are not
+  used to look first: both connect to the server to report its status, which
+  costs a worker gem.
 - **Claude Code does not read VS Code's MCP list.** The automatic registration
   above reaches VS Code's own chat, not the Claude Code panel. That bridge
   is an open request upstream

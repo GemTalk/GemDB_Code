@@ -22,8 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   command to paste. The copied command didn't work for most people who
   pasted it: the Claude Code extension doesn't put `claude` on your PATH, and
   GemDB finds the copy it ships. It applies to that project only, since every
-  Claude Code session spends a database session, and running it again updates
-  it after a port change. GemDB shows what it ran and how to undo it. With no
+  Claude Code session spends a database session. Running it again offers to
+  replace the entry, which is how it picks up a port change. GemDB shows what it ran and how to undo it. With no
   folder open, an untrusted folder, or no Claude Code to be found, it copies
   the command as before.
 
