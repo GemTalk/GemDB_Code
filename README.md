@@ -124,17 +124,19 @@ already running.
 and say yes, or set `gemdb.mcp.enabled`. The reason is in the second bullet
 below, and it is a real limitation rather than a formality.
 
-For an agent outside VS Code, run **GemDB: Connect an AI Agent to GemDB**. Pick
-the client and GemDB copies the exact command or JSON it needs — for Claude
-Code, for example:
+For any other agent, run **GemDB: Connect an AI Agent to GemDB** and pick
+the client:
 
-```sh
-claude mcp add --transport http gemdb http://127.0.0.1:50390/mcp
-```
-
-GemDB does not edit those configuration files for you. They are yours, they
-persist, and they are outside anything GemDB would clean up — the same reason
-it asks rather than edits your shell profile.
+- **Claude Code**, including its VS Code panel, which does not read the
+  editor's MCP list: GemDB runs Claude Code's own `claude mcp add` for the
+  open folder, and shows you what it ran and how to undo it. It applies to
+  that project only, because every Claude Code session connects to every
+  server it knows about, and each one spends a database session. Start a new
+  Claude Code session to pick it up.
+- **Claude Desktop or Cursor**: GemDB copies the JSON to merge into that
+  client's configuration file. It doesn't edit those files for you. They are
+  yours, they persist, and they're outside anything GemDB would clean up,
+  which is the same reason it asks rather than edits your shell profile.
 
 Two things worth knowing:
 

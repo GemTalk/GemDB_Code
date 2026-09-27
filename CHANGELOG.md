@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   database can be recreated. **Anything stored in it is lost, so copy out
   whatever you still need before updating.**
 
+- **Connecting Claude Code to GemDB's MCP server is one click.** Picking
+  Claude Code in **GemDB: Connect an AI Agent to GemDB** now runs Claude
+  Code's own `claude mcp add` for the open folder, instead of copying a
+  command to paste. The copied command didn't work for most people who
+  pasted it: the Claude Code extension doesn't put `claude` on your PATH, and
+  GemDB finds the copy it ships. It applies to that project only, since every
+  Claude Code session spends a database session. Running it again offers to
+  replace the entry, which is how it picks up a port change. GemDB shows what it ran and how to undo it. With no
+  folder open, an untrusted folder, or no Claude Code to be found, it copies
+  the command as before.
+
 - **Installing the Brain Freeze demo is one click, and it shows you where to
   start.** The command is now **GemDB: Install Brain Freeze Demo**, and it is
   a step in the Get Started walkthrough. It no longer asks where to put the
