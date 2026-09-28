@@ -166,7 +166,9 @@ issue rather than rediscovered:
   stub that raises on it. That handler must print with
   `print(traceback.format_exc())`, not `traceback.print_exc()`: `sys.stderr` is
   None in a gem, so `print_exc()` raises inside the handler and drops the
-  connection anyway. (Grail #848, #849.)
+  connection anyway. (Grail #848, #849.) Grail #1163, in every pin
+  from `372f558` on, makes `logging` accept `exc_info`. That is upstream's claim and
+  has not been re-measured here.
 - **`gemdb file.py` does not put the script's directory on `sys.path`** the way
   `python3 file.py` does, and `sys.path` is otherwise empty, so a script cannot
   import the file next to it until it inserts its own directory. (Grail #847.)
@@ -186,14 +188,19 @@ scripts that print which behaviour the Grail in front of you has. Check which
 Grail commit is pinned (`vendor-pins.sh`) before relying on either version of
 these findings.
 
-**`gemdb file.py` starts with a dirty session, so `gemdb.transaction()` cannot
-be a script's first statement.** `commit()` or `abort()` first. Walking the
-preamble one send at a time in a clean session: setting the flag left `System
-needsCommit` false, the `#GrailConsole` store leaves it false, and `importlib
-runPath:` sets it true — so it is `runPath` itself, not the file's own code (a
-script whose first line is `import gemstone; print(gemstone.needs_commit)`
-already prints True). The transaction block's entry check then blames the user
-for Grail's plumbing. Shell and notebook sessions are unaffected: they evaluate
-through `evaluateSource:usingModuleScope:` and a fresh one runs a transaction
-block as its first action. The fix belongs in Grail (filed as Grail #851, with
-the other two faces of the same root cause).
+**`gemdb file.py` used to start with a dirty session, so `gemdb.transaction()`
+could not be a script's first statement — fixed from Grail `372f558` on.**
+Walking the preamble one send at a time in a clean session: setting the flag
+left `System needsCommit` false, the `#GrailConsole` store left it false, and
+`importlib runPath:` set it true — so it was `runPath` itself, not the file's
+own code (a script whose first line is
+`import gemstone; print(gemstone.needs_commit)` printed True). The transaction
+block's entry check then blamed the user for Grail's plumbing. Grail #851 was
+fixed in two halves: a script's `__main__` is session-local, so `runPath:`
+writes nothing (#1179), and a first read of a function in a committed module no
+longer caches into that module (#1167), so a pure call leaves a clean session
+clean. Measured on 2026-09-27 at Grail `b86985f`: that first line prints False,
+and a script that opens with `with gemdb.transaction():` exits 0. On a Grail
+older than `372f558`, `commit()` or `abort()` first. Shell and notebook
+sessions were never affected: they evaluate through
+`evaluateSource:usingModuleScope:`.

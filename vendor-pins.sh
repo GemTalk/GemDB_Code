@@ -11,40 +11,53 @@
 # Bumping a pin is a one-line PR to this file; a green CI run on it is the
 # proof the new upstream commit works.
 
-# Grail: main as of 2026-09-23, 282 commits (~110 PRs) on from the previous pin
-# (9a0b0fc). Nothing GemDB's installer drives was renamed or moved, and the C
-# shim is untouched, so the shim needs no source change -- though, as always,
-# every platform rebuilds it. Three changes are worth knowing about:
+# Grail: main as of 2026-09-27, 127 commits (43 PRs) on from the previous pin
+# (9f46b86). The C shim, every script resources/install-grail.sh drives, and
+# the REQUIRED list in bundle-grail.sh are untouched -- the only deletion is
+# src/smalltalk/Python/ipaddress.gs, replaced by CPython's own module (#1175),
+# and install.gs drops its globals in the same commit. Two changes bear on
+# notes GemDB keeps:
 #
-# - IR codegen is ON by default (#1087). GRAIL_IR_CODEGEN now DISABLES it
-#   (0/false/no/off); unset or empty means IR. A method compiled to IR has no
-#   call-site positions, which is what mcp_server #43/#44 below account for.
-# - `gemdb.schema` (#1076, #1084, #1089) is a new module beside gemdb.admin and
-#   gemdb.sessions -- layout/report/drop/rename/compact for a schema change --
-#   and deployGemdb.gs now deploys it. It also stops re-executing a module that
-#   an earlier name's import closure already loaded.
-# - install.gs no longer runs a markForCollection on every install when
-#   STN_MAX_REPOSITORY_SIZE is unset (#1117), where GemDB's stone leaves it. An
-#   MFC needs every session to vote, so a stone with idle sessions timed it out
-#   and killed the install.
+# - Grail #851, the root of docs/grail.md's dirty-session note, is fixed in two
+#   halves. A first read of a function in a committed module no longer caches
+#   into that module (#1167), so a pure call leaves a clean session clean and
+#   two sessions making the same first call no longer conflict. And a script's
+#   `__main__` is session-local (#1179): `importlib runPath:`, which is what
+#   `gemdb file.py` calls, wrote 4 committed objects before a script's first
+#   line and now writes none, so `gemdb.transaction()` can be the first statement.
+# - Code run as a script or at grail.tpz's prompt gets `__name__ = '__main__'`,
+#   and type() / the Enum functional API / a class statement in evaluated code
+#   infer `__module__` from `__name__` (#1168, #1173). GemDB's notebook and
+#   shell scopes do not seed `__name__`, so they keep the old answer.
 #
-# Also: `durable`, a spike stdlib module on GemStone continuations (#1159), and
-# a long run of CPython-conformance fixes (errno, pathlib, codecs, eval/exec).
-PINNED_GRAIL_REF=9f46b86c52a17da1e8d4cec8a2d6a268ca9e9617
+# Also: IR position fixes (#1164, #1183) that mcp_server below relies on, dict
+# and comparison-protocol fixes (#1172, #1180, #1184, #1186), contextvars kept
+# per-session (#1176), logging accepting exc_info (#1163), and vendored
+# pickletools, dbm, xml.dom and an importlib.machinery facade. The last 16 PRs
+# are CPython conformance: CPython's own pickle, abc and collections.abc
+# (#1202, #1204), PEP 695 scopes (#1200), an os file-descriptor layer (#1193),
+# suspended generators that can be collected (#1195), a never-awaited
+# coroutine warning (#1199), @unittest.expectedFailure honoured (#1191), and
+# lru_cache comparing keys with Python equality (#1207).
+PINNED_GRAIL_REF=b86985f1a8604dae24fe740124aed96d58f0598a
 
-# mcp_server: main as of 2026-09-23, 21 commits on from the previous pin
-# (4f02545). No shell entry point or load.gs changed, and every selector
-# src/mcp.ts sends is still there. Two things moved:
+# mcp_server: main as of 2026-09-25, 26 commits (8 PRs) on from the previous pin
+# (afa3790). No load.gs changed, and every selector src/mcp.ts sends --
+# toolsetNames:, toolsetOptions:, workerUserId:, serverTitle:, forkOnPort:,
+# McpServer defaultToolsetNames -- is still there, as is the "gem session N
+# (host pid P)" status line it parses. What moved:
 #
-# - Breaking upstream, inert here: the kernel-class guard is gone (#33). The
-#   mutation tools no longer refuse a kernel class or `Globals`; the stone
-#   enforces that instead, via SystemObjectSecurityPolicy, for any worker user
-#   lacking ObjectSecurityPolicyProtection -- which is what
-#   `gemdb.mcp.readOnly`'s McpReadOnly user already is. GemDB never called it.
-# - The Python tools now ask Grail rather than reimplementing it: selectors
-#   decode through `importlib pythonNameOfSelector:`, classes come from
-#   `importlib pythonClasses`, and find_python_senders understands IR-compiled
-#   methods. The Grail APIs it calls predate the previous Grail pin, but the
-#   Grail above makes IR the default, and under IR the previous mcp_server pin
-#   answered find_python_senders with silent misses -- so bump the two together.
-PINNED_MCP_REF=afa3790aa0115f438f9703bb98dde854b9fca713
+# - Upstream CI moved to 4.0.0.a3, the engine GemDB already pins. a3's
+#   JsonParser refuses trailing whitespace after the outer value, so the server
+#   now strips it before parsing (#54) -- a pretty-printed or newline-ended
+#   request body was a -32700 under a3 before this.
+# - Breaking upstream, inert here: the worker bootstrap selector gained an
+#   `instructions:` keyword (#45), because the `initialize` instructions are
+#   now router config (McpRouter>>serverInstructions:). The router sends that
+#   selector to its own workers; GemDB never does. GemDB serves the full default
+#   surface plus Grail, so the stock instructions, which name the transaction
+#   tools, stay accurate.
+# - find_python_senders places each call and reference in an IR-compiled method
+#   with its own line (#46, #51) instead of one `line ?` per method, and
+#   eval_python runs as `__main__` (#52).
+PINNED_MCP_REF=d836520816d47bc5b8bb43386293f1b9dffbefce

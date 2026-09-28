@@ -10,6 +10,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: ['src/__integration__/**/*.test.ts'],
+    setupFiles: ['src/__mocks__/setup.ts'],
     // Starting a stone, filing anything in, and stopping it again are all
     // well past vitest's 5-second default.
     testTimeout: 120_000,

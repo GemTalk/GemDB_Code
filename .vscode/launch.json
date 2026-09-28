@@ -8,6 +8,28 @@
       "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
       "outFiles": ["${workspaceFolder}/out/**/*.js"],
       "preLaunchTask": "npm: watch"
+    },
+    {
+      // What a new user sees: a temporary profile, so no settings, no installed
+      // extensions (VS Code's built-ins still load, and so does this one) and
+      // none of GemDB's global storage. Thrown away when the window closes, so
+      // every run starts over. Two things it still shares with your own VS Code:
+      // the real ~/GemDB, and trusted folders, which VS Code keeps per
+      // installation rather than per profile. If a parent of ~/GemDB is
+      // trusted, the demo will never open in Restricted Mode here.
+      //
+      // --profile-temp rather than --user-data-dir: F5 opens the development
+      // window inside the VS Code already running, which can switch profiles
+      // but not data directories, so --user-data-dir and --extensions-dir are
+      // silently ignored (read from VS Code 1.139.1's
+      // openExtensionDevelopmentHostWindow, which passes only profile and
+      // profile-temp on).
+      "name": "Run GemDB (clean profile)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}", "--profile-temp"],
+      "outFiles": ["${workspaceFolder}/out/**/*.js"],
+      "preLaunchTask": "npm: watch"
     }
   ]
 }

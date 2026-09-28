@@ -376,10 +376,61 @@ fi
 
 # The database must be up — a linked gem still needs the stone. Starting it
 # here is the same judgement the editor makes: running Python is the request.
-if ! "$GEMSTONE/bin/gslist" 2>/dev/null | awk -v s="$STONE" '$(NF-1) == "Stone" && $NF == s { found = 1 } END { exit !found }'; then
-  echo "gemdb: starting the database…" >&2
-  if ! "$GEMSTONE/bin/startstone" -l "$ROOT/db/log/$STONE.log" "$STONE" >/dev/null 2>&1; then
-    echo "gemdb: the database at $ROOT could not be started. See $ROOT/db/log/$STONE.log" >&2
+#
+# Under a lock, because this is a check-then-act and EVERY gemdb command runs
+# it. Two commands close together — a terminal one while the editor starts the
+# database, say — would otherwise both see no stone and both start one, and
+# nothing downstream refuses the second: two stoned processes held one
+# extent0.dbf read-write for a week on a developer machine. It went unnoticed
+# because gslist keys Stone rows by name, so it shows ONE row for two stones
+# with the same name; the second only became visible when the first stopped
+# and it took over the row.
+#
+# mkdir is the primitive: it creates or fails, with no window between the test
+# and the claim, and it is there on a stock macOS where flock is not.
+stone_is_up() {
+  "$GEMSTONE/bin/gslist" 2>/dev/null | awk -v s="$STONE" '$(NF-1) == "Stone" && $NF == s { found = 1 } END { exit !found }'
+}
+
+if ! stone_is_up; then
+  STONE_LOCK="$ROOT/.gemdb-stone.lock"
+  held=""
+  tries=0
+  while [ "$tries" -lt 100 ]; do
+    if mkdir "$STONE_LOCK" 2>/dev/null; then
+      held=yes
+      echo $$ > "$STONE_LOCK/pid" 2>/dev/null
+      break
+    fi
+    # Held by someone. A lock whose owner is gone is debris from a crash and
+    # must not block every later command; one whose owner is alive is a start
+    # already in flight, and waiting for it is the whole point.
+    owner=$(cat "$STONE_LOCK/pid" 2>/dev/null)
+    if [ -z "$owner" ] || ! kill -0 "$owner" 2>/dev/null; then
+      rm -rf "$STONE_LOCK"
+      continue
+    fi
+    stone_is_up && break
+    sleep 0.1
+    tries=$((tries + 1))
+  done
+
+  if [ -n "$held" ]; then
+    # Re-check inside the lock. Between our first check and this one, whoever
+    # we queued behind may have started it -- which is the case the bare
+    # check-then-act got wrong.
+    if ! stone_is_up; then
+      echo "gemdb: starting the database…" >&2
+      if ! "$GEMSTONE/bin/startstone" -l "$ROOT/db/log/$STONE.log" "$STONE" >/dev/null 2>&1; then
+        rm -rf "$STONE_LOCK"
+        echo "gemdb: the database at $ROOT could not be started. See $ROOT/db/log/$STONE.log" >&2
+        exit 1
+      fi
+    fi
+    rm -rf "$STONE_LOCK"
+  elif ! stone_is_up; then
+    echo "gemdb: the database is not running and another process has been starting it for" >&2
+    echo "gemdb: ten seconds. See $ROOT/db/log/$STONE.log, or remove $STONE_LOCK if nothing is." >&2
     exit 1
   fi
 fi

@@ -30,7 +30,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['src/**/*.ts'],
+    files: ['src/**/*.ts', '__mocks__/**/*.ts'],
     languageOptions: {
       parserOptions: { project: './tsconfig.json' },
     },

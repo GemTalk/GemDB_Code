@@ -17,19 +17,21 @@ import * as vscode from 'vscode';
  * version — Grail requires a 4.0 of 2026-07-29 or later, which is what makes
  * an alpha the pin rather than a released 3.7.
  *
- * The version string is the whole of it, the `a2` suffix included: it names the
+ * The version string is the whole of it, the `a3` suffix included: it names the
  * product directory, the download, and the GCI library GemDB loads
- * (`libgcits-4.0.0.a2-64.dylib`).
+ * (`libgcits-4.0.0.a3-64.dylib`).
  *
- * **The catalog keeps one alpha at a time.** 4.0.0.Alpha1 was the pin until
- * 2026-09-16, when 4.0.0.a2 replaced it and the Alpha1 directory started
- * answering 404 — so a stale pin here is not merely old, it cannot be
- * downloaded on any platform. Note the spelling changed with it: `Alpha1` to a
- * lowercase `a2`. That is upstream's to choose and nothing here should try to
- * normalise it, but it does mean a version cannot be derived by incrementing
- * the last one.
+ * **Do not count on an old alpha staying downloadable.** 4.0.0.Alpha1 was the
+ * pin until 2026-09-16, when 4.0.0.a2 replaced it and the Alpha1 directory
+ * started answering 404 the same day — so a stale pin here can stop being
+ * downloadable on any platform, not merely be old. a2 was still listed beside
+ * a3 when a3 arrived on 2026-09-24, so the catalog does not always drop the
+ * previous alpha at once, but nothing promises it keeps one either. Note the
+ * spelling changed at a2: `Alpha1` to a lowercase `a2`. That is upstream's to
+ * choose and nothing here should try to normalise it, but it does mean a
+ * version cannot be derived by incrementing the last one.
  */
-export const PINNED_ENGINE_VERSION = '4.0.0.a2';
+export const PINNED_ENGINE_VERSION = '4.0.0.a3';
 
 /**
  * GemDB manages exactly one database, with fixed names. Hiding the naming is
@@ -82,6 +84,15 @@ export function isEngineVersionOverridden(): boolean {
  * The default is `~/GemDB`, not `~/Documents/GemDB`: on macOS `~/Documents` is
  * commonly synced to iCloud Drive, and letting a sync daemon copy a live
  * database extent out from under the engine corrupts it.
+ *
+ * Every `gemdb.*` setting is `"scope": "machine"` in package.json, because each
+ * one configures the machine's one database or its one MCP router, not a
+ * folder. Three things follow. A repository's `.vscode/settings.json` cannot
+ * set them — which matters most here, since uninstall deletes under this path
+ * and a cloned repository must not get to choose where that is. Settings Sync
+ * does not carry them to another machine, whose database is another database.
+ * And in a remote window they are read from the remote's settings, where the
+ * database is, rather than from the laptop's.
  */
 export function rootPath(): string {
   const raw = vscode.workspace.getConfiguration('gemdb').get<string>('rootPath', '~/GemDB');

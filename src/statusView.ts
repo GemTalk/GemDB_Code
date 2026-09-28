@@ -23,7 +23,13 @@ function humanIdle(ms: number): string {
   return minutes < 60 ? `${minutes} min` : `${Math.round(minutes / 6) / 10} h`;
 }
 
-export type GemDbState = 'unsupportedPlatform' | 'notInstalled' | 'stopped' | 'running';
+export const GEMDB_STATE = {
+  unsupportedPlatform: 'unsupportedPlatform',
+  notInstalled: 'notInstalled',
+  stopped: 'stopped',
+  running: 'running',
+} as const;
+export type GemDbState = (typeof GEMDB_STATE)[keyof typeof GEMDB_STATE];
 
 interface Row {
   label: string;
@@ -325,8 +331,12 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
         description: 'not configured',
         tooltip:
           'systemd will destroy the database’s shared memory when you log out of this machine. ' +
-          'GemDB offers to fix this when it starts.',
+          'Click to fix it — this runs a setup script with sudo.',
         icon: warn('warning'),
+        command: {
+          command: 'gemdb.configureRemoveIpc',
+          title: 'Keep the Database Running After Logout',
+        },
       });
     }
 

@@ -1,16 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-
-// telemetry.ts imports the real @vscode/extension-telemetry package, which
-// itself requires 'vscode' at module load — unloadable outside an extension
-// host. resolveInstallDay never touches it, so it is stubbed out rather than
-// exercised here.
-vi.mock('@vscode/extension-telemetry', () => ({ TelemetryReporter: class {} }));
-
-const { resolveInstallDay } = await import('../telemetry');
+import { resolveInstallDay } from '../telemetry';
 
 // resolveInstallDay takes a plain path and a boolean, so all three branches
 // are exercised directly against a temp directory — no VS Code needed.
@@ -35,22 +28,26 @@ describe('resolveInstallDay()', () => {
 
     const installDay = resolveInstallDay(storageDir, true);
 
-    expect(installDay).toEqual({ installDay: '2026-08-01', installDaySource: 'firstSeen' });
+    expect(installDay).toEqual({
+      installDay: '2026-08-01',
+      installDaySource: 'firstSeen',
+      firstSeenAt: '2026-08-01T00:00:00.000Z',
+    });
     expect(fs.readFileSync(firstSeen, 'utf8')).toBe('2026-08-01T00:00:00.000Z');
   });
 
   it('reports reinstall when first-seen is absent but a database exists', () => {
     const installDay = resolveInstallDay(storageDir, true);
 
-    expect(installDay).toEqual({ installDay: todayUtcDate(), installDaySource: 'reinstall' });
-    expect(fs.existsSync(join(storageDir, 'first-seen'))).toBe(true);
+    expect(installDay).toMatchObject({ installDay: todayUtcDate(), installDaySource: 'reinstall' });
+    expect(installDay.firstSeenAt).toBe(fs.readFileSync(join(storageDir, 'first-seen'), 'utf8'));
   });
 
   it('reports firstSeen when first-seen is absent and there is no database', () => {
     const installDay = resolveInstallDay(storageDir, false);
 
-    expect(installDay).toEqual({ installDay: todayUtcDate(), installDaySource: 'firstSeen' });
-    expect(fs.existsSync(join(storageDir, 'first-seen'))).toBe(true);
+    expect(installDay).toMatchObject({ installDay: todayUtcDate(), installDaySource: 'firstSeen' });
+    expect(installDay.firstSeenAt).toBe(fs.readFileSync(join(storageDir, 'first-seen'), 'utf8'));
   });
 
   it('never throws when the storage directory cannot be written', () => {

@@ -4,6 +4,15 @@ import { execFile } from 'child_process';
 import * as vscode from 'vscode';
 import { REQUIRED_SHARED_MEMORY_GB } from './config';
 import { log } from './log';
+import {
+  OS_CONFIG_MISSING,
+  OS_CONFIG_OUTCOME,
+  OsConfigMissing,
+  OsConfigOutcome,
+  TRIGGER,
+  Trigger,
+  reportOsConfigPrompted,
+} from './telemetry';
 
 /**
  * Operating-system prerequisites for running the database engine.
@@ -17,7 +26,9 @@ import { log } from './log';
  *   RemoveIPC (Linux only) — systemd's default is to destroy a user's IPC
  *   objects when their last login session ends, which silently kills a
  *   running database. It is advisory here: it does not block a start, it just
- *   means the database will not survive a logout.
+ *   means the database will not survive a logout. So it never raises the
+ *   modal on its own — it rides along when shared memory is being fixed
+ *   anyway, and is otherwise offered from the status view.
  *
  * Both fixes need root, so GemDB does what Jasper does: open a terminal and
  * run a script with `sudo`, where the user can see the prompt and type their
@@ -34,22 +45,39 @@ export interface SharedMemory {
   shmall: number;
 }
 
-/** Read the current shared-memory limits, or undefined if sysctl fails. */
-export function getSharedMemory(): Promise<SharedMemory | undefined> {
-  const isLinux = process.platform === 'linux';
-  const keys = isLinux
-    ? ['kernel.shmmax', 'kernel.shmall']
-    : ['kern.sysv.shmmax', 'kern.sysv.shmall'];
+/**
+ * Read the current shared-memory limits, or undefined if they cannot be read.
+ *
+ * On Linux the limits are read straight from `/proc`, not through `sysctl`:
+ * Debian leaves `/usr/sbin` off an ordinary user's PATH, so `sysctl` is not
+ * found there, and a probe that fails reads as "short" — which put the sudo
+ * prompt in front of a machine whose limits were already far above what the
+ * engine needs. macOS has no `/proc`, so `sysctl` is called by its full path
+ * for the same reason.
+ */
+export async function getSharedMemory(): Promise<SharedMemory | undefined> {
+  if (process.platform === 'linux') {
+    try {
+      const [shmmax, shmall] = await Promise.all(
+        ['shmmax', 'shmall'].map(async (key) =>
+          parseInt(await fs.promises.readFile(`/proc/sys/kernel/${key}`, 'utf-8'), 10),
+        ),
+      );
+      return Number.isNaN(shmmax) || Number.isNaN(shmall) ? undefined : { shmmax, shmall };
+    } catch {
+      return undefined;
+    }
+  }
 
+  const keys = ['kern.sysv.shmmax', 'kern.sysv.shmall'];
   return new Promise((resolve) => {
-    execFile('sysctl', keys, { encoding: 'utf-8' }, (error, stdout) => {
+    execFile('/usr/sbin/sysctl', keys, { encoding: 'utf-8' }, (error, stdout) => {
       if (error) {
         resolve(undefined);
         return;
       }
-      // Linux prints `key = value`; macOS prints `key: value`.
       const read = (key: string): number | undefined => {
-        const match = stdout.match(new RegExp(`${key.replace(/\./g, '\\.')}\\s*[:=]\\s*(\\d+)`));
+        const match = stdout.match(new RegExp(`${key.replace(/\./g, '\\.')}:\\s*(\\d+)`));
         return match ? parseInt(match[1], 10) : undefined;
       };
       const shmmax = read(keys[0]);
@@ -124,79 +152,158 @@ export function isRemoveIpcConfigured(): boolean {
 }
 
 /**
+ * Everything `ensureOsConfigured` decides, with the world passed in.
+ *
+ * Both ends of this function are root-owned — a `sysctl`, a systemd config, a
+ * terminal running `sudo` — so its branches are unreachable from a test
+ * otherwise, and two of them are worth defending: shared memory is a hard
+ * gate and must refuse the start when the script did not take, while
+ * RemoveIPC is advisory and so the same failure has to be reported *and*
+ * stepped over. Taking the collaborators as an argument is what makes those
+ * testable without an editor (the same reason `runStop` takes a `StopWorld`).
+ */
+export interface OsConfigWorld {
+  sharedMemoryOk: () => Promise<boolean>;
+  removeIpcOk: () => boolean;
+  /** Show the modal, already worded. True if the user chose to configure. */
+  confirm: (message: string) => Promise<boolean>;
+  runSharedMemoryScript: () => Promise<void>;
+  runRemoveIpcScript: () => Promise<void>;
+  showError: (message: string) => void;
+  report: (outcome: OsConfigOutcome, missing: OsConfigMissing) => void;
+  log: (message: string) => void;
+}
+
+/**
+ * What `runEnsureOsConfigured` returns: how the modal ended, or
+ * `alreadyConfigured` when there was nothing to ask — which includes RemoveIPC
+ * being unset while shared memory is fine. Kept apart from
+ * `OS_CONFIG_OUTCOME` on purpose: that is `osConfigPrompted`'s vocabulary, sent
+ * only when the modal was shown, and the fast path is silent by design, so
+ * `alreadyConfigured` must be something `reportOsConfigPrompted` cannot accept.
+ */
+export const OS_CONFIG_RESULT = {
+  ...OS_CONFIG_OUTCOME,
+  alreadyConfigured: 'alreadyConfigured',
+} as const;
+export type OsConfigResult = (typeof OS_CONFIG_RESULT)[keyof typeof OS_CONFIG_RESULT];
+
+/** Whether the database may start. RemoveIPC is advisory, so `removeIpcUnset` starts too. */
+export function osConfigAllowsStart(result: OsConfigResult): boolean {
+  return result !== OS_CONFIG_RESULT.declined && result !== OS_CONFIG_RESULT.stillUnconfigured;
+}
+
+export async function runEnsureOsConfigured(world: OsConfigWorld): Promise<OsConfigResult> {
+  // Shared memory alone decides whether to ask. Stock Linux kernels already
+  // allow far more than the engine needs, so gating on RemoveIPC as well put a
+  // sudo modal in front of every Linux user for a setting that does not stop
+  // the database starting — and with sudo's credentials cached, the terminal
+  // it opened ran and closed before anyone saw it.
+  const sharedMemoryOk = await world.sharedMemoryOk();
+  if (sharedMemoryOk) return OS_CONFIG_RESULT.alreadyConfigured;
+  const removeIpcOk = world.removeIpcOk();
+
+  const missing: OsConfigMissing = removeIpcOk
+    ? OS_CONFIG_MISSING.sharedMemory
+    : OS_CONFIG_MISSING.both;
+
+  // RemoveIPC is listed apart from shared memory, as recommended rather than
+  // needed: the database starts without it, and a heading that claimed both
+  // were required "before the database can run" would be untrue of one.
+  const recommended = removeIpcOk
+    ? ''
+    : 'The same setup will also make one recommended change:\n\n' +
+      '  • keep the database running after you log out (RemoveIPC=no)\n\n';
+
+  const confirmed = await world.confirm(
+    'GemDB needs one change to your operating system before the database can run:\n\n' +
+      `  • raise shared memory to at least ${REQUIRED_SHARED_MEMORY_GB} GB\n\n` +
+      recommended +
+      'A terminal will open and run a setup script with sudo, so you will be asked for your ' +
+      'password. GemDB never sees it.\n\n' +
+      'You only need to do this once on this machine.',
+  );
+  if (!confirmed) {
+    world.report(OS_CONFIG_OUTCOME.declined, missing);
+    return OS_CONFIG_RESULT.declined;
+  }
+
+  await world.runSharedMemoryScript();
+  if (!(await world.sharedMemoryOk())) {
+    world.showError(
+      `Shared memory is still below ${REQUIRED_SHARED_MEMORY_GB} GB, so GemDB did not start. ` +
+        'Run "GemDB: Configure Shared Memory" and try again.',
+    );
+    world.report(OS_CONFIG_OUTCOME.stillUnconfigured, missing);
+    return OS_CONFIG_RESULT.stillUnconfigured;
+  }
+  world.log('Shared memory configured');
+
+  // Advisory: a database that cannot survive logout is still a database that
+  // starts, so a failure here is reported and stepped over — under an outcome
+  // of its own, because `configured` would claim the fix took and
+  // `stillUnconfigured` would claim the database never started.
+  if (!removeIpcOk) {
+    await world.runRemoveIpcScript();
+    if (!world.removeIpcOk()) {
+      world.log(
+        'RemoveIPC is still unset — the database will stop when you log out of this machine.',
+      );
+      world.report(OS_CONFIG_OUTCOME.removeIpcUnset, missing);
+      return OS_CONFIG_RESULT.removeIpcUnset;
+    }
+  }
+
+  world.report(OS_CONFIG_OUTCOME.configured, missing);
+  return OS_CONFIG_RESULT.configured;
+}
+
+/**
  * Bring the operating system up to what the engine needs, asking first.
  *
- * Returns true if the database may start. Shared memory is the gate: if it is
+ * Returns how it went (see `OsConfigResult`); `osConfigAllowsStart` says whether
+ * the database may start. Shared memory is the gate: if it is
  * still short after the setup script ran — a mistyped password, a cancelled
  * `sudo` — we refuse rather than let the start fail with an error about
  * segment allocation that means nothing to a new developer.
  */
-export async function ensureOsConfigured(extensionPath: string): Promise<boolean> {
-  const sharedMemoryOk = await isSharedMemoryConfigured();
-  const removeIpcOk = isRemoveIpcConfigured();
-  if (sharedMemoryOk && removeIpcOk) return true;
-
-  const steps: string[] = [];
-  if (!sharedMemoryOk) {
-    steps.push(`  • raise shared memory to at least ${REQUIRED_SHARED_MEMORY_GB} GB`);
-  }
-  if (!removeIpcOk) {
-    steps.push('  • keep shared memory alive after you log out (RemoveIPC=no)');
-  }
-
-  // Counted, not hardcoded: on macOS only the shared-memory step ever applies,
-  // and a dialog that says "two settings" above a list of one reads as a bug.
-  const heading =
-    steps.length === 1
-      ? 'GemDB needs one change to your operating system before the database can run:'
-      : `GemDB needs ${steps.length} changes to your operating system before the database can run:`;
-
-  const choice = await vscode.window.showWarningMessage(
-    `${heading}\n\n${steps.join('\n')}\n\n` +
-      'A terminal will open and run a setup script with sudo, so you will be asked for your ' +
-      'password. GemDB never sees it.\n\n' +
-      'This is the only permission GemDB asks for, and only once for this machine.',
-    { modal: true },
-    'Configure',
-  );
-  if (choice !== 'Configure') return false;
-
-  if (!sharedMemoryOk) {
-    await runSetupScript(
-      SHARED_MEMORY_TERMINAL,
-      path.join(
-        extensionPath,
-        'resources',
-        process.platform === 'linux' ? 'setSharedMemoryLinux.sh' : 'setSharedMemoryDarwin.sh',
+export function ensureOsConfigured(
+  extensionPath: string,
+  trigger: Trigger,
+): Promise<OsConfigResult> {
+  return runEnsureOsConfigured({
+    sharedMemoryOk: isSharedMemoryConfigured,
+    removeIpcOk: isRemoveIpcConfigured,
+    confirm: async (message) =>
+      (await vscode.window.showWarningMessage(message, { modal: true }, 'Configure')) ===
+      'Configure',
+    runSharedMemoryScript: () =>
+      runSetupScript(
+        SHARED_MEMORY_TERMINAL,
+        path.join(
+          extensionPath,
+          'resources',
+          process.platform === 'linux' ? 'setSharedMemoryLinux.sh' : 'setSharedMemoryDarwin.sh',
+        ),
       ),
-    );
-    if (!(await isSharedMemoryConfigured())) {
-      void vscode.window.showErrorMessage(
-        `Shared memory is still below ${REQUIRED_SHARED_MEMORY_GB} GB, so GemDB did not start. ` +
-          'Run "GemDB: Configure Shared Memory" and try again.',
-      );
-      return false;
-    }
-    log('Shared memory configured');
-  }
-
-  // Advisory: a database that cannot survive logout is still a database that
-  // starts, so a failure here is reported and stepped over.
-  if (!removeIpcOk) {
-    await runSetupScript(
-      REMOVE_IPC_TERMINAL,
-      path.join(extensionPath, 'resources', 'setRemoveIPC.sh'),
-    );
-    if (!isRemoveIpcConfigured()) {
-      log('RemoveIPC is still unset — the database will stop when you log out of this machine.');
-    }
-  }
-
-  return true;
+    runRemoveIpcScript: () =>
+      runSetupScript(REMOVE_IPC_TERMINAL, path.join(extensionPath, 'resources', 'setRemoveIPC.sh')),
+    showError: (message) => void vscode.window.showErrorMessage(message),
+    report: (outcome, missing) => reportOsConfigPrompted(trigger, outcome, missing),
+    log,
+  });
 }
 
-/** Open the shared-memory setup on its own, from the command palette. */
+/**
+ * Open the shared-memory setup on its own, from the command palette.
+ *
+ * Re-probes afterwards, unlike the script run alone: run this way, nothing
+ * else tells the user whether it worked. Reported as `osConfigPrompted` when
+ * shared memory was actually short, because this is the path back after
+ * declining the modal, and without it that recovery is invisible.
+ */
 export async function configureSharedMemory(extensionPath: string): Promise<void> {
+  const wasShort = !(await isSharedMemoryConfigured());
   await runSetupScript(
     SHARED_MEMORY_TERMINAL,
     path.join(
@@ -205,6 +312,56 @@ export async function configureSharedMemory(extensionPath: string): Promise<void
       process.platform === 'linux' ? 'setSharedMemoryLinux.sh' : 'setSharedMemoryDarwin.sh',
     ),
   );
+  const configured = await isSharedMemoryConfigured();
+  if (wasShort) {
+    reportOsConfigPrompted(
+      TRIGGER.sharedMemoryCommand,
+      configured ? OS_CONFIG_OUTCOME.configured : OS_CONFIG_OUTCOME.stillUnconfigured,
+      OS_CONFIG_MISSING.sharedMemory,
+    );
+  }
+  if (configured) {
+    void vscode.window.showInformationMessage('Shared memory configured.');
+  } else {
+    void vscode.window.showErrorMessage(
+      `Shared memory is still below ${REQUIRED_SHARED_MEMORY_GB} GB.`,
+    );
+  }
+}
+
+/**
+ * Open the RemoveIPC setup on its own, from the status view's "Survives
+ * logout" row.
+ *
+ * This is where RemoveIPC is offered now that it no longer raises the modal
+ * by itself. Reported like `configureSharedMemory`, and for the same reason:
+ * it is the only route to the fix on a machine whose shared memory was never
+ * short, which on Linux is nearly every machine.
+ */
+export async function configureRemoveIpc(extensionPath: string): Promise<void> {
+  const wasUnset = !isRemoveIpcConfigured();
+  await runSetupScript(
+    REMOVE_IPC_TERMINAL,
+    path.join(extensionPath, 'resources', 'setRemoveIPC.sh'),
+  );
+  const configured = isRemoveIpcConfigured();
+  if (wasUnset) {
+    reportOsConfigPrompted(
+      TRIGGER.removeIpcCommand,
+      configured ? OS_CONFIG_OUTCOME.configured : OS_CONFIG_OUTCOME.removeIpcUnset,
+      OS_CONFIG_MISSING.removeIpc,
+    );
+  }
+  if (configured) {
+    void vscode.window.showInformationMessage(
+      'The database will now keep running when you log out. ' +
+        'This takes effect after you restart your computer.',
+    );
+  } else {
+    void vscode.window.showErrorMessage(
+      'RemoveIPC is still unset, so the database will stop when you log out.',
+    );
+  }
 }
 
 /**

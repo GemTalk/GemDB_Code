@@ -2,16 +2,22 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { spawn } from 'child_process';
+import { rootPath } from './config';
 import { errorMessage, log } from './log';
 
 /**
- * Clone the Brain Freeze demo — a Flask application that lives in the
- * database.
+ * Install the Brain Freeze demo — a Flask application that lives in the
+ * database — and put its README in front of the user.
  *
  * The demo is its own public repository rather than a directory here, per its
- * own PRD, so the only thing GemDB can offer is the clone. That is also why
- * this command exists at all: the alternative is a README line the user has to
- * copy a URL out of.
+ * own PRD, so "install" means a clone. That is also why this command exists at
+ * all: the alternative is a README line the user has to copy a URL out of.
+ *
+ * It asks nothing. The clone lands under the root path, beside the engine and
+ * the database, which puts it on the automated side of GemDB's line: inert,
+ * and undone by deleting a directory GemDB already told the user it owns. It
+ * used to ask where to clone, when the answer could be anywhere on disk; with
+ * the location fixed there is no question left whose answer changes anything.
  *
  * Nothing here touches the database. Cloning is inert, the demo's own README
  * owns its setup, and a user who is only browsing the code should not have a
@@ -24,21 +30,14 @@ export const BRAIN_FREEZE_URL = 'https://github.com/GemTalk/brain-freeze.git';
 /** The directory `git clone` creates, and the only name this file will delete. */
 export const BRAIN_FREEZE_DIR = 'brain-freeze';
 
-const OPEN = 'Open';
-const OPEN_NEW = 'Open in New Window';
+/** Where the demo is installed: under the root path, so it moves with the setting. */
+export function brainFreezePath(root = rootPath()): string {
+  return path.join(root, BRAIN_FREEZE_DIR);
+}
 
 export interface CloneWorld {
-  /**
-   * Ask which folder to clone into, answering undefined if the user dismissed
-   * the dialog.
-   *
-   * The dialog is the consent: a clone is persistent and outside the root
-   * path, which by GemDB's automation line is something to ask about rather
-   * than do. Asking *where* is a better question than asking *whether* —
-   * it cannot be answered wrong, and the user has already said whether by
-   * running the command.
-   */
-  pickParent: () => Promise<string | undefined>;
+  /** Where the clone goes. */
+  target: string;
   exists: (target: string) => boolean;
   /**
    * Run the clone, resolving `'cancelled'` if the user cancelled it.
@@ -49,36 +48,33 @@ export interface CloneWorld {
   clone: (url: string, target: string) => Promise<'cloned' | 'cancelled'>;
   /** Remove a partial clone this operation created, and nothing else. */
   discard: (target: string) => void;
-  /** Ask a question with named buttons, answering undefined if dismissed. */
-  ask: (message: string, ...choices: string[]) => Promise<string | undefined>;
   reportError: (message: string) => void;
+  /** The folders open in this window, empty for an empty window. */
+  openFolders: () => string[];
+  /** Show the demo's README here, in this window. */
+  showReadme: (target: string) => Promise<void>;
+  /** Leave word for the window about to open `target` to show its README. */
+  promiseReadme: (target: string) => void;
   openFolder: (target: string, newWindow: boolean) => Promise<void>;
   log: (message: string) => void;
 }
 
 /**
- * The decision half of the command: where it goes, what happens if something
- * is already there, and what a failed or cancelled clone leaves behind.
+ * The decision half of the command: what happens if the demo is already
+ * there, what a failed or cancelled clone leaves behind, and which window it
+ * opens in.
  */
 export async function runCloneDemo(world: CloneWorld): Promise<void> {
-  const parent = await world.pickParent();
-  if (!parent) return;
-
-  const target = path.join(parent, BRAIN_FREEZE_DIR);
+  const { target } = world;
 
   // Never clobber what is there. A second run of this command is most likely
   // someone who wants the demo they already have, and the directory may hold
-  // their own commits — so this offers to open it and stops. Repairing a
-  // broken clone is `rm -rf` in a terminal, which is a thing a user can do
-  // deliberately and GemDB should not do on a guess.
+  // their own commits — so this opens it and stops. Repairing a broken clone
+  // is `rm -rf` in a terminal, which is a thing a user can do deliberately and
+  // GemDB should not do on a guess.
   if (world.exists(target)) {
     world.log(`Brain Freeze is already at ${target}.`);
-    const answer = await world.ask(
-      `${BRAIN_FREEZE_DIR} already exists in this folder.`,
-      OPEN,
-      OPEN_NEW,
-    );
-    if (answer) await world.openFolder(target, answer === OPEN_NEW);
+    await openDemo(world);
     return;
   }
 
@@ -89,36 +85,147 @@ export async function runCloneDemo(world: CloneWorld): Promise<void> {
   } catch (e) {
     // git removes its own half-finished clone when it fails on its own, but a
     // killed git does not — and the leftover would meet the branch above on
-    // the next run, which offers to open it as though it were a working
-    // checkout. So the partial goes, and only ever the directory this call
-    // just created: the existence check above is what makes that safe.
+    // the next run, which opens it as though it were a working checkout. So
+    // the partial goes, and only ever the directory this call just created:
+    // the existence check above is what makes that safe.
     world.discard(target);
-    world.reportError(`GemDB could not clone Brain Freeze: ${errorMessage(e)}`);
+    world.reportError(`GemDB could not install Brain Freeze: ${errorMessage(e)}`);
     return;
   }
 
   if (outcome === 'cancelled') {
     world.discard(target);
-    world.log('Cloning Brain Freeze was cancelled.');
+    world.log('Installing Brain Freeze was cancelled.');
     return;
   }
 
   world.log(`Cloned Brain Freeze into ${target}`);
-  // Opening in this window replaces the workspace and restarts the extension
-  // host, which is too much to do to someone without asking — hence a
-  // question rather than an `openFolder` the moment the clone lands.
-  const answer = await world.ask(`Cloned Brain Freeze into ${target}.`, OPEN, OPEN_NEW);
-  if (answer) await world.openFolder(target, answer === OPEN_NEW);
+  await openDemo(world);
+}
+
+/**
+ * Open the demo without asking which window.
+ *
+ * Opening a folder in this window replaces the workspace and restarts the
+ * extension host, which is too much to do to someone mid-task — but an empty
+ * window has no task to interrupt, and a new window takes nothing away that
+ * closing it does not give back. So the window decides: an empty one is
+ * reused, one with folders open is left alone and the demo gets a window of
+ * its own. VS Code's own save prompt covers unsaved editors either way.
+ */
+async function openDemo(world: CloneWorld): Promise<void> {
+  const { target } = world;
+  const folders = world.openFolders().map((f) => path.resolve(f));
+  // Already open here (on its own or in a multi-root workspace): opening it
+  // again would do nothing visible, so the README is the whole answer.
+  if (folders.includes(path.resolve(target))) {
+    await world.showReadme(target);
+    return;
+  }
+  // Code after `openFolder` never runs in the window that shows the folder —
+  // that is a restarted extension host, or another one entirely — so the
+  // README is left as a note for whichever activation finds it.
+  world.promiseReadme(target);
+  await world.openFolder(target, folders.length > 0);
+}
+
+/**
+ * How long a promised README stays promised.
+ *
+ * The window that opens the demo activates GemDB within seconds, trusted or
+ * not — GemDB runs in Restricted Mode, and a fresh clone opens in it by
+ * default — so this only has to outlast a slow start. What it guards against
+ * is a note left by a window that never got there (closed, crashed) opening a
+ * README on some unrelated visit to the folder later.
+ */
+export const README_PROMISE_MS = 10 * 60 * 1000;
+
+let pendingPath: string | undefined;
+
+/**
+ * Called once at activation, with the extension's global storage directory.
+ *
+ * A file there rather than `globalState`, for the reasons `autoStart.ts` gives
+ * — it is per-machine, since the clone is — and one more: the note is written
+ * by one window and read by another, and a file is visible to the other the
+ * moment it is written.
+ */
+export function initPendingReadme(storageDir: string): void {
+  pendingPath = path.join(storageDir, 'pending-demo-readme');
+}
+
+function promiseReadme(target: string): void {
+  if (!pendingPath) return;
+  try {
+    fs.mkdirSync(path.dirname(pendingPath), { recursive: true });
+    fs.writeFileSync(pendingPath, target);
+  } catch {
+    /* worst case the folder opens and the README does not */
+  }
+}
+
+/**
+ * The README a window with `folders` open was promised, if any, clearing the
+ * promise when it is kept or has expired.
+ *
+ * A note for a folder this window does not have is left alone: it may be for
+ * a window that is still starting, and this window taking it would leave that
+ * one with nothing.
+ */
+export function takePromisedReadme(folders: string[], now = Date.now()): string | undefined {
+  if (!pendingPath) return undefined;
+  let target: string;
+  let writtenAt: number;
+  try {
+    target = fs.readFileSync(pendingPath, 'utf8');
+    writtenAt = fs.statSync(pendingPath).mtimeMs;
+  } catch {
+    return undefined;
+  }
+  if (now - writtenAt > README_PROMISE_MS) {
+    fs.rmSync(pendingPath, { force: true });
+    return undefined;
+  }
+  if (!folders.map((f) => path.resolve(f)).includes(path.resolve(target))) return undefined;
+  fs.rmSync(pendingPath, { force: true });
+  return target;
+}
+
+/**
+ * Open the demo's README rendered, which is how a walkthrough reads.
+ *
+ * This works in Restricted Mode, which is where a fresh clone opens, so the
+ * README is there before any question about trust is. That question comes
+ * from VS Code itself, the first time the user runs a cell or opens a
+ * terminal, which is the moment it is about something.
+ */
+async function showReadme(target: string): Promise<void> {
+  const readme = path.join(target, 'README.md');
+  if (!fs.existsSync(readme)) return;
+  await vscode.commands.executeCommand('markdown.showPreview', vscode.Uri.file(readme));
+}
+
+function openFolderPaths(): string[] {
+  return (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+}
+
+/** Keep a promise an earlier window made to this one, if it made one. */
+export async function showPromisedReadme(): Promise<void> {
+  const target = takePromisedReadme(openFolderPaths());
+  if (target) await showReadme(target);
 }
 
 /** Run `git clone` under a cancellable progress notification. */
 async function cloneWithGit(url: string, target: string): Promise<'cloned' | 'cancelled'> {
+  // The root path exists once GemDB is set up, but this command does not need
+  // GemDB set up — someone can read the demo before downloading an engine.
+  fs.mkdirSync(path.dirname(target), { recursive: true });
   // `withProgress` answers a Thenable, and the CloneWorld contract is a
   // Promise: awaiting here is what converts one to the other.
   return await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: 'Cloning the Brain Freeze demo…',
+      title: 'Installing the Brain Freeze demo…',
       cancellable: true,
     },
     (_progress, token) =>
@@ -152,16 +259,7 @@ async function cloneWithGit(url: string, target: string): Promise<'cloned' | 'ca
 /** The command VS Code registers: `runCloneDemo` against the real editor. */
 export function cloneBrainFreeze(): Promise<void> {
   return runCloneDemo({
-    pickParent: async () => {
-      const picked = await vscode.window.showOpenDialog({
-        canSelectFiles: false,
-        canSelectFolders: true,
-        canSelectMany: false,
-        openLabel: 'Clone Here',
-        title: 'Choose a folder to clone the Brain Freeze demo into',
-      });
-      return picked?.[0]?.fsPath;
-    },
+    target: brainFreezePath(),
     exists: (target) => fs.existsSync(target),
     clone: cloneWithGit,
     discard: (target) => {
@@ -170,9 +268,10 @@ export function cloneBrainFreeze(): Promise<void> {
       if (path.basename(target) !== BRAIN_FREEZE_DIR) return;
       fs.rmSync(target, { recursive: true, force: true });
     },
-    ask: (message, ...choices) =>
-      Promise.resolve(vscode.window.showInformationMessage(message, ...choices)),
     reportError: (message) => void vscode.window.showErrorMessage(message),
+    openFolders: openFolderPaths,
+    showReadme,
+    promiseReadme,
     openFolder: async (target, newWindow) => {
       await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(target), {
         forceNewWindow: newWindow,

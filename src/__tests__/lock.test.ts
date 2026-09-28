@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { __resetSettings, __setSetting } from '../__mocks__/vscode';
-import { withSetupLock } from '../lock';
+import { STONE_LOCK_NAME, withSetupLock, withStoneLock } from '../lock';
 
 // Setup runs unattended when the extension activates, and activation happens in
 // every open window — so this lock is what stands between one download and two
@@ -100,5 +100,54 @@ describe('withSetupLock', () => {
     expect(overlapped).toBe(false);
     expect(results.filter((r) => r === 'worked')).toHaveLength(1);
     expect(results.filter((r) => r === undefined)).toHaveLength(1);
+  });
+});
+
+/**
+ * The stone lock is separate from the setup lock and shared with the generated
+ * `gemdb` wrapper, which takes it in shell. Both doors start the same stone --
+ * the editor on activation, a terminal command on any invocation -- and a lock
+ * each would still race, which is how two stones came to hold one extent.
+ *
+ * mkdir is the primitive on both sides: it creates or fails, with no window
+ * between the test and the claim.
+ */
+describe('withStoneLock', () => {
+  function stoneLock(): string {
+    return path.join(root, STONE_LOCK_NAME);
+  }
+
+  it('runs the work and releases afterwards', async () => {
+    const ran = await withStoneLock(async () => 'started');
+    expect(ran).toBe('started');
+    expect(fs.existsSync(stoneLock())).toBe(false);
+  });
+
+  it('declines when a live process already holds it', async () => {
+    fs.mkdirSync(stoneLock());
+    fs.writeFileSync(path.join(stoneLock(), 'pid'), `${process.pid}\n`);
+    let ran = false;
+    const result = await withStoneLock(async () => {
+      ran = true;
+      return 'started';
+    });
+    expect(ran).toBe(false);
+    expect(result).toBeUndefined();
+  });
+
+  it('takes over a lock whose owner is gone', async () => {
+    fs.mkdirSync(stoneLock());
+    fs.writeFileSync(path.join(stoneLock(), 'pid'), '999999\n');
+    const result = await withStoneLock(async () => 'started');
+    expect(result).toBe('started');
+  });
+
+  it('releases the lock when the work throws', async () => {
+    await expect(
+      withStoneLock(async () => {
+        throw new Error('startstone failed');
+      }),
+    ).rejects.toThrow('startstone failed');
+    expect(fs.existsSync(stoneLock())).toBe(false);
   });
 });

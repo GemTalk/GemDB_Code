@@ -5,7 +5,8 @@ so that an AI agent can reach the database GemDB installed, and so that it can
 do so without the user configuring anything.
 
 This note is the reasoning and the measurements. The user-facing shape is in
-the README; the invariants that must not be broken are in CLAUDE.md.
+the README; the invariants that must not be broken are in CLAUDE.md, except the
+MCP-specific ones, which are here.
 
 ## What the payload is
 
@@ -28,6 +29,16 @@ because each leg packages its own `.vsix`, and there is no
 `resources/install-mcp.sh`: what justified a GemDB-specific installer for Grail
 was skipping a C compile, and there is no compile here. GemDB runs
 `install.sh --grail --no-auth`, which is what a developer would run by hand.
+
+**The payload's entry points are a list; everything they source is derived.**
+`ENTRYPOINTS` in `bundle-mcp.sh` names what something *outside* the payload
+runs, and a closure copies whatever those scripts source. A script named only
+in prose is copied by neither, which is why the build also scans every staged
+script for `./*.sh` and fails on a name it cannot find — that is how
+`setup-read-only-user.sh` arriving upstream stopped a build rather than
+shipping a payload whose own error messages pointed at a file it did not
+carry. When that scan fires, the fix is to widen `ENTRYPOINTS` or fix the
+reference, never to add a name to an exclusion list.
 
 The two flags are the only decisions:
 
@@ -221,7 +232,8 @@ terminates them; sessions 5, 6 and 7 above were all gone within four seconds.
 That is why `stopMcpServer` names one gem and no more, and
 `mcp.test.ts` asserts the session count returns to its baseline after a client
 has connected, so the day it stops being true is the day a test goes red rather
-than the day a user cannot stop their database.
+than the day a user cannot stop their database. The baseline is
+not zero: `SymbolGem` and `GcReclaim` hold sessions of their own.
 
 The stop itself is `System stopSession:` on the recorded session id from a
 *linked* topaz login — clean, needs no NetLDI (already down by then in
@@ -248,19 +260,52 @@ takes it away — nothing is written to a file the user would have to find.
 Code calls it when it is about to start the server, so an agent's first tool
 call brings the database up the same way a notebook's first cell does.
 
-**Every other client is handed the details and never configured.** Claude Code,
-Claude Desktop and Cursor are each configured by a JSON file the user owns
-(`~/.claude.json`, `claude_desktop_config.json`, `~/.cursor/mcp.json`), and
-editing those is the other side of the line — persistent, global, outside the
-root path, not ours to undo. It is the same call the README makes about the
-shell profile, which asks rather than does. So **GemDB: Connect an AI Agent to
-GemDB** offers the exact command or snippet, puts it on the clipboard, and
-stops.
+**Claude Code is connected on request, by its own CLI.** Picking Claude Code
+from **GemDB: Connect an AI Agent to GemDB** runs `claude mcp add --transport
+http --scope local gemdb <url>` in the first workspace folder. It then shows
+what ran and the command that undoes it. All of this was measured against Claude Code 2.1.283:
 
-This is not timidity. A user who runs `claude mcp add` has chosen to add a
-server to their agent; GemDB writing that file on their behalf, from an editor
-they opened to write Python, is a different act with the same result and no
-consent.
+- **Which `claude`.** The Claude Code VS Code extension's bundled CLI
+  (`resources/native-binary/claude` in its install directory) comes first,
+  then the PATH. The extension does not put its CLI on the PATH, which is why
+  the command GemDB used to copy failed for most people who pasted it. The
+  location inside the extension is not documented, so a layout change there
+  falls through to the PATH, and then to the clipboard.
+- **Local scope, in the first folder.** Local scope is keyed by the working
+  directory, so the entry reaches Claude Code sessions in this project only.
+  The first folder because the Claude Code panel uses `workspaceFolders[0]`
+  (or the home directory in an empty window) wherever it needs a root, read
+  from its 2.1.283 `extension.js`. In a multi-root window, any other folder
+  would register GemDB where the panel never looks. Every Claude Code session
+  connects to every server it is configured with, so user scope would make
+  every Claude Code window in every project spend one of the database's ten
+  sessions, and each restart would leave a worker behind (see "The session
+  leak" above). Project scope would commit a `127.0.0.1` URL for teammates
+  who may not run GemDB.
+- **Add first; replace only when asked.** `add` fails, with exit 1 and
+  "already exists in local config", when the name is taken, and there is no
+  upsert. Only that answer leads to a remove, and only after the user agrees,
+  because the entry may be one they wrote for something else. Replacing is
+  how a changed port gets picked up. Any other failure removes nothing, so an
+  add that fails can't cost a working entry. If the add fails *after* a
+  remove, the message says the old entry is gone. `get` and `list` are not
+  used to look first: both connect to the server to report its status, which
+  costs a worker gem.
+- **Claude Code does not read VS Code's MCP list.** The automatic registration
+  above reaches VS Code's own chat, not the Claude Code panel. That bridge
+  is an open request upstream
+  ([claude-code#47344](https://github.com/anthropics/claude-code/issues/47344)).
+
+With no folder open, an untrusted folder, or no `claude` to be found, GemDB
+falls back to copying the command, and says why.
+
+**Claude Desktop and Cursor are handed the details and never configured.**
+Each is configured by a JSON file the user owns (`claude_desktop_config.json`,
+`~/.cursor/mcp.json`), and neither has a CLI to do the edit. Editing those
+files is the other side of the line: persistent, global, outside the root path,
+not ours to undo. It is the same call the README makes about the shell
+profile, which asks rather than does. So **GemDB: Connect an AI Agent to
+GemDB** offers the exact snippet, puts it on the clipboard, and stops.
 
 ## Why the port is not 8000
 
@@ -312,6 +357,13 @@ upstream's documented way to change its privilege set and precisely the wrong
 thing to do to a router that is serving with it. If provisioning fails, the
 server does not start. Forking a read-write router for a user who asked for
 read-only would be a promise broken in the one direction they cannot check.
+
+`ensureReadOnlyUser` probes for that user and runs the script only if
+it is missing. That probe reads topaz's **result line**,
+not its output: topaz echoes a script before running it, so searching the whole
+answer for a marker finds the probe's own source and both spellings with it —
+which answered "present" whatever the image held, provisioned nothing, and left
+every session open failing in the router with LookupError 2015.
 
 Two honest limits, both upstream's words and worth repeating wherever this is
 described to a user: it bounds what a session can **change**, not what it can

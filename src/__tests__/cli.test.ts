@@ -1,9 +1,11 @@
+import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { __setSetting } from '../__mocks__/vscode';
 import { cliPath, ensureCliCurrent, putCliOnPath, writeCliScripts } from '../cli';
+import { STONE_LOCK_NAME } from '../lock';
 import { cliStampPath, expectedEnginePath } from '../paths';
 
 /**
@@ -265,5 +267,80 @@ describe('putCliOnPath', () => {
     putCliOnPath(env);
 
     expect(env.prepended).toHaveLength(1);
+  });
+});
+
+/**
+ * Starting the stone is a check-then-act with nothing between the check and
+ * the start, and every `gemdb` command runs it -- so two ordinary commands
+ * close together are enough to start two stones on one extent. That happened:
+ * two stoned processes held the same extent0.dbf read-write for a week, and
+ * `gslist` showed one row for them because it keys Stone rows by name.
+ *
+ * The stubs stand in for the engine binaries the wrapper calls by absolute
+ * path. `startstone` records that it ran and leaves a marker; `gslist` reports
+ * a stone only once that marker exists, so a wrapper that re-checks after
+ * taking the lock sees what a real one would.
+ */
+describe('starting the database', () => {
+  function installEngineStubs(): { starts: string } {
+    const bin = path.join(expectedEnginePath(), 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    const marker = path.join(root, 'stone.up');
+    const starts = path.join(root, 'starts.log');
+
+    fs.writeFileSync(
+      path.join(bin, 'gslist'),
+      `#!/bin/sh\n[ -f '${marker}' ] && echo 'exists 4.0.0 me 1 1 x Stone gemdb'\nexit 0\n`,
+    );
+    fs.writeFileSync(
+      path.join(bin, 'startstone'),
+      `#!/bin/sh\nsleep 0.2\necho started >> '${starts}'\ntouch '${marker}'\nexit 0\n`,
+    );
+    fs.chmodSync(path.join(bin, 'gslist'), 0o755);
+    fs.chmodSync(path.join(bin, 'startstone'), 0o755);
+    return { starts };
+  }
+
+  /** Run the wrapper on a path that does not exist: it exits after the
+   *  stone-start block and before topaz, which is the part under test. */
+  function runWrapper(): Promise<void> {
+    return new Promise((resolve) => {
+      execFile(cliPath(), [path.join(root, 'nothing-here.py')], () => resolve());
+    });
+  }
+
+  it('locks on the same name the extension does', () => {
+    // Two doors start this stone: the extension on activation and this wrapper
+    // on any command. A lock each would not be a lock -- so if one side is
+    // renamed, this fails rather than quietly reopening the race.
+    writeCliScripts(ext);
+    expect(fs.readFileSync(cliPath(), 'utf8')).toContain(STONE_LOCK_NAME);
+  });
+
+  it('takes over a lock whose owner is gone, rather than blocking for ever', async () => {
+    writeCliScripts(ext);
+    const { starts } = installEngineStubs();
+    // Debris from a crash: a held lock naming a pid that is not running.
+    const lock = path.join(root, '.gemdb-stone.lock');
+    fs.mkdirSync(lock);
+    fs.writeFileSync(path.join(lock, 'pid'), '999999\n');
+
+    await runWrapper();
+
+    expect(fs.existsSync(starts)).toBe(true);
+    expect(fs.existsSync(lock)).toBe(false);
+  });
+
+  it('starts the stone once when several commands race', async () => {
+    writeCliScripts(ext);
+    const { starts } = installEngineStubs();
+
+    await Promise.all([runWrapper(), runWrapper(), runWrapper(), runWrapper()]);
+
+    const started = fs.existsSync(starts)
+      ? fs.readFileSync(starts, 'utf8').trim().split('\n').filter(Boolean).length
+      : 0;
+    expect(started).toBe(1);
   });
 });

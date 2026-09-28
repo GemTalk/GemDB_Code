@@ -7,6 +7,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-09-27
+
+The engine moves to GemStone 4.0.0.a3, so an existing database has to be
+recreated — read the first entry below before updating. The bundled Python
+runtime and MCP server move forward with it.
+
+### Changed
+
+- **GemDB now runs GemStone 4.0.0.a3, and an existing database cannot come with
+  it.** A database created by GemDB 1.5.1 or earlier was written by 4.0.0.a2,
+  and there is still no in-place upgrade between alphas. When the new engine
+  first starts, GemDB will stop and name the directory to delete, so the
+  database can be recreated. **Anything stored in it is lost, so copy out
+  whatever you still need before updating.**
+
+- **A newer Python runtime.** 127 commits across 43 pull requests since 1.5.1,
+  most of them bringing Python closer to CPython. `pickle`, `abc`,
+  `collections.abc` and `ipaddress` are now CPython's own modules rather than
+  partial rewrites, and `pickletools`, `dbm` and `xml.dom` are new. PEP 695
+  generics work: in `class Box[T]:`, `T` used to be unbound in the class body.
+  `os` gains `open`, `read`, `write`, `lseek`, `fstat` and the rest of its
+  file-descriptor functions. A coroutine that is never awaited now warns, and
+  a suspended generator can be garbage-collected.
+  Dictionaries and comparisons fixed along the way: deleting a key through an
+  equal object no longer corrupts the dictionary's order, keys compare full
+  hashes before asking for equality, `functools.lru_cache` compares keys with
+  Python equality, and `!=` handles `NotImplemented` correctly. Classes made by
+  `type()` or `Enum('Color', 'RED GREEN')` now get a `__module__`.
+
+- **The MCP server's Python tools are more precise.** `find_python_senders`
+  now gives every call and every reference in a method compiled straight to
+  the intermediate representation its own hit, with its Python line. It used
+  to report one unplaced `line ?` per method. `eval_python` runs as
+  `__main__`, as `python -c` does, so `__name__` is defined. The instructions
+  the server gives an agent are shorter, and they steer it away from looping
+  over every stored object in a large database and toward that application's
+  own collections and indexes.
+
+- **Connecting Claude Code to GemDB's MCP server is one click.** Picking
+  Claude Code in **GemDB: Connect an AI Agent to GemDB** now runs Claude
+  Code's own `claude mcp add` for the open folder, instead of copying a
+  command to paste. The copied command didn't work for most people who
+  pasted it: the Claude Code extension doesn't put `claude` on your PATH, and
+  GemDB finds the copy it ships. It applies to that project only, since every
+  Claude Code session spends a database session. Running it again offers to
+  replace the entry, which is how it picks up a port change. GemDB shows what
+  it ran and how to undo it. With no folder open, an untrusted folder, or no
+  Claude Code to be found, it copies the command as before.
+
+- **Installing the Brain Freeze demo is one click, and it shows you where to
+  start.** The command is now **GemDB: Install Brain Freeze Demo**, and it is
+  a step in the Get Started walkthrough. It no longer asks where to put the
+  demo: it clones into `~/GemDB/brain-freeze`, beside your database, then
+  opens that folder and shows the demo's readme. An empty window is reused;
+  a window that already has a folder open is left alone, and the demo opens in
+  a new one. Running it again opens the copy you have rather than replacing
+  it. A copy cloned elsewhere by an earlier version is left where it is.
+
+- **GemDB keeps working in a folder you haven't trusted yet.** VS Code opens a
+  new folder in Restricted Mode, and GemDB used to switch off entirely there:
+  no status bar, no commands. It now stays on. Running Python from that folder
+  still waits for trust, and VS Code asks the first time you run a cell or
+  open a GemDB Shell. To stop being asked about folders GemDB installs, trust
+  `~/GemDB` once in **Workspaces: Manage Workspace Trust**.
+
+- **GemDB's settings are per-machine, and a folder's settings can no longer
+  change them.** Every `gemdb.*` setting configures this machine's database
+  or MCP server, so each now lives in your user settings only. A value in a
+  folder's `.vscode/settings.json` is ignored (VS Code marks it in the file),
+  which keeps a cloned repository from choosing where GemDB keeps — and on
+  uninstall deletes — its files. Settings Sync no longer copies them between
+  machines. If you had set one per folder, move it to your user settings.
+
+### Fixed
+
+- **A script run with `gemdb file.py` can start with
+  `with gemdb.transaction():`.** Starting the script used to leave uncommitted
+  changes in the session before its first line ran, so a transaction block
+  there refused to start and blamed changes you hadn't made. The workaround,
+  calling `gemdb.commit()` or `gemdb.abort()` first, is no longer needed.
+  Separately, calling a function in a module stored in the database no longer
+  counts as a change, so two sessions calling the same function for the first
+  time no longer conflict when they commit.
+
+- **The MCP server starts on a Mac whose network name doesn't resolve.** Its
+  agent sessions reached the database by your computer's network name. A Mac
+  connected straight to a cable modem often takes that name from its internet
+  provider, and nothing can look it up, so every agent session failed to log
+  in and the server never started. It now reaches the database through
+  `localhost`, as the rest of GemDB always has.
+
+- **`logging` accepts `exc_info`.** Frameworks such as Flask pass it when they
+  log an exception. `logging` used to raise a `TypeError` about `exc_info`
+  instead, so the exception being reported was never recorded, and an error in
+  a Flask view surfaced as that `TypeError`.
+
 ## [1.5.1] - 2026-09-23
 
 The bundled Python runtime and MCP server move forward. The engine is
