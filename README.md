@@ -21,12 +21,16 @@ or later. For a complete list, see [Requirements](#requirements).
 2. **Let initial setup finish.** If the operating system needs a setting changed, follow the
    prompts. For more information, see [Setup and permissions](#setup-and-permissions).
 
-3. **Follow the walkthrough.** VS Code opens **Get Started with GemDB Code** the first time you
+3. **Trust `~/GemDB`.** Run **Workspaces: Manage Workspace Trust** from the Command Palette and add
+   `~/GemDB` to your trusted folders, so Python can run in the folders GemDB Code installs. For more
+   information, see [Trusting `~/GemDB`](#trusting-gemdb).
+
+4. **Follow the walkthrough.** VS Code opens **Get Started with GemDB Code** the first time you
    install GemDB Code. It takes you through setup, the GemDB Shell, a notebook, exploring a real
    application, and stopping the database. To open it again, see
    [The guided walkthrough](#the-guided-walkthrough).
 
-4. **Try the Brain Freeze demo.** You are ready to explore a working application. To get started,
+5. **Try the Brain Freeze demo.** You are ready to explore a working application. To get started,
    click [The Brain Freeze demo](#the-brain-freeze-demo).
 
 ## Features to check out
@@ -73,9 +77,9 @@ The rest of this page covers the details behind each feature.
 
 - [Requirements](#requirements)
 - [Platform support](#platform-support)
+- [Setup and permissions](#setup-and-permissions)
 - [The guided walkthrough](#the-guided-walkthrough)
 - [The GemDB Code sidebar](#the-gemdb-code-sidebar)
-- [Setup and permissions](#setup-and-permissions)
 - [Starting and stopping the database](#starting-and-stopping-the-database)
 - [Sessions](#sessions)
 - [Python in the database](#python-in-the-database)
@@ -107,7 +111,7 @@ for VSCodium and other compatible editors, from
 - Permission to use `sudo` once if the operating system allows less than 1 GB of shared memory. This
   is common on macOS and rare on Linux. The database does not start until the limit is raised. On
   Linux, `sudo` is also needed for the optional `RemoveIPC=no` setting (see
-  [Setup and permissions](#setup-and-permissions)).
+  [Changes that need your permission](#changes-that-need-your-permission)).
 - Internet access to `dl.gemdb.com` for the one-time engine download.
 - About 1.5 GB of free disk space under `~/GemDB` during setup, plus room for your data.
 - On Linux, `unzip`. Most distributions include it; if yours does not, install it with your package
@@ -144,6 +148,74 @@ so the extension is published per platform, and every supported platform is buil
 own architecture. On an unsupported platform, the Marketplace still lists GemDB Code but marks it as
 not available for that platform, and you cannot install it.
 
+### Setup and permissions
+
+#### How setup runs
+
+In a local VS Code window, setup starts on its own the first time the extension activates on a
+machine. GemDB Code downloads the database engine (about 145 MB on macOS, about 450 MB on Linux) and
+creates one database under `~/GemDB`. In a remote window (SSH, WSL, dev containers), or after you
+cancel setup, click **Set Up GemDB** in the GemDB Code sidebar, or run **GemDB: Set Up GemDB** from
+the Command Palette.
+
+You can cancel the download. Canceling keeps what has already been downloaded, and **Set Up GemDB**
+picks up from there.
+
+The first time the database starts, usually right after setup, GemDB Code installs Python support
+into it. This takes a few minutes and shows its progress in a notification. If the database cannot
+start yet, this happens the first time you open a shell or run a notebook cell instead.
+
+#### Changes that need your permission
+
+GemDB Code automates what is inert and reversible: files under `~/GemDB`, starting the database
+(shown in the GemDB Code sidebar and the status bar, and stopped with one click), and adding `gemdb`
+to VS Code's terminals (removed when you disable the extension). For anything persistent or
+machine-wide, it prompts you and waits for your permission:
+
+- **Raising shared memory** needs `sudo` and changes the machine for all software. GemDB Code checks
+  whether the operating system allows at least 1 GB of shared memory when setup starts, while the
+  engine downloads, and again each time the database starts. If the shared-memory setting is
+  insufficient, GemDB Code prompts you for permission to raise the limit. This is often needed on
+  macOS; most Linux systems already allow enough. When you choose **Configure**, GemDB Code opens a
+  terminal where you type your password yourself. After the script runs, GemDB Code checks again. If
+  shared memory is still below 1 GB, it shows an error and the database does not start. If you
+  choose **Cancel**, the database cannot start, and the **Shared memory** row in the GemDB Code
+  sidebar shows that the database cannot start until it has more shared memory. To address this
+  requirement, start the database again, click that row, or run **GemDB: Configure Shared Memory**
+  from the Command Palette.
+- **On Linux, keeping the database running after you log out** needs systemd's `RemoveIPC=no`, which
+  also needs `sudo`. This change is recommended but not required: the database starts without it. If
+  the shared-memory dialog appears, it lists this change as recommended, and GemDB Code runs it in
+  its own terminal. Otherwise, click the **Survives logout** row in the GemDB Code sidebar, or run
+  **GemDB: Keep the Database Running After Logout** from the Command Palette. The change takes
+  effect after you restart your computer.
+
+#### Your shell profile and AI clients
+
+GemDB Code never edits your shell profile. For the line to add to it, see
+[The `gemdb` command](#the-gemdb-command).
+
+AI client configuration is different: GemDB Code sets it up for you where it can, so each client
+connects to the right MCP server. In VS Code, it registers the server automatically. For Claude
+Code, it runs Claude Code's own `claude mcp add` command for the open folder and shows you how to
+undo it. For Claude Desktop and Cursor, it copies a JSON snippet with the server's address for you
+to merge into that client's configuration file. See
+[Connecting an AI agent](#connecting-an-ai-agent).
+
+#### Trusting `~/GemDB`
+
+GemDB Code installs the Brain Freeze demo and its other folders under `~/GemDB`, and VS Code opens
+any folder you have not trusted in Restricted Mode. So by default, GemDB Code's folders open in
+Restricted Mode. There, you can use the GemDB Code sidebar and start or stop the database, but you
+cannot run Python: notebook cells, **Run Python File in GemDB** and the GemDB Shell all wait until
+you trust the folder, and connecting Claude Code needs a trusted folder too.
+
+To work with GemDB Code, trust `~/GemDB` once: run **Workspaces: Manage Workspace Trust** from the
+Command Palette and add `~/GemDB` to your trusted folders. VS Code also trusts its subfolders, so
+the Brain Freeze demo and anything else GemDB Code installs there are covered, and no other folder
+is affected. If you have not done this yet, VS Code prompts you the first time you run Python in one
+of these folders. Choose **Trust Folder & Continue** to trust that folder.
+
 ### The guided walkthrough
 
 The walkthrough, **Get Started with GemDB Code**, takes you through setup, the GemDB Shell, a
@@ -179,54 +251,6 @@ label, and uses the **GemDB:** form for commands that are only in the Command Pa
 While the database is running, the status bar at the bottom of the window also shows **GemDB**, and
 clicking it stops the database.
 
-### Setup and permissions
-
-In a local VS Code window, setup starts on its own the first time the extension activates on a
-machine. GemDB Code downloads the database engine (about 145 MB on macOS, about 450 MB on Linux) and
-creates one database under `~/GemDB`. In a remote window (SSH, WSL, dev containers), or after you
-cancel setup, click **Set Up GemDB** in the GemDB Code sidebar, or run **GemDB: Set Up GemDB** from
-the Command Palette.
-
-You can cancel the download. Canceling keeps what has already been downloaded, and **Set Up GemDB**
-picks up from there.
-
-The first time the database starts, usually right after setup, GemDB Code installs Python support
-into it. This takes a few minutes and shows its progress in a notification. If the database cannot
-start yet, this happens the first time you open a shell or run a notebook cell instead.
-
-GemDB Code automates what is inert and reversible: files under `~/GemDB`, starting the database
-(shown in the GemDB Code sidebar and the status bar, and stopped with one click), and adding `gemdb`
-to VS Code's terminals (removed when you disable the extension). For anything persistent or
-machine-wide, it prompts you and waits for your permission:
-
-- **Raising shared memory** needs `sudo` and changes the machine for all software. GemDB Code checks
-  whether the operating system allows at least 1 GB of shared memory when setup starts, while the
-  engine downloads, and again each time the database starts. If the shared-memory setting is
-  insufficient, GemDB Code prompts you for permission to raise the limit. This is often needed on
-  macOS; most Linux systems already allow enough. When you choose **Configure**, GemDB Code opens a
-  terminal where you type your password yourself. After the script runs, GemDB Code checks again. If
-  shared memory is still below 1 GB, it shows an error and the database does not start. If you
-  choose **Cancel**, the database cannot start, and the **Shared memory** row in the GemDB Code
-  sidebar shows that the database cannot start until it has more shared memory. To address this
-  requirement, start the database again, click that row, or run **GemDB: Configure Shared Memory**
-  from the Command Palette.
-- **On Linux, keeping the database running after you log out** needs systemd's `RemoveIPC=no`, which
-  also needs `sudo`. This change is recommended but not required: the database starts without it. If
-  the shared-memory dialog appears, it lists this change as recommended, and GemDB Code runs it in
-  its own terminal. Otherwise, click the **Survives logout** row in the GemDB Code sidebar, or run
-  **GemDB: Keep the Database Running After Logout** from the Command Palette. The change takes
-  effect after you restart your computer.
-
-GemDB Code never edits your shell profile. For the line to add to it, see
-[The `gemdb` command](#the-gemdb-command).
-
-AI client configuration is different: GemDB Code sets it up for you where it can, so each client
-connects to the right MCP server. In VS Code, it registers the server automatically. For Claude
-Code, it runs Claude Code's own `claude mcp add` command for the open folder and shows you how to
-undo it. For Claude Desktop and Cursor, it copies a JSON snippet with the server's address for you
-to merge into that client's configuration file. See
-[Connecting an AI agent](#connecting-an-ai-agent).
-
 ### Starting and stopping the database
 
 The database keeps running in the background after you close VS Code, so your data stays available
@@ -236,8 +260,8 @@ Running Python also starts the database if it is not running.
 
 If you stop the database yourself, with the **Stop GemDB** button in the GemDB Code sidebar or the
 status bar, it stays stopped until something needs it again: you start it, you run Python in VS Code
-or with the `gemdb` command, or a connected AI agent makes a tool call. A database that stopped for
-any other reason, such as a reboot, starts again the next time the extension activates.
+or with the `gemdb` command, or an agent inside VS Code uses the MCP server. A database that stopped
+for any other reason, such as a reboot, starts again the next time the extension activates.
 
 When you stop the database, GemDB Code closes the sessions this window holds (its notebooks) and
 stops the MCP server. Anything those sessions have not committed is lost, so commit before you stop.
@@ -301,8 +325,7 @@ with gemdb.transaction():
 ```
 
 `gemdb.transaction()` raises an error instead of starting if the session already has uncommitted
-changes. A script run with the `gemdb` command starts with uncommitted changes, so in a script, call
-`gemdb.commit()` or `gemdb.abort()` before the first `with gemdb.transaction():` block.
+changes. Commit or abort them first.
 
 Each session sees other sessions' commits after its own `refresh()`, `abort()` or `commit()`.
 
@@ -335,7 +358,6 @@ Some things differ from `python3`:
 - The script's own directory is not on `sys.path`, so a script cannot import a file next to it until
   it adds its directory to `sys.path` itself.
 - An uncaught exception prints its message, not a full traceback.
-- A script starts with uncommitted changes (see [Python in the database](#python-in-the-database)).
 
 `input()` works in scripts, the GemDB Shell and notebooks. A script reads stdin, and the GemDB Shell
 reads its own prompt line, where Ctrl+C raises `KeyboardInterrupt` and Ctrl+D raises `EOFError`.
@@ -344,8 +366,8 @@ reads its own prompt line, where Ctrl+C raises `KeyboardInterrupt` and Ctrl+D ra
 With no arguments, `gemdb` opens the **GemDB Shell**, the same program that the **Open GemDB Shell**
 button opens in a terminal. Each shell is a separate session. Use `exit()` or Ctrl+D to leave.
 
-To run the Python file in the active editor, use the Run button at the top right of the editor, or
-**GemDB: Run Python File in GemDB** in the Command Palette.
+To run the Python file in the active editor, use the Run button's menu (▷ with an arrow) at the top
+right of the editor, or **GemDB: Run Python File in GemDB** in the Command Palette.
 
 ### Notebooks
 
@@ -401,12 +423,13 @@ About the Claude Code connection:
   use Claude Code.
 - **If you change the server's port** (`gemdb.mcp.port`), run **Connect an AI Agent to GemDB** again
   in that folder. GemDB Code prompts you before it replaces the old entry.
-- **If GemDB Code cannot run the command,** because no folder is open, the folder is not trusted, or
-  the `claude` command cannot be found, it copies the command for you to run from a terminal prompt
-  in that folder:
+- **If GemDB Code cannot run the command,** because no folder is open or the `claude` command cannot
+  be found, it copies the command for you to run from a terminal prompt in that folder. If the
+  folder is not trusted, it shows a warning instead: choose **Manage Workspace Trust** to trust the
+  folder, then connect again, or choose **Copy the Command** to run it yourself.
 
   ```sh
-  claude mcp add --transport http --scope local gemdb http://127.0.0.1:50390/mcp
+  claude mcp add --transport http gemdb http://127.0.0.1:50390/mcp
   ```
 
 Connecting other AI clients:
@@ -439,11 +462,11 @@ Keep the following in mind:
 
 ### The Brain Freeze demo
 
-If you would rather read a working application than start from a blank prompt, choose **Install
-Brain Freeze Demo** from the **⋯** menu in the GemDB Code sidebar. It clones
-[brain-freeze](https://github.com/GemTalk/brain-freeze), a Flask app whose data, classes and views
-all live in the database, into `~/GemDB/brain-freeze`, opens it, and shows its README. Running it
-again opens the copy you have rather than replacing it. The command needs `git`.
+To explore a working application, choose **Install Brain Freeze Demo** from the **⋯** menu in the
+GemDB Code sidebar. It clones [brain-freeze](https://github.com/GemTalk/brain-freeze), a Flask app
+whose data, classes and views all live in the database, into `~/GemDB/brain-freeze`, opens it, and
+shows its README. Running it again opens the copy you have rather than replacing it. The command
+needs `git`.
 
 ### Where things live
 
@@ -487,9 +510,9 @@ Python support is updated, and setting up the MCP server for AI agents.
 
 If you want to review them, open VS Code's Settings (Ctrl+, on Linux, or Cmd+, on macOS) and search
 for `gemdb`, or go to **Extensions** > **GemDB Code** in the list on the left. If you need to
-customize your setup, change them in your **User** settings rather than a workspace's so they apply
-to the GemDB database on your machine, not to a project. The following table lists all of the
-settings and the defaults.
+customize your setup, change them in your **User** settings. They apply to the one GemDB database on
+this computer, so a value set in a workspace or folder is ignored, and Settings Sync does not copy
+them to other computers. The following table lists all of the settings and the defaults.
 
 | Setting                         | Default   | What it does                                                                       |
 | ------------------------------- | --------- | ---------------------------------------------------------------------------------- |
@@ -531,7 +554,7 @@ Linux. The table below reviews the functions available as commands or in the sid
 | **GemDB: Open GemDB Shell**                       | `>_` button, or click the **Running** row                                        | Opens a Python shell inside the database                                                                                      |
 | **GemDB: New GemDB Notebook**                     | Notebook icon button                                                             | Opens a notebook with a starter cell                                                                                          |
 | **GemDB: Refresh**                                | ↻ button                                                                         | Re-reads the state shown in the sidebar                                                                                       |
-| **GemDB: Connect an AI Agent to GemDB**           | **⋯** menu, or click the **AI agent access** row                                 | Turns on the MCP server and gives you a client's configuration                                                                |
+| **GemDB: Connect an AI Agent to GemDB**           | **⋯** menu, or click the **AI agent access** row                                 | Turns on the MCP server and connects Claude Code, or gives you another client's configuration                                 |
 | **GemDB: Show Log**                               | **⋯** menu                                                                       | Opens GemDB Code's log                                                                                                        |
 | **GemDB: Reinstall the Python Execution Engine**  | **⋯** menu, or click the **Python** row when an update is available              | Reinstalls Python support into your database                                                                                  |
 | **GemDB: Restart the MCP Server**                 | **⋯** menu, while the database is running                                        | Restarts the MCP server and releases agent sessions                                                                           |
@@ -541,7 +564,7 @@ Linux. The table below reviews the functions available as commands or in the sid
 | **GemDB: Configure Shared Memory**                | Click the **Shared memory** row when it needs configuring                        | Raises the shared-memory limit (prompts you for your password in a terminal)                                                  |
 | **GemDB: Keep the Database Running After Logout** | Click the **Survives logout** row, shown on Linux when `RemoveIPC=no` is not set | Sets `RemoveIPC=no` so the database keeps running after you log out (prompts you for your password in a terminal); Linux only |
 | **GemDB: Toggle Read-Only Access for AI Agents**  | Click the **Agent write access** row, shown when the MCP server is on            | Switches whether agents can commit, and restarts the MCP server                                                               |
-| **GemDB: Run Python File in GemDB**               | None; use the Run button at the top right of a Python file                       | Runs the current `.py` file in a terminal; listed only when a Python file is open                                             |
+| **GemDB: Run Python File in GemDB**               | None; use the Run button's menu at the top right of a Python file                | Runs the current `.py` file in a terminal; listed only when a Python file is open                                             |
 | **GemDB: Clear Notebook Variables**               | None                                                                             | Clears the active notebook's variables                                                                                        |
 
 ### Using GemDB Code vs. GemStone/S
