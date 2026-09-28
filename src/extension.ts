@@ -1,5 +1,3 @@
-import * as fs from 'fs';
-import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   ensureMcpRunning,
@@ -13,6 +11,12 @@ import {
   uninstall,
 } from './lifecycle';
 import { autoStartSuppressed, initAutoStart, suppressAutoStart } from './autoStart';
+import {
+  MARKER_REASON,
+  initUnattendedSetupMarker,
+  readUnattendedSetupMarker,
+  writeUnattendedSetupMarker,
+} from './unattendedSetupMarker';
 import { mcpEnabled, mcpReadOnly } from './config';
 import { cliDirPath, putCliOnPath } from './cli';
 import { onDidAttemptGrailInstall } from './grail';
@@ -45,8 +49,6 @@ import { StatusViewProvider } from './statusView';
 import {
   SETUP_OUTCOME,
   SKIP_REASON,
-  type SetupOutcome,
-  type SkipReason,
   Stopwatch,
   TRIGGER,
   initTelemetry,
@@ -62,6 +64,7 @@ export function activate(context: vscode.ExtensionContext): void {
   log(`GemDB ${context.extension.packageJSON.version as string} activated`);
 
   initAutoStart(context.globalStorageUri.fsPath);
+  initUnattendedSetupMarker(context.globalStorageUri.fsPath);
 
   // Installing the demo opens its folder, which is a restarted extension host
   // or a new window — either way this activation, not the one that ran the
@@ -202,7 +205,7 @@ export function activate(context: vscode.ExtensionContext): void {
         // Overwritten, never deleted: deleting it would restart the automatic
         // download on the next window, which is exactly what removing GemDB
         // asked not to happen.
-        if (await uninstall()) writeSetupMarker(context, 'uninstalled');
+        if (await uninstall()) writeUnattendedSetupMarker('uninstalled');
       }),
     ),
     vscode.commands.registerCommand('gemdb.openRepl', () => openRepl(extensionPath)),
@@ -354,51 +357,9 @@ export function activate(context: vscode.ExtensionContext): void {
     reportActivation(activationMs, state);
   })();
 
-  void prepareOnFirstRun(context, extensionPath, () => status.refresh()).then(() =>
+  void prepareOnFirstRun(extensionPath, () => status.refresh()).then(() =>
     autoStart(extensionPath, () => status.refresh()),
   );
-}
-
-/** What `setup-attempted` records: how the last unattended setup ended, or that GemDB was removed. */
-type SetupMarker = SetupOutcome | 'uninstalled' | 'attempted';
-
-const MARKER_REASON: Record<SetupMarker, SkipReason> = {
-  cancelled: SKIP_REASON.cancelledBefore,
-  failed: SKIP_REASON.failedBefore,
-  completed: SKIP_REASON.installedBefore,
-  uninstalled: SKIP_REASON.uninstalled,
-  // Releases through 1.5.1 wrote a timestamp however setup ended: it was
-  // offered, but the outcome was not recorded. Never written, only read.
-  attempted: SKIP_REASON.attemptedBefore,
-};
-
-function markerPath(context: vscode.ExtensionContext): string {
-  return path.join(context.globalStorageUri.fsPath, 'setup-attempted');
-}
-
-/**
- * What the marker records, or `'none'` when there is no marker. A marker that
- * does not say how setup ended still says it was offered, so it reads as
- * `'attempted'` and setup is not offered again: that covers every marker
- * written before outcomes were recorded, and a truncated write fails safe.
- */
-function readSetupMarker(context: vscode.ExtensionContext): SetupMarker | 'none' {
-  let value: string;
-  try {
-    value = fs.readFileSync(markerPath(context), 'utf8').trim();
-  } catch {
-    return 'none';
-  }
-  return Object.hasOwn(MARKER_REASON, value) ? (value as SetupMarker) : 'attempted';
-}
-
-function writeSetupMarker(context: vscode.ExtensionContext, value: SetupMarker): void {
-  try {
-    fs.mkdirSync(context.globalStorageUri.fsPath, { recursive: true });
-    fs.writeFileSync(markerPath(context), value);
-  } catch {
-    /* worst case it is offered once more */
-  }
 }
 
 /**
@@ -416,10 +377,8 @@ function writeSetupMarker(context: vscode.ExtensionContext, value: SetupMarker):
  *
  * Three guards keep the automatic part from being presumptuous:
  *
- *   Once per machine. `globalState` is synced across machines by Settings Sync,
- *   so the flag lives in `globalStorageUri` instead — otherwise signing in on a
- *   second machine would look like "already handled" and silently skip setup,
- *   or worse, one machine's decision would speak for another's.
+ *   Once per machine — see the marker's own doc comment in `unattendedSetupMarker.ts`
+ *   for why it lives outside Settings Sync.
  *
  *   A cancel is final. Pressing Cancel records the decision and the welcome
  *   view takes over; nothing re-prompts on the next window. The partial
@@ -428,11 +387,7 @@ function writeSetupMarker(context: vscode.ExtensionContext, value: SetupMarker):
  *   One window at a time, enforced by a lock file, since activation happens in
  *   every open window and two downloads would otherwise corrupt one file.
  */
-async function prepareOnFirstRun(
-  context: vscode.ExtensionContext,
-  extensionPath: string,
-  refresh: () => void,
-): Promise<void> {
+async function prepareOnFirstRun(extensionPath: string, refresh: () => void): Promise<void> {
   // No `unattendedSetupSkipped` event here, on purpose: every installed machine
   // takes this return on every activation, so it would double event volume and
   // bury the rare skip reasons. `activated{state}` already records it.
@@ -445,7 +400,7 @@ async function prepareOnFirstRun(
     return;
   }
 
-  const marker = readSetupMarker(context);
+  const marker = readUnattendedSetupMarker();
   if (marker !== 'none') {
     reportUnattendedSetupSkipped(MARKER_REASON[marker]);
     return;
@@ -496,7 +451,7 @@ async function prepareOnFirstRun(
   // Recorded however it ended — either way this machine has been offered
   // setup, and a cancel is a decision to be respected. The outcome is what
   // the marker holds, so a later skip can say which of those it was.
-  writeSetupMarker(context, outcome.files);
+  writeUnattendedSetupMarker(outcome.files);
 
   refresh();
   if (outcome.files !== SETUP_OUTCOME.completed) return;
