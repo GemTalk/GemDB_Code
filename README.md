@@ -217,9 +217,15 @@ machine-wide, it prompts you and waits for your permission:
   **GemDB: Keep the Database Running After Logout** from the Command Palette. The change takes
   effect after you restart your computer.
 
-GemDB Code never edits your shell profile or any AI client's configuration files. For AI clients it
-copies the command or snippet for you to paste. For the line to add to your shell profile, see
+GemDB Code never edits your shell profile. For the line to add to it, see
 [The `gemdb` command](#the-gemdb-command).
+
+AI client configuration is different: GemDB Code sets it up for you where it can, so each client
+connects to the right MCP server. In VS Code, it registers the server automatically. For Claude
+Code, it runs Claude Code's own `claude mcp add` command for the open folder and shows you how to
+undo it. For Claude Desktop and Cursor, it copies a JSON snippet with the server's address for you
+to merge into that client's configuration file. See
+[Connecting an AI agent](#connecting-an-ai-agent).
 
 ### Starting and stopping the database
 
@@ -361,27 +367,60 @@ database)**.
 
 ### Connecting an AI agent
 
-GemDB Code's MCP server lets an AI agent query and change your database directly. The agent can list
-what is stored, browse and search classes and methods, run Python, define classes and methods, and
-commit. The server starts and stops with the database and listens only on `127.0.0.1`.
+GemDB Code includes an MCP server, which lets an AI agent such as Claude Code work in your database
+on your behalf. Because your data is made of Python objects, the agent works with it by running
+Python in the database: for example, to answer a question about your data or to add an attribute to
+a class. It can also list what is stored, search for classes and methods, define classes and
+methods, and commit changes. The server accepts connections only from programs on your own computer
+(`127.0.0.1`), so nothing on your network can reach your database through it.
 
-**The server is off until you turn it on.** Choose **Connect an AI Agent to GemDB** from the GemDB
-Code sidebar's **⋯** menu, then choose **Turn It On**. The server then registers itself with VS
-Code, so it appears in this editor's MCP server list with no configuration. In VS Code, the first
-time an agent uses the server, GemDB Code starts the database if it is not running. Clients outside
-VS Code need the database to be running already.
+The MCP server is off by default. Turning it on does not start anything by itself: it sets GemDB
+Code to run the server whenever the database is running. The server starts when the database starts,
+and stops when the database stops.
 
-For an agent outside VS Code, the same command lets you choose the client, and GemDB Code copies the
-exact command or JSON that client needs. For Claude Code, for example:
+To connect Claude Code:
 
-```sh
-claude mcp add --transport http gemdb http://127.0.0.1:50390/mcp
-```
+1. Open the folder you want Claude Code to work in, such as the
+   [Brain Freeze demo](#the-brain-freeze-demo).
+2. From the GemDB Code sidebar's **⋯** menu, choose **Connect an AI Agent to GemDB**. The first
+   time, a dialog prompts you to turn the MCP server on. Choose **Turn It On**. GemDB Code starts
+   the database, and with it the server, if they are not already running.
+3. From the list of clients, choose **Claude Code**. GemDB Code runs Claude Code's `claude mcp add`
+   command for that folder, and then shows you both the command it ran and the command that undoes
+   it.
+4. Start a new Claude Code conversation in that folder: run `claude` again in a terminal, or start a
+   new conversation in the Claude Code panel. Claude Code reads its list of servers only when a
+   conversation starts, so a conversation that was already open does not see GemDB.
 
-Claude Desktop and Cursor get a JSON snippet to merge into their configuration. Any client that
-supports MCP's Streamable HTTP transport can use the URL directly.
+About the Claude Code connection:
 
-Before you turn it on, note the following:
+- **It applies to that folder only.** Claude Code conversations in other folders do not connect to
+  GemDB. This is intentional: each connected conversation uses one of the database's limited
+  sessions (see [Sessions](#sessions)).
+- **The database must be running.** If you stop the database, restart it from the sidebar before you
+  use Claude Code.
+- **If you change the server's port** (`gemdb.mcp.port`), run **Connect an AI Agent to GemDB** again
+  in that folder. GemDB Code prompts you before it replaces the old entry.
+- **If GemDB Code cannot run the command,** because no folder is open, the folder is not trusted, or
+  the `claude` command cannot be found, it copies the command for you to run from a terminal prompt
+  in that folder:
+
+  ```sh
+  claude mcp add --transport http --scope local gemdb http://127.0.0.1:50390/mcp
+  ```
+
+Connecting other AI clients:
+
+- **Agents inside VS Code**, such as GitHub Copilot in agent mode, need no setup to connect to the
+  MCP server. Once the server is on, it appears in VS Code's MCP server list. If the database is
+  stopped when one of these agents tries to use it, GemDB Code starts it.
+- **Claude Desktop and Cursor**: choose that client in step 3 instead. GemDB Code copies a JSON
+  snippet for you to merge into that client's configuration file. Like Claude Code, these clients
+  need the database to be running.
+- **Any other MCP client** that supports the Streamable HTTP transport: choose **Something else** to
+  copy the server's URL.
+
+Keep the following in mind:
 
 - **Each connected client gets its own session**, so agents never see each other's uncommitted work.
   Agents take sessions from the same limited pool as your notebooks and shells (see
