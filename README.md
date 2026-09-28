@@ -488,19 +488,22 @@ corrupts it.
 
 ### GemDB Code updates and associated data
 
-Each GemDB Code release is tied to one database engine version. Some updates move to a new engine
-version, and a database created by the earlier engine cannot be opened by the new one. There is no
-in-place upgrade. When this happens, GemDB Code shows a message before it starts the database,
-naming the directory to remove. Removing that directory deletes everything stored in the database.
+Each GemDB Code release is tied to a database engine version. If a new release also moves to a newer
+engine version, the database created by the earlier engine version cannot be opened by the newer
+one. There is no in-place upgrade, and there is not yet a way to export your data. When this
+happens, GemDB Code shows a message before it starts the database, naming the directory to remove.
+Removing that directory deletes everything stored in the database.
 
-To keep your data, copy out anything you need before you update GemDB Code. VS Code updates
-extensions automatically by default. To choose when GemDB Code updates, clear **Auto Update** on its
-page in the Extensions view.
+For this reason, you should not expect to keep access to your data after an update that changes the
+engine version. VS Code updates extensions automatically, so such an update can arrive without you
+choosing it. To decide when GemDB Code updates, clear **Auto Update** on its page in the Extensions
+view.
 
-The same guidance applies if you change the engine version yourself with the `gemdb.engineVersion`
-setting.
+Changing the engine version yourself with the `gemdb.engineVersion` setting has the same effect.
 
-> **REVIEWER QUESTION:** How do users copy their data? Can we add a useful detail to this section?
+<!-- Restore once there is a supported export path:
+To keep your data, copy out anything you need before you update GemDB Code.
+-->
 
 ### Settings
 
