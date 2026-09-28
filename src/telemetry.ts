@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { TelemetryReporter } from '@vscode/extension-telemetry';
+import type { DiskSnapshot } from './paths';
 import type { GemDbState } from './statusView';
 
 /**
@@ -324,9 +325,26 @@ export type SkipReason = (typeof SKIP_REASON)[keyof typeof SKIP_REASON];
  * same activation. `cancelledBefore` is the highest-value reason here: it is
  * exactly "this user is stuck behind their own earlier cancel", and it is
  * invisible today.
+ *
+ * @param disk what is on disk at this moment (`diskSnapshot`), passed only with
+ *   the marker reasons. Those record history — why the unattended setup is off
+ *   — and cannot say why GemDB is missing now, e.g. an engine pin move strands a
+ *   completed install. The snapshot is facts, not a cause, so the two are
+ *   combined at query time and nothing here infers or rewrites the marker.
+ *   Values only, never paths or versions.
  */
-export function reportUnattendedSetupSkipped(skipReason: SkipReason): void {
-  send(EVENT.unattendedSetupSkipped, { skipReason });
+export function reportUnattendedSetupSkipped(skipReason: SkipReason, disk?: DiskSnapshot): void {
+  send(
+    EVENT.unattendedSetupSkipped,
+    disk === undefined
+      ? { skipReason }
+      : {
+          skipReason,
+          databaseOnDisk: String(disk.databaseOnDisk),
+          engineOnDisk: disk.engineOnDisk,
+          grailOnDisk: String(disk.grailOnDisk),
+        },
+  );
 }
 
 /**

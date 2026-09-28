@@ -39,6 +39,7 @@ import {
   isSharedMemoryConfigured,
   osConfigAllowsStart,
 } from './osConfig';
+import { diskSnapshot } from './paths';
 import { isSupportedPlatform, setContext } from './platform';
 import { isRunning, isRunningAsync } from './processes';
 import { renameOwner } from './pythonQueries';
@@ -403,7 +404,7 @@ async function prepareOnFirstRun(extensionPath: string, refresh: () => void): Pr
 
   const marker = readUnattendedSetupMarker();
   if (marker !== 'none') {
-    reportUnattendedSetupSkipped(MARKER_REASON[marker]);
+    reportUnattendedSetupSkipped(MARKER_REASON[marker], diskSnapshot());
     return;
   }
 

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { __commands, __resetSettings, __setSetting, env } from '../__mocks__/vscode';
+import { engineDirName, extentPath } from '../paths';
 import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 
 // `activate()` is synchronous, but everything after its two exits — the
@@ -174,6 +175,17 @@ describe('activate()', () => {
       }));
     }
 
+    // What `diskSnapshot` adds to a marker-based skip, as sent: strings, so
+    // the booleans arrive as 'true' and 'false'.
+    const DISK_PROPERTIES = ['databaseOnDisk', 'engineOnDisk', 'grailOnDisk'];
+    function diskSent(): Record<string, unknown>[] {
+      return eventsNamed('unattendedSetupSkipped').map((e) =>
+        Object.fromEntries(
+          Object.entries(e.properties).filter(([key]) => DISK_PROPERTIES.includes(key)),
+        ),
+      );
+    }
+
     it('stays silent on an installed machine, leaving that to activated', async () => {
       isInstalled.mockReturnValue(true);
       isRunning.mockReturnValue(false);
@@ -192,21 +204,7 @@ describe('activate()', () => {
       activate(fakeExtensionContext());
 
       expect(skipped()).toEqual([{ skipReason: 'remoteWindow' }]);
-    });
-
-    it.each([
-      ['cancelled', 'cancelledBefore'],
-      ['failed', 'failedBefore'],
-      ['completed', 'installedBefore'],
-      ['uninstalled', 'uninstalled'],
-    ])('reports %s recorded in the marker as %s', (recorded, skipReason) => {
-      isInstalled.mockReturnValue(false);
-      const context = fakeExtensionContext();
-      writeFileSync(join(context.globalStorageUri.fsPath, 'setup-attempted'), recorded);
-
-      activate(context);
-
-      expect(skipped()).toEqual([{ skipReason }]);
+      expect(diskSent()).toEqual([{}]);
     });
 
     it('reports a marker that records no outcome as attemptedBefore, and leaves it', async () => {
@@ -224,6 +222,30 @@ describe('activate()', () => {
       expect(readFileSync(marker, 'utf8')).toBe(legacy);
     });
 
+    it.each([
+      ['cancelled', 'cancelledBefore'],
+      ['failed', 'failedBefore'],
+      ['completed', 'installedBefore'],
+      ['uninstalled', 'uninstalled'],
+      [new Date().toISOString(), 'attemptedBefore'],
+    ])('reports %s recorded in the marker as %s, with what is on disk', (recorded, skipReason) => {
+      isInstalled.mockReturnValue(false);
+      const context = fakeExtensionContext();
+      writeFileSync(join(context.globalStorageUri.fsPath, 'setup-attempted'), recorded);
+      // A database and an engine this build does not pin, and no Grail: each
+      // property reads differently from an empty root path's.
+      mkdirSync(join(extentPath(), '..'), { recursive: true });
+      writeFileSync(extentPath(), '');
+      mkdirSync(join(rootPathValue, engineDirName('0.0.1')));
+
+      activate(context);
+
+      expect(skipped()).toEqual([{ skipReason }]);
+      expect(diskSent()).toEqual([
+        { databaseOnDisk: 'true', engineOnDisk: 'other', grailOnDisk: 'false' },
+      ]);
+    });
+
     it('reports lockHeld when another window already owns the setup lock', async () => {
       isInstalled.mockReturnValue(false);
       mkdirSync(join(rootPathValue, '.gemdb-locks'), { recursive: true });
@@ -236,6 +258,7 @@ describe('activate()', () => {
       activate(fakeExtensionContext());
 
       await expect.poll(skipped).toEqual([{ skipReason: 'lockHeld' }]);
+      expect(diskSent()).toEqual([{}]);
     });
 
     it('reports installedByOtherWindow when the lock re-check finds it already done', async () => {
@@ -256,6 +279,7 @@ describe('activate()', () => {
       activate(context);
 
       await expect.poll(skipped).toEqual([{ skipReason: 'installedByOtherWindow' }]);
+      expect(diskSent()).toEqual([{}]);
       // Recorded like any other first run, from the outcome it saw.
       const marker = join(context.globalStorageUri.fsPath, 'setup-attempted');
       expect(readFileSync(marker, 'utf8')).toBe('completed');

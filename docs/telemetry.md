@@ -88,6 +88,29 @@ user starts themselves that fails or is cancelled is not recorded there; see
 carry a stale `cancelledBefore`, `failedBefore` or `attemptedBefore`, because
 those releases never updated it after a later setup completed.
 
+The five marker reasons also carry what is on disk at that moment. These
+describe the files, not why they are there.
+
+| Property         | Values                        | Meaning                                                  |
+| ---------------- | ----------------------------- | -------------------------------------------------------- |
+| `databaseOnDisk` | `true`, `false`               | The database's extent file exists.                       |
+| `engineOnDisk`   | `none`, `current`, `other`    | `current` is the engine this version of GemDB installs; `other` is only an engine for this platform that it does not. |
+| `grailOnDisk`    | `true`, `false`               | Python support has been copied into place.               |
+
+`skipReason` says why the unattended setup is off; these say what is left. Together
+they separate cases that look alike:
+
+- A marker reason with the database and an `other` engine, and no `current`
+  one, is a database stranded by an engine version change.
+- `failedBefore` with the database and a `current` engine but no Grail is an
+  unattended first run that failed partway.
+- `uninstalled` with only the database is an uninstall that kept the data.
+- Nothing on disk with `installedBefore` is a changed root path, or files that
+  were deleted.
+
+Leftovers are not causes. Uninstall removes only the current engine, so older
+engine directories survive it.
+
 ### `setupStarted` and `setupFinished`
 
 Setup downloads and unpacks the database (about 210 MB). `setupStarted` is sent
