@@ -9,14 +9,7 @@ import {
   removeDatabase,
 } from './database';
 import { Progress, installEngine, removeEngine } from './engine';
-import {
-  grailLabel,
-  grailNeedsUpdate,
-  recordGrailInstalled,
-  installGrail,
-  stageGrail,
-  bundledGrailStamp,
-} from './grail';
+import { bundledGrailStamp, fileInGrail, grailLabel, grailNeedsUpdate, stageGrail } from './grail';
 import { errorMessage, log, logStep, showLog } from './log';
 import {
   bundledMcpStamp,
@@ -375,9 +368,7 @@ export async function ensureRunning(extensionPath: string, trigger: Trigger): Pr
           progress.report({
             message: firstTime ? 'Installing Python support…' : 'Updating Python support…',
           });
-          stageGrail(extensionPath);
-          await installGrail(extensionPath, progress);
-          recordGrailInstalled(extensionPath);
+          await fileInGrail(extensionPath, progress);
           filedGrail = firstTime ? FILED_GRAIL.firstTime : FILED_GRAIL.update;
         }
 
@@ -647,9 +638,7 @@ export async function reinstallGrail(extensionPath: string): Promise<void> {
     { location: vscode.ProgressLocation.Notification, title: 'Reinstalling Python support' },
     async (progress) => {
       try {
-        stageGrail(extensionPath);
-        await installGrail(extensionPath, progress);
-        recordGrailInstalled(extensionPath);
+        await fileInGrail(extensionPath, progress);
         void vscode.window.showInformationMessage('Python support reinstalled.');
       } catch (e) {
         void vscode.window
