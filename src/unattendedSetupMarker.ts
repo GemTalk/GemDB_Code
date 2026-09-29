@@ -4,8 +4,25 @@ import type { SetupOutcome, SkipReason } from './telemetry';
 import { SKIP_REASON } from './telemetry';
 
 /**
- * The `setup-attempted` marker: how the last unattended setup ended, or that
- * GemDB was removed.
+ * The unattended setup marker: whether the automatic first-run setup has had
+ * its turn, and why it is off. Its presence means "do not run the unattended
+ * setup again"; its value says why, and becomes the `skipReason` of
+ * `unattendedSetupSkipped`:
+ *
+ *   `cancelled`, `failed` — the unattended first run ended that way, and no
+ *   setup has completed since.
+ *   `completed` — a setup completed, whether it was the first run or a later
+ *   Start, Install or notebook cell.
+ *   `uninstalled` — the user ran Uninstall, and no setup has completed since.
+ *   `attempted` — content this version does not recognise: releases through
+ *   1.5.1 wrote a timestamp however setup ended. Never written, only read.
+ *
+ * It is not a log of every setup. An explicit setup that fails or is
+ * cancelled leaves the marker alone; `setupFinished` records those.
+ *
+ * The file is named `setup-attempted` on disk and must stay that way: renaming
+ * it would make every existing machine look markerless and run the unattended
+ * setup a second time.
  *
  * It lives in `globalStorageUri` rather than `globalState`, because
  * `globalState` is synced across machines by Settings Sync — a marker that
@@ -21,8 +38,7 @@ export const MARKER_REASON: Record<UnattendedSetupMarker, SkipReason> = {
   failed: SKIP_REASON.failedBefore,
   completed: SKIP_REASON.installedBefore,
   uninstalled: SKIP_REASON.uninstalled,
-  // Releases through 1.5.1 wrote a timestamp however setup ended: it was
-  // offered, but the outcome was not recorded. Never written, only read.
+  // Never written, only read: see the module comment.
   attempted: SKIP_REASON.attemptedBefore,
 };
 

@@ -43,6 +43,8 @@ const { runSetup } = await import('../lifecycle');
 // the wire value, so renaming one must fail here rather than silently split a
 // series in App Insights.
 const { TRIGGER, initTelemetry } = await import('../telemetry');
+const { initUnattendedSetupMarker, readUnattendedSetupMarker, writeUnattendedSetupMarker } =
+  await import('../unattendedSetupMarker');
 
 describe('runSetup', () => {
   beforeEach(() => {
@@ -54,7 +56,9 @@ describe('runSetup', () => {
     // `send()` in telemetry.ts is a no-op until `initTelemetry` has run —
     // exactly as in a real activation — so this test needs one too, with a
     // throwaway global storage directory.
-    initTelemetry(fakeExtensionContext(), false);
+    const context = fakeExtensionContext();
+    initTelemetry(context, false);
+    initUnattendedSetupMarker(context.globalStorageUri.fsPath);
   });
 
   it('completes when every step succeeds', async () => {
@@ -96,6 +100,27 @@ describe('runSetup', () => {
     expect(finished[0].properties.outcome).toBe('cancelled');
   });
 
+  it('completes when the cancel is requested after the download step was checked', async () => {
+    // What a Cancel pressed while the database is created or Grail staged
+    // amounts to: those steps do not yield, so nothing looks at the token again.
+    let token: FakeToken | undefined;
+    installEngine.mockImplementation(async (_progress, t) => {
+      token = t;
+      return '/engine';
+    });
+    createDatabase.mockImplementation(() => {
+      if (token) Object.defineProperty(token, 'isCancellationRequested', { value: true });
+      return { created: true, preloaded: true };
+    });
+    writeUnattendedSetupMarker('cancelled');
+
+    const outcome = await runSetup('/ext', TRIGGER.firstRun);
+
+    expect(outcome).toBe('completed');
+    expect(stageGrail).toHaveBeenCalledWith('/ext');
+    expect(readUnattendedSetupMarker()).toBe('completed');
+  });
+
   it('is cancelled when a step throws "Download cancelled"', async () => {
     installEngine.mockRejectedValue(new Error('Download cancelled'));
 
@@ -114,5 +139,62 @@ describe('runSetup', () => {
     expect(finished[0].properties).toMatchObject({ trigger: 'firstRun', outcome: 'failed' });
     expect(Object.values(finished[0].properties).join(' ')).not.toContain('ECONNRESET');
     expect(Object.values(finished[0].properties).join(' ')).not.toContain('/some/local/path');
+  });
+
+  describe('the unattended setup marker', () => {
+    it('is replaced by a completed run', async () => {
+      writeUnattendedSetupMarker('cancelled');
+
+      await runSetup('/ext', TRIGGER.installCommand);
+
+      expect(readUnattendedSetupMarker()).toBe('completed');
+    });
+
+    it('is replaced by a completed run after an uninstall', async () => {
+      writeUnattendedSetupMarker('uninstalled');
+
+      await runSetup('/ext', TRIGGER.notebook);
+
+      expect(readUnattendedSetupMarker()).toBe('completed');
+    });
+
+    it('is not created by a completed run, so unattended setup stays allowed', async () => {
+      await runSetup('/ext', TRIGGER.installCommand);
+
+      expect(readUnattendedSetupMarker()).toBe('none');
+    });
+
+    it('is left alone by a failed run', async () => {
+      writeUnattendedSetupMarker('cancelled');
+      installEngine.mockRejectedValue(new Error('ECONNRESET'));
+
+      await runSetup('/ext', TRIGGER.notebook);
+
+      expect(readUnattendedSetupMarker()).toBe('cancelled');
+    });
+
+    it('is left alone by a cancelled run', async () => {
+      writeUnattendedSetupMarker('failed');
+      installEngine.mockRejectedValue(new Error('Download cancelled'));
+
+      await runSetup('/ext', TRIGGER.notebook);
+
+      expect(readUnattendedSetupMarker()).toBe('failed');
+    });
+
+    it('is left alone by a run cancelled while the engine was being extracted', async () => {
+      writeUnattendedSetupMarker('failed');
+      installEngine.mockImplementation(async (_progress, token) => {
+        Object.defineProperty(token, 'isCancellationRequested', { value: true });
+        return '/engine';
+      });
+
+      const outcome = await runSetup('/ext', TRIGGER.notebook);
+
+      expect(outcome).toBe('cancelled');
+      expect(createDatabase).not.toHaveBeenCalled();
+      expect(stageGrail).not.toHaveBeenCalled();
+      expect(readUnattendedSetupMarker()).toBe('failed');
+    });
   });
 });

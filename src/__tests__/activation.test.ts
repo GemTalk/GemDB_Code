@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { __commands, __resetSettings, __setSetting, env } from '../__mocks__/vscode';
@@ -15,12 +15,13 @@ import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 // `__telemetry`.
 const isInstalled = vi.fn(() => true);
 const uninstall = vi.fn(async () => true);
+const prepare = vi.fn(async (): Promise<string> => 'failed');
 vi.mock('../lifecycle', () => ({
   isInstalled: () => isInstalled(),
   ensureMcpRunning: async () => false,
   ensureRunning: async () => false,
   install: async () => {},
-  prepare: async () => 'failed',
+  prepare: () => prepare(),
   reinstallGrail: async () => {},
   start: async () => {},
   stop: async () => {},
@@ -38,17 +39,38 @@ vi.mock('../processes', () => ({
   isListening: () => true,
   listProcesses: () => [],
 }));
+const ensureOsConfigured = vi.fn(async (): Promise<string> => 'alreadyConfigured');
 vi.mock('../osConfig', async (importOriginal) => ({
   osConfigAllowsStart: (await importOriginal<typeof import('../osConfig')>()).osConfigAllowsStart,
   configureSharedMemory: async () => {},
   configureRemoveIpc: async () => {},
-  ensureOsConfigured: async () => 'alreadyConfigured',
+  ensureOsConfigured: () => ensureOsConfigured(),
   isSharedMemoryConfigured: async () => false,
   isRemoveIpcConfigured: () => false,
   sharedMemoryLabel: async () => '',
 }));
 
+// Only what the real `runSetup` touches, for the first run marker tests that
+// complete an explicit setup through it: no download, no database, no copy.
+vi.mock('../engine', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../engine')>()),
+  installEngine: async () => '/engine',
+}));
+vi.mock('../database', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../database')>()),
+  assertDatabaseMatchesEngine: () => {},
+  createDatabase: () => true,
+}));
+vi.mock('../grail', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../grail')>()),
+  stageGrail: () => {},
+}));
+
 const { activate } = await import('../extension');
+// The real one, past the `lifecycle` mock above: it is what writes `completed`
+// over the marker when an explicit setup completes.
+const { runSetup } = await vi.importActual<typeof import('../lifecycle')>('../lifecycle');
+const { TRIGGER } = await import('../telemetry');
 
 describe('activate()', () => {
   let originalPlatform: PropertyDescriptor | undefined;
@@ -63,6 +85,8 @@ describe('activate()', () => {
     originalArch = Object.getOwnPropertyDescriptor(process, 'arch');
     isInstalled.mockReset().mockReturnValue(true);
     uninstall.mockReset().mockResolvedValue(true);
+    prepare.mockReset().mockResolvedValue('failed');
+    ensureOsConfigured.mockReset().mockResolvedValue('alreadyConfigured');
     isRunning.mockReset().mockReturnValue(false);
     Object.defineProperty(process, 'platform', { value: 'darwin' });
     Object.defineProperty(process, 'arch', { value: 'arm64' });
@@ -227,10 +251,48 @@ describe('activate()', () => {
         .mockReturnValueOnce(false) // prepareOnFirstRun's outer check
         .mockReturnValue(true); // the re-check inside the lock
 
-      activate(fakeExtensionContext());
+      const context = fakeExtensionContext();
+
+      activate(context);
 
       await expect.poll(skipped).toEqual([{ skipReason: 'installedByOtherWindow' }]);
+      // Recorded like any other first run, from the outcome it saw.
+      const marker = join(context.globalStorageUri.fsPath, 'setup-attempted');
+      expect(readFileSync(marker, 'utf8')).toBe('completed');
     });
+  });
+
+  describe('the first run marker', () => {
+    it.each(['cancelled', 'failed'])(
+      'is written when the files step ends %s, so a setup completed while the OS step waits is kept',
+      async (filesOutcome) => {
+        isInstalled.mockReturnValue(false);
+        prepare.mockResolvedValue(filesOutcome);
+        // The OS step waiting on a sudo terminal the user has not finished with.
+        let releaseOs: (result: string) => void = () => {};
+        ensureOsConfigured.mockReturnValue(
+          new Promise((resolve) => {
+            releaseOs = resolve;
+          }),
+        );
+        const context = fakeExtensionContext();
+        const marker = join(context.globalStorageUri.fsPath, 'setup-attempted');
+        const lock = join(rootPathValue, '.gemdb-setup.lock');
+
+        activate(context);
+        await expect.poll(() => prepare.mock.calls.length).toBe(1);
+        await new Promise((resolve) => setImmediate(resolve));
+
+        // Meanwhile the user presses Resume and that setup completes.
+        expect(await runSetup('/ext', TRIGGER.installCommand)).toBe('completed');
+
+        releaseOs('declined');
+        await expect.poll(() => existsSync(lock)).toBe(false);
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(readFileSync(marker, 'utf8')).toBe('completed');
+      },
+    );
   });
 
   describe('gemdb.uninstall', () => {

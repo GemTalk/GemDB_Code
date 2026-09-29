@@ -377,8 +377,9 @@ export function activate(context: vscode.ExtensionContext): void {
  *
  * Three guards keep the automatic part from being presumptuous:
  *
- *   Once per machine — see the marker's own doc comment in `unattendedSetupMarker.ts`
- *   for why it lives outside Settings Sync.
+ *   Once per machine — the unattended setup marker says so; see its doc
+ *   comment in `unattendedSetupMarker.ts`, which also says why it lives
+ *   outside Settings Sync.
  *
  *   A cancel is final. Pressing Cancel records the decision and the welcome
  *   view takes over; nothing re-prompts on the next window. The partial
@@ -408,8 +409,10 @@ async function prepareOnFirstRun(extensionPath: string, refresh: () => void): Pr
 
   const outcome = await withSetupLock(async () => {
     // Re-check inside the lock: another window may have finished the whole
-    // thing while this one was waiting to acquire it.
+    // thing while this one was waiting to acquire it. Recorded like any first
+    // run that completed.
     if (isInstalled()) {
+      writeUnattendedSetupMarker(SETUP_OUTCOME.completed);
       return {
         files: SETUP_OUTCOME.completed,
         configured: await isSharedMemoryConfigured(),
@@ -434,7 +437,20 @@ async function prepareOnFirstRun(extensionPath: string, refresh: () => void): Pr
     // The two touch nothing in common — one writes into the root path, the
     // other runs a script under sudo — so there is no ordering between them to
     // get wrong. Neither rejects: both report failure by returning.
-    const files = prepare(extensionPath);
+    //
+    // The files outcome goes into the marker however it ended — either way
+    // this machine has been offered setup, and a cancel is a decision to be
+    // respected — so a later skip can say which it was. It is written the
+    // moment that step ends, not once both have: the permission step can wait
+    // on a sudo terminal indefinitely, and a cancelled or failed download has
+    // already offered Resume by then. An explicit setup the user completes
+    // meanwhile — Resume, Start, a cell — must find the marker, or `runSetup`
+    // skips its `completed` write and a write here afterwards would put
+    // `cancelled` or `failed` back over a finished install (#53).
+    const files = prepare(extensionPath).then((outcome) => {
+      writeUnattendedSetupMarker(outcome);
+      return outcome;
+    });
     const os = ensureOsConfigured(extensionPath, TRIGGER.firstRun).then(
       osConfigAllowsStart,
       () => false,
@@ -447,11 +463,6 @@ async function prepareOnFirstRun(extensionPath: string, refresh: () => void): Pr
     return; // another window is doing it
   }
   if (!outcome.ranSetup) reportUnattendedSetupSkipped(SKIP_REASON.installedByOtherWindow);
-
-  // Recorded however it ended — either way this machine has been offered
-  // setup, and a cancel is a decision to be respected. The outcome is what
-  // the marker holds, so a later skip can say which of those it was.
-  writeUnattendedSetupMarker(outcome.files);
 
   refresh();
   if (outcome.files !== SETUP_OUTCOME.completed) return;
