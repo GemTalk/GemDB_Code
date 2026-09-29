@@ -4,9 +4,9 @@ import { spawn } from 'child_process';
 import * as vscode from 'vscode';
 import { DB_PASSWORD, DB_USER, STONE_NAME, rootPath } from './config';
 import { platformKey, sharedLibraryExtension } from './platform';
-import { log, logStep } from './log';
+import { errorMessage, log, logStep } from './log';
 import { engineEnvironment, shimLibraryPath } from './processes';
-import { grailPath, grailStampPath, installedGrailStamp } from './paths';
+import { grailFailurePath, grailPath, grailStampPath, installedGrailStamp } from './paths';
 import { logoutAll } from './session';
 import { writeCliScripts } from './cli';
 
@@ -122,6 +122,83 @@ export function recordGrailInstalled(extensionPath: string): void {
   const stamp = bundledGrailStamp(extensionPath);
   if (!stamp) return;
   fs.writeFileSync(grailStampPath(), `${stamp}\n`);
+  fs.rmSync(grailFailurePath(), { force: true });
+}
+
+/** What the status view needs to say that filing Grail in failed. */
+export interface GrailInstallFailure {
+  /** The bundled build that failed, or null when the build shipped none. */
+  stamp: string | null;
+  /** When, as an ISO timestamp. */
+  at: string;
+  /** The error, as the notification showed it. */
+  message: string;
+}
+
+const installAttempts = new vscode.EventEmitter<void>();
+
+/**
+ * Fires after every attempt to file Grail in, whichever way it went. The
+ * status view listens, because most attempts are not a command the view
+ * could refresh after: a notebook's first cell reaches `ensureRunning`
+ * directly.
+ */
+export const onDidAttemptGrailInstall = installAttempts.event;
+
+/**
+ * Stage Grail, file it into the running database, and record the outcome —
+ * the stamp on success, a failure record otherwise.
+ *
+ * The one path both callers take, so neither can forget the failure record:
+ * without it the status view read a failed install as a fresh one ("installs
+ * when you first run Python"), since staging had already deleted the stamp.
+ */
+export async function fileInGrail(
+  extensionPath: string,
+  progress: vscode.Progress<{ message?: string }>,
+): Promise<void> {
+  try {
+    stageGrail(extensionPath);
+    await installGrail(extensionPath, progress);
+    recordGrailInstalled(extensionPath);
+  } catch (e) {
+    recordGrailFailed(extensionPath, e);
+    throw e;
+  } finally {
+    installAttempts.fire();
+  }
+}
+
+function recordGrailFailed(extensionPath: string, e: unknown): void {
+  const failure: GrailInstallFailure = {
+    stamp: bundledGrailStamp(extensionPath) ?? null,
+    at: new Date().toISOString(),
+    message: errorMessage(e),
+  };
+  try {
+    fs.writeFileSync(grailFailurePath(), `${JSON.stringify(failure)}\n`);
+  } catch (w) {
+    // The failure itself is already on its way to a notification; losing the
+    // record only costs the status view its warning.
+    log(`Could not record the failed Python install: ${errorMessage(w)}`);
+  }
+}
+
+/**
+ * The failed install of the Grail this extension ships, if one is on record.
+ *
+ * A record for a different build is ignored: an update that ships a fixed
+ * payload has not failed yet, and saying it had would be the stale warning
+ * this record exists to replace.
+ */
+export function grailInstallFailure(extensionPath: string): GrailInstallFailure | undefined {
+  let failure: GrailInstallFailure;
+  try {
+    failure = JSON.parse(fs.readFileSync(grailFailurePath(), 'utf8')) as GrailInstallFailure;
+  } catch {
+    return undefined;
+  }
+  return failure.stamp === (bundledGrailStamp(extensionPath) ?? null) ? failure : undefined;
 }
 
 function listShellScripts(dir: string): string[] {

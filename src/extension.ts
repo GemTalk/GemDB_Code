@@ -15,6 +15,7 @@ import {
 import { autoStartSuppressed, initAutoStart, suppressAutoStart } from './autoStart';
 import { mcpEnabled, mcpReadOnly } from './config';
 import { cliDirPath, putCliOnPath } from './cli';
+import { onDidAttemptGrailInstall } from './grail';
 import { withSetupLock } from './lock';
 import { disposeLog, log, showLog } from './log';
 import {
@@ -160,6 +161,12 @@ export function activate(context: vscode.ExtensionContext): void {
       if (state.focused) status.refresh();
     }),
   );
+
+  // Installing Python support mostly happens on the way to running something
+  // — a notebook's first cell, the GemDB Shell — not from a command wrapped
+  // in `refreshing`, so the outcome refreshes the view itself. A failure left
+  // unshown here reads as a fresh install once its notification is gone.
+  context.subscriptions.push(onDidAttemptGrailInstall(() => status.refresh()));
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
