@@ -95,6 +95,20 @@ describe('writeCliScripts', () => {
     expect(run).toContain('label size > 31 ifTrue:');
   });
 
+  it('reports an uncaught exception only after the stack has unwound', () => {
+    writeCliScripts(ext);
+
+    const run = fs.readFileSync(path.join(root, 'bin', 'gemdb-run.tpz'), 'utf8');
+
+    // The handler runs at the signal point, where a RecursionError leaves only
+    // the stack's reserve; anything more than handing the exception back can
+    // overflow it. So the handler must stay exactly this, and the traceback
+    // is rendered from what it returns.
+    expect(run).toContain('] on: AbstractException do: [:ex | ex return: ex].');
+    expect(run).toContain('uncaught ifNotNil: [:ex |');
+    expect(run.indexOf('pythonTracebackString')).toBeGreaterThan(run.indexOf('ex return: ex'));
+  });
+
   it('makes no arguments the GemDB Shell, run by the recorded Node runtime', () => {
     writeCliScripts(ext);
 

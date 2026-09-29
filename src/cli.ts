@@ -222,7 +222,7 @@ set user ${DB_USER} pass ${DB_PASSWORD}
 set gemstone ${STONE_NAME}
 login
 run
-| args ofs target status statusFile label |
+| args ofs target status statusFile label uncaught |
 "No canonical-modules flag is set here; see cli.ts. Grail retired that
 flag once warm binding became its only path -- what is warm is now
 decided by what has been committed, which is what installing Grail
@@ -254,7 +254,7 @@ forwards to the client as error 2336, which is not catchable in the gem."
 SessionTemps current at: #'GrailConsole'
     put: (Array with: GsFile stdout with: #'utf8').
 [
-    [
+    uncaught := [
         target := args at: ofs + 1.
         "Name this session in the shared cache, so a long-running script is
         identifiable from outside -- another window, topaz, a dashboard --
@@ -277,9 +277,19 @@ SessionTemps current at: #'GrailConsole'
         target = '-m'
             ifTrue: [importlib runModule: (args at: ofs + 2)]
             ifFalse: [importlib runPath: target].
-    ] on: AbstractException do: [:ex |
-        | sysExit |
+        nil
+    ] on: AbstractException do: [:ex | ex return: ex].
+    "Report after unwinding, never in the handler above. A handler runs at the
+    signal point, on top of the stack that raised, and for a RecursionError
+    that is the last few hundred frames of reserve: rendering a traceback
+    there overflows it (Grail's own grail.tpz does, GemTalk/Grail#1261), and
+    even small edits to such a handler were measured to turn the report into
+    an AlmostOutOfStackError. Unwinding first also runs the script's finally
+    blocks before the traceback prints, which is CPython's order."
+    uncaught ifNotNil: [:ex |
+        | sysExit baseExc |
         sysExit := System myUserProfile symbolList objectNamed: #'SystemExit'.
+        baseExc := System myUserProfile symbolList objectNamed: #'BaseException'.
         (ex isKindOf: ExitClientError)
             ifTrue: [status := ex status ifNil: [1]]
             ifFalse: [(sysExit notNil and: [ex isKindOf: sysExit])
@@ -300,12 +310,29 @@ SessionTemps current at: #'GrailConsole'
                                 GsFile stderr nextPutAll: msg; lf; flush.
                                 status := 1]]]
                 ifFalse: [
+                    "What CPython prints: the traceback, ending in a newline,
+                    then failing that 'Type: str(exc)'. A Smalltalk error that
+                    is not a Python exception keeps its plain message."
                     | msg |
-                    msg := ex messageText ifNil: [ex description].
+                    msg := (baseExc notNil and: [ex isKindOf: baseExc])
+                        ifTrue: [[ex pythonTracebackString]
+                            on: AbstractException do: [:x | x return: nil]]
+                        ifFalse: [nil].
+                    (msg isNil or: [msg isEmpty]) ifTrue: [
+                        | detail |
+                        detail := (baseExc notNil and: [ex isKindOf: baseExc])
+                            ifTrue: [[ex @env1:__str__ @env0:asString]
+                                on: AbstractException do: [:x | x return: nil]]
+                            ifFalse: [nil].
+                        msg := detail isNil
+                            ifTrue: [ex messageText ifNil: [ex description]]
+                            ifFalse: [detail isEmpty
+                                ifTrue: [ex class name asString]
+                                ifFalse: [ex class name asString , ': ' , detail]].
+                        msg := msg , (String with: Character lf)].
                     GsFile stdout flush.
-                    GsFile stderr nextPutAll: msg; lf; flush.
-                    status := 1]].
-    ].
+                    GsFile stderr nextPutAll: msg encodeAsUTF8; flush.
+                    status := 1]]].
 ] ensure: [
     SessionTemps current removeKey: #'GrailConsole' ifAbsent: [].
     statusFile ifNotNil: [
