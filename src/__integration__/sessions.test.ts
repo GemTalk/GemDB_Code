@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { __log } from '../__mocks__/vscode';
 import { stageGrail } from '../grail';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
 import { isErrorResult, renameOwner, runPython } from '../pythonQueries';
@@ -179,6 +180,10 @@ describe.skipIf(!haveExtent || !canMakeFixture())('a session per notebook', () =
     const held = new Map(sessionRegistry().map((s) => [s.owner.key, s]));
     expect(slots.get('GemDB nb one')).toBe(held.get(A.key)?.serial);
     expect(slots.get('GemDB nb two')).toBe(held.get(B.key)?.serial);
+
+    // Naming is best-effort and logs when it fails, so a log line on a login
+    // that did name the session is noise that would hide a real failure.
+    expect(__log.filter((line) => line.startsWith('Could not name the session'))).toEqual([]);
   });
 
   it('carries a renamed notebook’s session, variables and name across', async () => {

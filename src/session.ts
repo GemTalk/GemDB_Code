@@ -372,11 +372,15 @@ export class GciSession {
    * rather than the repository, so it costs no commit and — the reason it
    * beats a committed registry — the entry dies with the process instead of
    * outliving a window that crashed. Best-effort: an unnamed session works.
+   *
+   * The doit answers a String because `execute` sends the result
+   * `encodeAsUTF8` to fetch it; answering `true` made every login log a
+   * MessageNotUnderstood after the name had already been set.
    */
   private publishName(): void {
     try {
       this.execute(
-        `System cacheName: '${cacheNameFor(this.currentOwner).replace(/'/g, "''")}'. true`,
+        `System cacheName: '${cacheNameFor(this.currentOwner).replace(/'/g, "''")}'. 'named'`,
       );
     } catch (e) {
       log(`Could not name the session (${this.label}): ${e instanceof Error ? e.message : e}`);
