@@ -30,12 +30,16 @@ interface Ran {
   stderr: string;
 }
 
-/** Run the generated wrapper as a user would, never throwing on exit codes. */
-function run(args: string[], stdin?: string): Promise<Ran> {
+/**
+ * Run the generated wrapper as a user would, never throwing on exit codes.
+ * `merged` sends stderr into stdout, as a terminal shows them, for a test
+ * about the order of the two.
+ */
+function run(args: string[], stdin?: string, merged = false): Promise<Ran> {
   return new Promise((resolve) => {
     const child = execFile(
       'bash',
-      [cliPath(), ...args],
+      merged ? ['-c', 'bash "$0" "$@" 2>&1', cliPath(), ...args] : [cliPath(), ...args],
       { cwd: workDir, timeout: 120_000 },
       (error, stdout, stderr) => {
         const code =
@@ -93,6 +97,44 @@ describe.skipIf(!ready || !canMakeFixture())('the gemdb command', () => {
     const ran = await gemdb('both.py');
     expect(ran.stdout).toContain('partial');
     expect(ran.stderr).toContain('division by zero');
+    expect(ran.code).toBe(1);
+  });
+
+  it('reports an uncaught exception with its traceback and type, as CPython does', async () => {
+    const ran = await gemdb('-c', 'def f():\n    return 1 / 0\nf()');
+
+    expect(ran.stderr).toContain('Traceback (most recent call last):');
+    expect(ran.stderr).toContain(', in f');
+    expect(ran.stderr.trim().split('\n').at(-1)).toBe('ZeroDivisionError: division by zero');
+    expect(ran.code).toBe(1);
+  });
+
+  it('names an exception by its module-qualified type', async () => {
+    const ran = await gemdb('-c', 'import json\njson.loads("{bad")');
+
+    expect(ran.stderr.trim().split('\n').at(-1)).toMatch(/^json\.decoder\.JSONDecodeError: /);
+    expect(ran.code).toBe(1);
+  });
+
+  it('reports runaway recursion without overflowing the stack', async () => {
+    // The report runs after the stack unwinds. Made from inside the handler,
+    // it has only the stack's reserve to work in, and a RecursionError's
+    // traceback overflows that (GemTalk/Grail#1261).
+    const ran = await gemdb('-c', 'def f():\n    return f()\nf()');
+
+    expect(ran.stderr).toContain('RecursionError: maximum recursion depth exceeded');
+    expect(ran.code).toBe(1);
+  });
+
+  it('runs finally blocks before the traceback prints', async () => {
+    const ran = await run(
+      ['-c', 'try:\n    1 / 0\nfinally:\n    print("cleanup")'],
+      undefined,
+      true,
+    );
+
+    expect(ran.stdout).toContain('cleanup');
+    expect(ran.stdout.indexOf('cleanup')).toBeLessThan(ran.stdout.indexOf('Traceback'));
     expect(ran.code).toBe(1);
   });
 
