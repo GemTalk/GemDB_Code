@@ -17,21 +17,22 @@ import * as vscode from 'vscode';
  * version — Grail requires a 4.0 of 2026-07-29 or later, which is what makes
  * an alpha the pin rather than a released 3.7.
  *
- * The version string is the whole of it, the `a3` suffix included: it names the
+ * The version string is the whole of it, the `a4` suffix included: it names the
  * product directory, the download, and the GCI library GemDB loads
- * (`libgcits-4.0.0.a3-64.dylib`).
+ * (`libgcits-4.0.0.a4-64.dylib`).
  *
  * **Do not count on an old alpha staying downloadable.** 4.0.0.Alpha1 was the
  * pin until 2026-09-16, when 4.0.0.a2 replaced it and the Alpha1 directory
  * started answering 404 the same day — so a stale pin here can stop being
  * downloadable on any platform, not merely be old. a2 was still listed beside
- * a3 when a3 arrived on 2026-09-24, so the catalog does not always drop the
- * previous alpha at once, but nothing promises it keeps one either. Note the
+ * a3 when a3 arrived on 2026-09-24, and a3 beside a4 when a4 arrived on
+ * 2026-09-28 — by which time a2 answered 404. So the catalog does not always
+ * drop the previous alpha at once, but nothing promises it keeps one. Note the
  * spelling changed at a2: `Alpha1` to a lowercase `a2`. That is upstream's to
  * choose and nothing here should try to normalise it, but it does mean a
  * version cannot be derived by incrementing the last one.
  */
-export const PINNED_ENGINE_VERSION = '4.0.0.a3';
+export const PINNED_ENGINE_VERSION = '4.0.0.a4';
 
 /**
  * GemDB manages exactly one database, with fixed names. Hiding the naming is
