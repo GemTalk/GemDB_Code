@@ -353,11 +353,8 @@ The command needs no environment setup, and it starts the database if the databa
 Exit codes work the way scripts expect: 0 on success, 1 on an uncaught exception (with the error
 message on stderr), 2 for a missing file, and `sys.exit()` behaves as in CPython.
 
-Some things differ from `python3`:
-
-- The script's own directory is not on `sys.path`, so a script cannot import a file next to it until
-  it adds its directory to `sys.path` itself.
-- An uncaught exception prints its message, not a full traceback.
+One thing differs from `python3`: the script's directory is not included in `sys.path`, so the
+script cannot import a file next to it until it updates `sys.path` to include its directory.
 
 `input()` works in scripts, the GemDB Shell and notebooks. A script reads stdin, and the GemDB Shell
 reads its own prompt line, where Ctrl+C raises `KeyboardInterrupt` and Ctrl+D raises `EOFError`.
@@ -550,25 +547,25 @@ Command Palette, type `GemDB` to list the commands. **GemDB: Run Python File in 
 when a Python file is open, and **GemDB: Keep the Database Running After Logout** appears only on
 Linux. The table below reviews the functions available as commands or in the sidebar.
 
-| Command Palette                                   | Sidebar                                                                          | What it does                                                                                                                  |
-| ------------------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| **GemDB: Start GemDB**                            | ▷ button, or click the **Stopped** row                                           | Starts the database                                                                                                           |
-| **GemDB: Stop GemDB**                             | ■ button                                                                         | Stops the database (clicking **GemDB** in the status bar does the same)                                                       |
-| **GemDB: Open GemDB Shell**                       | `>_` button, or click the **Running** row                                        | Opens a Python shell inside the database                                                                                      |
-| **GemDB: New GemDB Notebook**                     | Notebook icon button                                                             | Opens a notebook with a starter cell                                                                                          |
-| **GemDB: Refresh**                                | ↻ button                                                                         | Re-reads the state shown in the sidebar                                                                                       |
-| **GemDB: Connect an AI Agent to GemDB**           | **⋯** menu, or click the **AI agent access** row                                 | Turns on the MCP server and connects Claude Code, or gives you another client's configuration                                 |
-| **GemDB: Show Log**                               | **⋯** menu                                                                       | Opens GemDB Code's log                                                                                                        |
-| **GemDB: Reinstall the Python Execution Engine**  | **⋯** menu, or click the **Python** row when an update is available              | Reinstalls Python support into your database                                                                                  |
-| **GemDB: Restart the MCP Server**                 | **⋯** menu, while the database is running                                        | Restarts the MCP server and releases agent sessions                                                                           |
-| **GemDB: Install Brain Freeze Demo**              | **⋯** menu                                                                       | Clones the demo application into `~/GemDB/brain-freeze` and opens it                                                          |
-| **GemDB: Uninstall GemDB**                        | **⋯** menu                                                                       | Removes the engine, Python support and MCP server, and optionally your database                                               |
-| **GemDB: Set Up GemDB**                           | **Set Up GemDB** button, before setup has finished                               | Runs or resumes setup                                                                                                         |
-| **GemDB: Configure Shared Memory**                | Click the **Shared memory** row when it needs configuring                        | Raises the shared-memory limit (prompts you for your password in a terminal)                                                  |
-| **GemDB: Keep the Database Running After Logout** | Click the **Survives logout** row, shown on Linux when `RemoveIPC=no` is not set | Sets `RemoveIPC=no` so the database keeps running after you log out (prompts you for your password in a terminal); Linux only |
-| **GemDB: Toggle Read-Only Access for AI Agents**  | Click the **Agent write access** row, shown when the MCP server is on            | Switches whether agents can commit, and restarts the MCP server                                                               |
-| **GemDB: Run Python File in GemDB**               | None; use the Run button's menu at the top right of a Python file                | Runs the current `.py` file in a terminal; listed only when a Python file is open                                             |
-| **GemDB: Clear Notebook Variables**               | None                                                                             | Clears the active notebook's variables                                                                                        |
+| Command Palette                                   | Sidebar                                                                                   | What it does                                                                                                                  |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **GemDB: Start GemDB**                            | ▷ button, or click the **Stopped** row                                                    | Starts the database                                                                                                           |
+| **GemDB: Stop GemDB**                             | ■ button                                                                                  | Stops the database (clicking **GemDB** in the status bar does the same)                                                       |
+| **GemDB: Open GemDB Shell**                       | `>_` button, or click the **Running** row                                                 | Opens a Python shell inside the database                                                                                      |
+| **GemDB: New GemDB Notebook**                     | Notebook icon button                                                                      | Opens a notebook with a starter cell                                                                                          |
+| **GemDB: Refresh**                                | ↻ button                                                                                  | Re-reads the state shown in the sidebar                                                                                       |
+| **GemDB: Connect an AI Agent to GemDB**           | **⋯** menu, or click the **AI agent access** row                                          | Turns on the MCP server and connects Claude Code, or gives you another client's configuration                                 |
+| **GemDB: Show Log**                               | **⋯** menu                                                                                | Opens GemDB Code's log                                                                                                        |
+| **GemDB: Reinstall the Python Execution Engine**  | **⋯** menu, or click the **Python** row when an update is available or the install failed | Reinstalls Python support into your database                                                                                  |
+| **GemDB: Restart the MCP Server**                 | **⋯** menu, while the database is running                                                 | Restarts the MCP server and releases agent sessions                                                                           |
+| **GemDB: Install Brain Freeze Demo**              | **⋯** menu                                                                                | Clones the demo application into `~/GemDB/brain-freeze` and opens it                                                          |
+| **GemDB: Uninstall GemDB**                        | **⋯** menu                                                                                | Removes the engine, Python support and MCP server, and optionally your database                                               |
+| **GemDB: Set Up GemDB**                           | **Set Up GemDB** button, before setup has finished                                        | Runs or resumes setup                                                                                                         |
+| **GemDB: Configure Shared Memory**                | Click the **Shared memory** row when it needs configuring                                 | Raises the shared-memory limit (prompts you for your password in a terminal)                                                  |
+| **GemDB: Keep the Database Running After Logout** | Click the **Survives logout** row, shown on Linux when `RemoveIPC=no` is not set          | Sets `RemoveIPC=no` so the database keeps running after you log out (prompts you for your password in a terminal); Linux only |
+| **GemDB: Toggle Read-Only Access for AI Agents**  | Click the **Agent write access** row, shown when the MCP server is on                     | Switches whether agents can commit, and restarts the MCP server                                                               |
+| **GemDB: Run Python File in GemDB**               | None; use the Run button's menu at the top right of a Python file                         | Runs the current `.py` file in a terminal; listed only when a Python file is open                                             |
+| **GemDB: Clear Notebook Variables**               | None                                                                                      | Clears the active notebook's variables                                                                                        |
 
 ### Using GemDB Code vs. GemStone/S
 
