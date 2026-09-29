@@ -82,6 +82,14 @@ grail/scripts/topazini
 grail/scripts/new_worktree.sh
 grail/scripts/create_claude_users.gs
 
+# CPython's TLS test fixtures, which Grail vendored with `ssl` (Grail #1247).
+# Fifteen of its 31 files hold PRIVATE KEYS -- CPython's published test keys,
+# not secrets, but vsce's secret scan refuses to package them, and a registry's
+# server-side scan would refuse the upload after the version was spent. Only
+# CPython's own ssl tests read them; nothing a user imports does.
+# `check-vsix.sh` asserts they stay out.
+grail/src/python/stdlib/test/certdata/**
+
 # koffi's own documentation and changelog — 100+ markdown files nothing reads.
 node_modules/koffi/doc/**
 node_modules/koffi/CHANGELOG.md

@@ -2,7 +2,7 @@
   "name": "gemdb",
   "displayName": "GemDB Code",
   "description": "Python with built-in transactional persistence (using true ACID semantics). When you have critical, complex data that must be consistent, use GemDB.",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "publisher": "gemtalksystems",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -57,7 +57,7 @@
           "scope": "machine",
           "type": "string",
           "default": "",
-          "markdownDescription": "Advanced: override the pinned database engine version (e.g. `4.0.0.a3`). Leave empty to use the version this release of GemDB Code was built and tested against. A version that is not published at dl.gemdb.com cannot be downloaded — it must already be present under the root path."
+          "markdownDescription": "Advanced: override the pinned database engine version (e.g. `4.0.0.a4`). Leave empty to use the version this release of GemDB Code was built and tested against. A version that is not published at dl.gemdb.com cannot be downloaded — it must already be present under the root path."
         },
         "gemdb.reinstallPythonOnUpdate": {
           "scope": "machine",

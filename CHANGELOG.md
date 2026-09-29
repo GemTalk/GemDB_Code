@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-09-28
+
+The engine moves to GemStone 4.0.0.a4, so an existing database has to be
+recreated — read the first entry below before updating. The bundled Python
+runtime moves forward with it.
+
+### Changed
+
+- **GemDB now runs GemStone 4.0.0.a4, and an existing database cannot come with
+  it.** A database created by GemDB 1.5.2 or earlier was written by 4.0.0.a3 or
+  older, and there is still no in-place upgrade between alphas, and not yet a
+  way to export your data. When the new engine first starts, GemDB stops and
+  names the directory to delete, so the database can be recreated. **Deleting
+  it deletes everything stored in it.** To choose when an update like this
+  arrives, clear **Auto Update** on GemDB Code's page in the Extensions view.
+
+- **A newer Python runtime.** 72 commits across 30 pull requests since 1.5.2,
+  nearly all of them bringing Python closer to CPython. `typing` and `urllib`
+  are CPython's own modules again, and `ssl` is CPython's `ssl.py` over
+  OpenSSL. `NamedTuple` and `TypedDict` behave as CPython's do, and
+  `xml.etree`, `xml.sax` and `xml.dom.pulldom` have been fixed against
+  CPython's own tests. `unittest.main()` now exits non-zero when a test fails,
+  `any()` and `all()` test truth the same way `if` does, and a `@staticmethod`
+  or `@classmethod` can now override an ordinary method from a base class.
+
+### Fixed
+
+- **An uncaught exception in a `gemdb` script prints a traceback.** Running
+  `gemdb file.py` reported an uncaught exception as its message alone, without
+  the exception's type or where it was raised, so `1 / 0` inside a function
+  printed only "division by zero". It now prints the traceback CPython would,
+  after the script's `finally` blocks have run, as CPython does. That includes
+  a `RecursionError`, which used to overflow the stack while being reported.
+
+- **A failed Python install shows in the GemDB panel.** After Python support
+  failed to install, the panel looked like a fresh install, and once the
+  notification was dismissed nothing showed the failure. The **Python** row
+  now says the install failed, with the error in its tooltip, and clicking it
+  tries again. **Running** says the database is running but Python support
+  failed to install. The warning clears when an install succeeds, and when an
+  update brings a different build of Python support.
+
+- **The GemDB output no longer reports a naming failure on every notebook
+  login.** GemDB names each database session so it can be identified from
+  outside, and every login logged that naming it had failed when it hadn't.
+
 ## [1.5.2] - 2026-09-27
 
 The engine moves to GemStone 4.0.0.a3, so an existing database has to be

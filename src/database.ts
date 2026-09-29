@@ -122,7 +122,7 @@ export function removeDatabase(): void {
  * Pure, so the parsing can be tested without a database. `copydbf` prints a
  * block of file facts; the line that matters is
  *
- *     GemStone Version: 4.0.0.a3, Wed Sep 23 14:35:44 2026 (branch HEAD), 0b873ee1
+ *     GemStone Version: 4.0.0.a4, Mon Sep 28 14:13:59 2026 (branch HEAD), c12a2f4e
  *
  * and only the part before the first comma identifies the release.
  */
