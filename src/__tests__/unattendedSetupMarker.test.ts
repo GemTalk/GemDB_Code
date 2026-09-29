@@ -17,7 +17,7 @@ beforeEach(() => {
 
 afterEach(() => fs.rmSync(storage, { recursive: true, force: true }));
 
-describe('the setup marker', () => {
+describe('the unattended setup marker', () => {
   it('reads as none when no marker has been written', () => {
     expect(readUnattendedSetupMarker()).toBe('none');
   });
@@ -52,13 +52,12 @@ describe('the setup marker', () => {
   });
 
   describe('before initUnattendedSetupMarker has run', () => {
-    it('reads as none and ignores writes', async () => {
+    it('throws rather than silently reading or writing', async () => {
       vi.resetModules();
       const fresh = await import('../unattendedSetupMarker');
 
-      expect(fresh.readUnattendedSetupMarker()).toBe('none');
-      expect(() => fresh.writeUnattendedSetupMarker('completed')).not.toThrow();
-      expect(fresh.readUnattendedSetupMarker()).toBe('none');
+      expect(() => fresh.readUnattendedSetupMarker()).toThrow();
+      expect(() => fresh.writeUnattendedSetupMarker('completed')).toThrow();
     });
   });
 });

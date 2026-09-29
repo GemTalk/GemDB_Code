@@ -34,17 +34,30 @@ export function initUnattendedSetupMarker(storageDir: string): void {
 }
 
 /**
- * What the marker records, or `'none'` when there is no marker (or before
- * `initUnattendedSetupMarker` has run). A marker that does not say how setup ended
- * still says it was offered, so it reads as `'attempted'` and setup is not
- * offered again: that covers every marker written before outcomes were
- * recorded, and a truncated write fails safe.
+ * `markerPath`, or throws if `initUnattendedSetupMarker` has not run yet. A silent
+ * `'none'` would read as "offer setup unattended" — the most consequential
+ * answer this module can give — so using the marker too early fails loudly
+ * instead. `activate()` calls `initUnattendedSetupMarker` before anything else can
+ * reach the marker; a test that reaches it must call it too.
+ */
+function requireMarkerPath(): string {
+  if (!markerPath) {
+    throw new Error('unattendedSetupMarker used before initUnattendedSetupMarker() was called');
+  }
+  return markerPath;
+}
+
+/**
+ * What the marker records, or `'none'` when there is no marker. A marker
+ * that does not say how setup ended still says it was offered, so it reads
+ * as `'attempted'` and setup is not offered again: that covers every marker
+ * written before outcomes were recorded, and a truncated write fails safe.
  */
 export function readUnattendedSetupMarker(): UnattendedSetupMarker | 'none' {
-  if (!markerPath) return 'none';
+  const marker = requireMarkerPath();
   let value: string;
   try {
-    value = fs.readFileSync(markerPath, 'utf8').trim();
+    value = fs.readFileSync(marker, 'utf8').trim();
   } catch {
     return 'none';
   }
@@ -52,10 +65,10 @@ export function readUnattendedSetupMarker(): UnattendedSetupMarker | 'none' {
 }
 
 export function writeUnattendedSetupMarker(value: UnattendedSetupMarker): void {
-  if (!markerPath) return;
+  const marker = requireMarkerPath();
   try {
-    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
-    fs.writeFileSync(markerPath, value);
+    fs.mkdirSync(path.dirname(marker), { recursive: true });
+    fs.writeFileSync(marker, value);
   } catch {
     /* worst case it is offered once more */
   }
