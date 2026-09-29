@@ -43,6 +43,18 @@ export function databasePath(): string {
   return path.join(rootPath(), DB_DIR_NAME);
 }
 
+/**
+ * Record of the last failed attempt to file Grail into the database.
+ *
+ * Beside the database rather than beside the stamp: staging deletes the Grail
+ * directory wholesale, and first-run preparation stages at activation, so a
+ * record kept there would vanish before anyone looked at it. What failed is
+ * the database's Python, so it lives, and is deleted, with the database.
+ */
+export function grailFailurePath(): string {
+  return path.join(databasePath(), '.gemdb-grail-failed');
+}
+
 export function databaseConfPath(): string {
   return path.join(databasePath(), 'conf');
 }

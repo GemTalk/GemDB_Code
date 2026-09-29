@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { engineVersion, isEngineVersionOverridden, mcpEnabled, mcpReadOnly } from './config';
-import { bundledGrailStamp, grailLabel } from './grail';
+import { GrailInstallFailure, bundledGrailStamp, grailInstallFailure, grailLabel } from './grail';
 import { isInstalled } from './lifecycle';
 import { bundledMcpStamp, mcpLabel, mcpServerState, mcpUrl } from './mcp';
 import { isRemoveIpcConfigured, isSharedMemoryConfigured, sharedMemoryLabel } from './osConfig';
@@ -31,12 +31,99 @@ export const GEMDB_STATE = {
 } as const;
 export type GemDbState = (typeof GEMDB_STATE)[keyof typeof GEMDB_STATE];
 
-interface Row {
+export interface Row {
   label: string;
   description?: string;
   tooltip?: string;
   icon?: vscode.ThemeIcon;
   command?: vscode.Command;
+}
+
+const ok = (id: string): vscode.ThemeIcon =>
+  new vscode.ThemeIcon(id, new vscode.ThemeColor('testing.iconPassed'));
+const warn = (id: string): vscode.ThemeIcon =>
+  new vscode.ThemeIcon(id, new vscode.ThemeColor('problemsWarningIcon.foreground'));
+
+/**
+ * The top row while the database is up.
+ *
+ * "Python runs inside the database" is a promise, so it is only made when it
+ * holds. The listener can be down while the database is up — a refused stop
+ * leaves exactly that — and saying so beats a bare "Running" that does not
+ * explain why nothing can connect. And a failed Python install leaves the
+ * processes healthy and Python missing, which is the state this row used to
+ * describe as fine.
+ */
+export function runningRow(facts: { listening: boolean; pythonFailed: boolean }): Row {
+  return {
+    label: 'Running',
+    description: !facts.listening
+      ? 'Running, but not accepting new sessions'
+      : facts.pythonFailed
+        ? 'Running, but Python support failed to install'
+        : 'Python runs inside the database',
+    icon: facts.listening && !facts.pythonFailed ? ok('pass-filled') : warn('warning'),
+    command: { command: 'gemdb.openRepl', title: 'Open GemDB Shell' },
+  };
+}
+
+/**
+ * The Python row: which Grail the database has, and what to do about it.
+ *
+ * Grail is filed into the database only once the database has run, so
+ * "prepared but never started" is a normal state, not a fault — said plainly
+ * rather than shown as missing. A failed install is the fault that state used
+ * to hide: staging deletes the stamp first, so without the failure record a
+ * failed first install, and a failed update, both read as never installed.
+ */
+export function pythonRow(facts: {
+  installed: string | undefined;
+  bundled: string | undefined;
+  failure: GrailInstallFailure | undefined;
+  running: boolean;
+}): Row {
+  const { installed, bundled, failure, running } = facts;
+  if (failure) {
+    return {
+      label: 'Python',
+      description: 'install failed — see the GemDB output',
+      tooltip:
+        `Installing Python support ${grailLabel(bundled)} failed:\n\n${failure.message}\n\n` +
+        (running
+          ? 'Click to try again.'
+          : 'GemDB tries again the next time it starts. Click to start it.'),
+      icon: warn('error'),
+      // Reinstalling needs a running database, and starting one retries the
+      // install on its own, so the click that retries depends on which it is.
+      command: running
+        ? { command: 'gemdb.reinstallPython', title: 'Reinstall the Python Execution Engine' }
+        : { command: 'gemdb.start', title: 'Start GemDB' },
+    };
+  }
+  const neverInstalled = installed === undefined;
+  const outdated = !neverInstalled && bundled !== undefined && installed !== bundled;
+  return {
+    label: 'Python',
+    description: neverInstalled
+      ? 'installs when you first run Python'
+      : outdated
+        ? `${grailLabel(installed)} — update available`
+        : grailLabel(installed),
+    tooltip: neverInstalled
+      ? `Python support ${grailLabel(bundled)} is ready to be added to the database. That happens ` +
+        'automatically the first time you open the GemDB Shell or run a notebook cell.'
+      : outdated
+        ? `This GemDB update ships Python support ${grailLabel(bundled)}. It will be installed the next time GemDB starts.`
+        : 'The Python implementation installed in your database.',
+    icon: neverInstalled
+      ? new vscode.ThemeIcon('symbol-namespace')
+      : outdated
+        ? warn('arrow-circle-up')
+        : ok('symbol-namespace'),
+    command: outdated
+      ? { command: 'gemdb.reinstallPython', title: 'Reinstall the Python Execution Engine' }
+      : undefined,
+  };
 }
 
 /**
@@ -104,28 +191,12 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
       return;
     }
 
-    const ok = (label: string): vscode.ThemeIcon =>
-      new vscode.ThemeIcon(label, new vscode.ThemeColor('testing.iconPassed'));
-    const warn = (label: string): vscode.ThemeIcon =>
-      new vscode.ThemeIcon(label, new vscode.ThemeColor('problemsWarningIcon.foreground'));
-
     const rows: Row[] = [];
-
-    // The listener can be down while the database is up — a refused stop leaves
-    // exactly that. Saying so beats a bare "Running" that does not explain why
-    // nothing can connect.
-    const listening = state === 'running' ? isListening() : true;
+    const failure = grailInstallFailure(this.extensionPath);
 
     rows.push(
       state === 'running'
-        ? {
-            label: 'Running',
-            description: listening
-              ? 'Python runs inside the database'
-              : 'Running, but not accepting new sessions',
-            icon: listening ? ok('pass-filled') : warn('warning'),
-            command: { command: 'gemdb.openRepl', title: 'Open GemDB Shell' },
-          }
+        ? runningRow({ listening: isListening(), pythonFailed: failure !== undefined })
         : {
             label: 'Stopped',
             description: 'Start GemDB to run Python',
@@ -151,35 +222,14 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
       icon: databaseExists() ? new vscode.ThemeIcon('database') : warn('warning'),
     });
 
-    // Grail is filed into the database only once the database has run, so
-    // "prepared but never started" is a normal state, not a fault — say so
-    // plainly rather than showing it as missing.
-    const installed = installedGrailStamp();
-    const bundled = bundledGrailStamp(this.extensionPath);
-    const neverInstalled = installed === undefined;
-    const outdated = !neverInstalled && bundled !== undefined && installed !== bundled;
-    rows.push({
-      label: 'Python',
-      description: neverInstalled
-        ? 'installs when you first run Python'
-        : outdated
-          ? `${grailLabel(installed)} — update available`
-          : grailLabel(installed),
-      tooltip: neverInstalled
-        ? `Python support ${grailLabel(bundled)} is ready to be added to the database. That happens ` +
-          'automatically the first time you open the GemDB Shell or run a notebook cell.'
-        : outdated
-          ? `This GemDB update ships Python support ${grailLabel(bundled)}. It will be installed the next time GemDB starts.`
-          : 'The Python implementation installed in your database.',
-      icon: neverInstalled
-        ? new vscode.ThemeIcon('symbol-namespace')
-        : outdated
-          ? warn('arrow-circle-up')
-          : ok('symbol-namespace'),
-      command: outdated
-        ? { command: 'gemdb.reinstallPython', title: 'Reinstall the Python Execution Engine' }
-        : undefined,
-    });
+    rows.push(
+      pythonRow({
+        installed: installedGrailStamp(),
+        bundled: bundledGrailStamp(this.extensionPath),
+        failure,
+        running: state === 'running',
+      }),
+    );
 
     // The MCP server, said plainly, because a door into the database that
     // nothing mentions is the wrong kind of quiet. Three things a user needs
