@@ -11,35 +11,26 @@
 # Bumping a pin is a one-line PR to this file; a green CI run on it is the
 # proof the new upstream commit works.
 
-# Grail: main as of 2026-09-27, 127 commits (43 PRs) on from the previous pin
-# (9f46b86). The C shim, every script resources/install-grail.sh drives, and
-# the REQUIRED list in bundle-grail.sh are untouched -- the only deletion is
-# src/smalltalk/Python/ipaddress.gs, replaced by CPython's own module (#1175),
-# and install.gs drops its globals in the same commit. Two changes bear on
-# notes GemDB keeps:
+# Grail: main as of 2026-09-28, 72 commits (30 PRs) on from the previous pin
+# (b86985f). The C shim, every script resources/install-grail.sh drives, and
+# the REQUIRED list in bundle-grail.sh are untouched, and nothing was deleted or
+# renamed. Built against 4.0.0.a4, the engine pin that moves with it.
 #
-# - Grail #851, the root of docs/grail.md's dirty-session note, is fixed in two
-#   halves. A first read of a function in a committed module no longer caches
-#   into that module (#1167), so a pure call leaves a clean session clean and
-#   two sessions making the same first call no longer conflict. And a script's
-#   `__main__` is session-local (#1179): `importlib runPath:`, which is what
-#   `gemdb file.py` calls, wrote 4 committed objects before a script's first
-#   line and now writes none, so `gemdb.transaction()` can be the first statement.
-# - Code run as a script or at grail.tpz's prompt gets `__name__ = '__main__'`,
-#   and type() / the Enum functional API / a class statement in evaluated code
-#   infer `__module__` from `__name__` (#1168, #1173). GemDB's notebook and
-#   shell scopes do not seed `__name__`, so they keep the old answer.
+# One installer change, inert for GemDB: install.gs's headroom-guarded MFC now
+# probes `System sessionsHoldingGcLock` and `System voteState` and skips when
+# another collection is under way, rather than waiting two minutes for the
+# gcLock and dying with ERROR 2501 (#1245). That MFC runs only near a
+# configured STN_MAX_REPOSITORY_SIZE, which GemDB's stone leaves unset.
 #
-# Also: IR position fixes (#1164, #1183) that mcp_server below relies on, dict
-# and comparison-protocol fixes (#1172, #1180, #1184, #1186), contextvars kept
-# per-session (#1176), logging accepting exc_info (#1163), and vendored
-# pickletools, dbm, xml.dom and an importlib.machinery facade. The last 16 PRs
-# are CPython conformance: CPython's own pickle, abc and collections.abc
-# (#1202, #1204), PEP 695 scopes (#1200), an os file-descriptor layer (#1193),
-# suspended generators that can be collected (#1195), a never-awaited
-# coroutine warning (#1199), @unittest.expectedFailure honoured (#1191), and
-# lru_cache comparing keys with Python equality (#1207).
-PINNED_GRAIL_REF=b86985f1a8604dae24fe740124aed96d58f0598a
+# The rest is CPython conformance: typing.py and urllib are CPython's own again
+# (#1241, #1246), CPython's ssl.py over an OpenSSL binding (#1247), NamedTuple
+# and TypedDict (#1209), xml.etree, sax and pulldom (#1211, #1231, #1248,
+# #1252), unittest.main() exiting non-zero on failure (#1257), any()/all()
+# testing truth the way `if` does (#1256), a module attribute read that no
+# longer runs the dict protocol underneath (#1259), ScaledDecimal hashing like
+# an equal int (#1260), and a @staticmethod/@classmethod that can override a
+# base's plain method (#1215).
+PINNED_GRAIL_REF=84821c1e96e5d1918284e9353e63d79771a4709d
 
 # mcp_server: main as of 2026-09-25, 26 commits (8 PRs) on from the previous pin
 # (afa3790). No load.gs changed, and every selector src/mcp.ts sends --
