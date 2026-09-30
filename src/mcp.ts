@@ -261,6 +261,26 @@ export function isPortOpen(port: number, timeoutMs = 250): Promise<boolean> {
   });
 }
 
+/**
+ * The pid of the process listening on 127.0.0.1:port, if `lsof` can say —
+ * the tool the payload's own stop-server.sh uses for the same question.
+ * Undefined when nothing listens, the listener is not ours to see, or there is
+ * no `lsof`; callers treat all three as "unknown".
+ */
+export function listeningPid(port: number): number | undefined {
+  try {
+    const out = execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const pid = Number(out.trim().split('\n')[0]);
+    return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+  } catch {
+    // lsof exits 1 when nothing matches, and is not on every machine.
+    return undefined;
+  }
+}
+
 /** True when a process with this pid exists and looks like a GemStone gem. */
 function looksLikeGem(pid: number): boolean {
   try {
@@ -595,18 +615,31 @@ export async function startMcpServer(): Promise<boolean> {
     return false;
   }
 
-  writeRouterState({
+  const record: RouterState = {
     port,
     sessionId,
     pid: Number.isInteger(pid) ? pid : undefined,
     startedAt: new Date().toISOString(),
-  });
+  };
+  writeRouterState(record);
 
   // The fork returns as soon as the child is launched, so the listener may not
   // have bound yet. Wait for the port rather than reporting a server a client
   // would fail to reach a moment later.
   for (let attempt = 0; attempt < 20; attempt++) {
     if (await isPortOpen(port)) {
+      // `forkOnPort:` reads the pid from `System descriptionOfSession:`, which
+      // answers for another session only with the SessionAccess privilege. An
+      // ordinary account — what an external database gives a developer — gets
+      // nil, and a router recorded without a pid is indistinguishable from a
+      // stranger on the port: reported as "taken", and never stopped. The gem
+      // that has just bound the port is this one.
+      if (record.pid === undefined) {
+        const found = listeningPid(port);
+        if (found !== undefined && looksLikeGem(found)) {
+          writeRouterState({ ...record, pid: found });
+        }
+      }
       log(`The MCP server is listening on ${mcpUrl(port)}`);
       return true;
     }

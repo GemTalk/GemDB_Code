@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and account are settings, and the password is read from a file, so it never appears in
   `settings.json`. See [docs/external-database.md](docs/external-database.md).
 
+### Fixed
+
+- **The MCP server comes back when the database is already running.** Opening a window started
+  it only along with the database, so a router that a reboot or a restarted stone took away stayed
+  down until the first line of Python — and Claude Code, which connects to the address directly,
+  found nothing listening.
+
 ## [1.5.3] - 2026-09-28
 
 The engine moves to GemStone 4.0.0.a4, so an existing database has to be

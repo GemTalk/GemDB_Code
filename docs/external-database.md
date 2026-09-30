@@ -71,8 +71,20 @@ the GCI library GemDB Code loads.
   Code bundles (`PINNED_GRAIL_REF` in `vendor-pins.sh`).
 - **An account for the developer** with the `CodeModification` privilege,
   which is what defining classes and methods needs, and with which Grail
-  installs. An ordinary account cannot create the MCP server's `McpReadOnly`
-  user, so `gemdb.mcp.readOnly` needs that user created by an administrator.
+  installs. With `gemdb.mcp.enabled` it also needs `CreateOnetimePassword`:
+  the MCP server runs in a gem of its own, which logs in as the developer with
+  a one-time password. That privilege covers only the account's own logins;
+  one-time passwords for another account need that account allowlisted
+  (`UserProfile >> addOnetimePasswordUserProfile:`). As SystemUser:
+
+  ```smalltalk
+  (AllUsers userWithId: 'developer') addPrivilege: #CreateOnetimePassword.
+  System commitTransaction.
+  ```
+
+  An ordinary account cannot create the MCP server's `McpReadOnly` user, so
+  `gemdb.mcp.readOnly` needs that user created by an administrator.
+
 - **Access for linked sessions.** The `gemdb` command runs Python in a linked
   session as the developer's account, which needs read-write access to the
   extent and the shared page cache — typically by putting that account in the

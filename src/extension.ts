@@ -8,6 +8,7 @@ import {
   isInstalled,
   prepare,
   reinstallGrail,
+  resumeMcpServing,
   start,
   stop,
   uninstall,
@@ -549,7 +550,13 @@ export function deactivate(): void {
 async function autoStart(extensionPath: string, refresh: () => void): Promise<void> {
   if (!isSupportedPlatform() || !isInstalled()) return;
   if (autoStartSuppressed()) return;
-  if (isRunning()) return;
+  if (isRunning()) {
+    // Up already — an external database always is — but the MCP server it had
+    // may not be. Under the lock, so two windows do not both fork one.
+    await withSetupLock(() => resumeMcpServing(extensionPath));
+    refresh();
+    return;
+  }
   if (!(await isSharedMemoryConfigured())) return;
 
   await withSetupLock(async () => {

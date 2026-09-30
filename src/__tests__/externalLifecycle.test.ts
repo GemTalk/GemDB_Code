@@ -58,6 +58,19 @@ vi.mock('../processes', async (importOriginal) => {
   };
 });
 
+const isMcpRunning = vi.fn(async () => false);
+const startMcpServer = vi.fn(async () => true);
+vi.mock('../mcp', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../mcp')>();
+  return {
+    ...actual,
+    bundledMcpStamp: () => 'mcp=abc\n',
+    mcpNeedsUpdate: () => false,
+    isMcpRunning: () => isMcpRunning(),
+    startMcpServer: () => startMcpServer(),
+  };
+});
+
 vi.mock('../platform', () => ({ isSupportedPlatform: () => true, setContext: () => {} }));
 vi.mock('../autoStart', () => ({
   allowAutoStart: () => {},
@@ -66,18 +79,27 @@ vi.mock('../autoStart', () => ({
   suppressAutoStart: () => {},
 }));
 
-const { ensureRunning, isInstalled, stop, uninstall } = await import('../lifecycle');
+const { ensureRunning, isInstalled, resumeMcpServing, stop, uninstall } =
+  await import('../lifecycle');
 const { TRIGGER, initTelemetry } = await import('../telemetry');
 
 describe('an external database', () => {
   beforeEach(() => {
     __resetSettings();
     __setSetting('gemdb.externalDatabase.gemstone', '/opt/gemstone/product');
-    for (const mock of [ensureOsConfigured, startStone, startNetldi, stopStone, stopNetldi]) {
+    for (const mock of [
+      ensureOsConfigured,
+      startStone,
+      startNetldi,
+      stopStone,
+      stopNetldi,
+      startMcpServer,
+    ]) {
       mock.mockClear();
     }
     findStone.mockReturnValue(true);
     findNetldi.mockReturnValue(true);
+    isMcpRunning.mockResolvedValue(false);
     initTelemetry(fakeExtensionContext(), false);
   });
 
@@ -116,5 +138,35 @@ describe('an external database', () => {
 
   it('is never removed', async () => {
     expect(await uninstall()).toBe(false);
+  });
+
+  describe('on activation, with MCP on', () => {
+    beforeEach(() => __setSetting('gemdb.mcp.enabled', true));
+
+    // The database is always up already, so `autoStart` never reaches
+    // `ensureRunning`; without this the router a reboot took stays away.
+    it('starts the router for the running database, and nothing else', async () => {
+      expect(await resumeMcpServing('/ext')).toBe(true);
+      expect(startMcpServer).toHaveBeenCalledOnce();
+      expect(startStone).not.toHaveBeenCalled();
+      expect(startNetldi).not.toHaveBeenCalled();
+    });
+
+    it('leaves a router that is already listening alone', async () => {
+      isMcpRunning.mockResolvedValue(true);
+      expect(await resumeMcpServing('/ext')).toBe(true);
+      expect(startMcpServer).not.toHaveBeenCalled();
+    });
+
+    it('does not start one for a database that is down', async () => {
+      findStone.mockReturnValue(false);
+      expect(await resumeMcpServing('/ext')).toBe(false);
+      expect(startMcpServer).not.toHaveBeenCalled();
+    });
+  });
+
+  it('starts no router on activation when MCP is off', async () => {
+    expect(await resumeMcpServing('/ext')).toBe(false);
+    expect(startMcpServer).not.toHaveBeenCalled();
   });
 });

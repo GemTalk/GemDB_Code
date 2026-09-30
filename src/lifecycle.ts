@@ -488,6 +488,26 @@ export async function ensureMcpRunning(extensionPath: string): Promise<boolean> 
   return isMcpRunning();
 }
 
+/**
+ * Bring the MCP server back for a database that is already running.
+ *
+ * `ensureRunning` starts the router with the database, but activation calls it
+ * only for a database that is down — and an external database is never down
+ * from here, any more than one another window started. The router does not
+ * survive the stone, so after a reboot it would stay away until the first line
+ * of Python, and a client configured with the bare URL (Claude Code, through
+ * `claude mcp add`) would find nothing listening. VS Code's own clients go
+ * through `ensureMcpRunning` and never see the difference.
+ *
+ * Starts only the router: the database is running, so nothing on the
+ * `ensureRunning` path is outstanding but this.
+ */
+export async function resumeMcpServing(extensionPath: string): Promise<boolean> {
+  if (!mcpEnabled() || !isInstalled() || !isRunning()) return false;
+  if (await isMcpRunning()) return true;
+  return ensureMcpServing(extensionPath);
+}
+
 /** Start whichever of the two processes is not already up. */
 async function startProcesses(
   progress?: vscode.Progress<{ message?: string }>,
