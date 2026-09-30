@@ -340,6 +340,21 @@ package: a shim is 276 KB, so pruning per target would save a fraction of a
 megabyte and cost a move-and-restore dance around build artifacts. The same
 trade is made for koffi's binaries in `.vscodeignore`.
 
+**The Snap Store build of VS Code cannot host GemDB on Linux, and nothing in
+the extension can change that.** Its Electron is patched to run on the snap's
+`core20` base (interpreter and RPATH under `/snap/core20/current`), so the
+extension host has Ubuntu 20.04's glibc 2.31 whatever the host runs, and
+GemStone 4.0's `libgcits` needs `GLIBC_2.34` (`libnetldi`, `GLIBCXX_3.4.29`).
+Measured 2026-09-30, `code` snap revision 267 against the .deb of the same
+commit on Ubuntu 24.04: under the snap the engine installs, the stone starts
+and Grail files in (host binaries, in processes of their own), then the first
+cell fails at the koffi load. The Shell fails the same way, since it runs the
+editor's Electron. Running that Electron under the host's loader crashes in
+`ld.so`, so there is no in-process way round it. `explainLibraryLoadFailure`
+in `platform.ts` turns the linker's words into "install the .deb". The snap is
+amd64-only, so this is an x86-64 problem. It goes away if Microsoft moves the
+snap to `core22` (glibc 2.35).
+
 Windows is out of scope in the shipped product, and the obstacle is not the
 extension: there is no GemStone server for Windows, so any Windows story puts
 the database on Linux and decides where the seam falls. **Do not add partial

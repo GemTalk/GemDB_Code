@@ -3,9 +3,9 @@ import * as path from 'path';
 import { DB_PASSWORD, DB_USER, STONE_NAME, engineVersion } from './config';
 import { OOP_ILLEGAL } from './gci/gciConstants';
 import { GciError, GciLibrary } from './gci/gciLibrary';
-import { log } from './log';
+import { errorMessage, log } from './log';
 import { enginePath } from './paths';
-import { sharedLibraryExtension } from './platform';
+import { explainLibraryLoadFailure, sharedLibraryExtension } from './platform';
 import { findNetldi, findStone } from './processes';
 
 /**
@@ -21,6 +21,14 @@ import { findNetldi, findStone } from './processes';
 
 /** Thrown for anything the user could plausibly act on. */
 export class SessionError extends Error {}
+
+/**
+ * The database client library would not load into this process. Unlike the
+ * rest of `SessionError`, nothing in this process can change that — the same
+ * binary meets the same libraries on every retry — so the GemDB Shell leaves
+ * rather than offering a prompt whose every line would repeat the message.
+ */
+export class LibraryLoadError extends SessionError {}
 
 /**
  * The evaluation was ended by `interrupt()` while it sat suspended in a
@@ -292,7 +300,14 @@ function getLibrary(): GciLibrary {
       `The database client library is missing at ${libPath}. Reinstall GemDB to restore it.`,
     );
   }
-  library = new GciLibrary(libPath);
+  try {
+    library = new GciLibrary(libPath);
+  } catch (e) {
+    // The linker's own words go to the log; the user gets the sentence.
+    const raw = errorMessage(e);
+    log(`Could not load ${libPath}: ${raw}`);
+    throw new LibraryLoadError(explainLibraryLoadFailure(raw));
+  }
   return library;
 }
 
