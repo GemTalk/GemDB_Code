@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shows the message and closes, instead of offering a prompt where every line
   repeats it.
 
+- **Pasting several lines into the GemDB Shell runs all of them.** Only the
+  first line of a paste ran; the rest were silently dropped. Each line now
+  runs in turn, a pasted block runs as one statement, and a line that calls
+  `input()` takes its answer from the next line of the paste, as in CPython.
+
 ## [1.5.3] - 2026-09-28
 
 The engine moves to GemStone 4.0.0.a4, so an existing database has to be

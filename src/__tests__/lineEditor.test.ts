@@ -24,7 +24,7 @@ function echoed(events: EditorEvent[]): string {
 
 function submitted(events: EditorEvent[]): string[] {
   return events
-    .filter((e): e is { kind: 'submit'; line: string } => e.kind === 'submit')
+    .filter((e): e is Extract<EditorEvent, { kind: 'submit' }> => e.kind === 'submit')
     .map((e) => e.line);
 }
 
@@ -46,6 +46,17 @@ describe('LineEditor', () => {
     const e = editor();
     expect(submitted(e.feed('a\r\n'))).toEqual(['a']);
     expect(submitted(e.feed('b\r'))).toEqual(['b']);
+  });
+
+  it('stops at the first line of a paste and hands back the rest unread', () => {
+    const e = editor();
+
+    const events = e.feed('a\r\nb\rc');
+
+    expect(submitted(events)).toEqual(['a']);
+    // Nothing of the rest was echoed or edited — it is the next reader's.
+    expect(echoed(events)).toBe('a\r\n');
+    expect(events.at(-1)).toEqual({ kind: 'submit', line: 'a', rest: 'b\rc' });
   });
 
   it('backspace removes the character before the cursor', () => {

@@ -140,6 +140,8 @@ export class PyRepl {
             this.world.write(event.text);
             break;
           case 'submit':
+            // The rest of a paste waits its turn, ahead of anything typed later.
+            this.typeahead = event.rest + this.typeahead;
             this.finishRead({ line: event.line });
             return;
           case 'interrupt':
@@ -174,6 +176,7 @@ export class PyRepl {
           this.world.write(event.text);
           break;
         case 'submit':
+          this.typeahead = event.rest + this.typeahead;
           void this.onLine(event.line);
           return; // onLine repaints the prompt and replays type-ahead
         case 'interrupt':

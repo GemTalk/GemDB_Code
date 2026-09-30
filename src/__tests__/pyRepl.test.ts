@@ -289,6 +289,51 @@ describe('PyRepl', () => {
     await flush();
   });
 
+  // A paste arrives as one chunk, several lines in it. Every line is a turn
+  // of its own, run in order — the ones after the first wait as type-ahead.
+  it('runs every line of a paste, in order', async () => {
+    const h = makeHarness();
+    h.repl.open();
+
+    h.repl.handleInput('x = 1\ry = 2\rz = 3\r');
+    await flush();
+    await flush();
+    await flush();
+
+    expect(h.runs).toEqual(['x = 1', 'y = 2', 'z = 3']);
+  });
+
+  it('runs a pasted block as one statement, then the line after it', async () => {
+    const h = makeHarness();
+    h.repl.open();
+
+    h.repl.handleInput('def f():\r    return 1\r\rf()\r');
+    await flush();
+    await flush();
+
+    expect(h.runs).toEqual(['def f():\n    return 1\n', 'f()']);
+  });
+
+  it('answers input() from the rest of the same paste', async () => {
+    let answer: unknown;
+    const h = makeHarness({
+      respond: async (source) => {
+        if (source === 'name = input()') answer = await h.repl.readLine('');
+        return OK;
+      },
+    });
+    h.repl.open();
+
+    h.repl.handleInput('name = input()\rFred\rname\r');
+    await flush();
+    await flush();
+    await flush();
+
+    expect(answer).toEqual({ line: 'Fred' });
+    // The answer was the read's, not a statement of its own.
+    expect(h.runs).toEqual(['name = input()', 'name']);
+  });
+
   it('settles a pending read as end of input when disposed', async () => {
     const h = makeHarness();
     h.repl.open();
