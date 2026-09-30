@@ -15,23 +15,27 @@ or later. For a complete list, see [Requirements](#requirements).
 
 ## Start here
 
-1. **Open the GemDB Code sidebar.** For more information, see
+1. **Install GemDB Code.** In the Extensions view, search for `GemDB Code` and click **Install**.
+   The first time you install an extension from GemTalk Systems, VS Code prompts you to trust the
+   publisher. Choose **Trust Publisher & Install**. Setup then starts on its own.
+
+2. **Let initial setup finish.** Progress appears in notifications at the bottom right of VS Code.
+   If you miss one, click the bell icon in the status bar. If the operating system needs a setting
+   changed, follow the prompts. For more information, see
+   [Setup and permissions](#setup-and-permissions).
+
+3. **Open the GemDB Code sidebar.** For more information, see
    [The GemDB Code sidebar](#the-gemdb-code-sidebar).
-
-2. **Let initial setup finish.** If the operating system needs a setting changed, follow the
-   prompts. For more information, see [Setup and permissions](#setup-and-permissions).
-
-3. **Trust `~/GemDB`.** Run **Workspaces: Manage Workspace Trust** from the Command Palette and add
-   `~/GemDB` to your trusted folders, so Python can run in the folders GemDB Code installs. For more
-   information, see [Trusting `~/GemDB`](#trusting-gemdb).
 
 4. **Follow the walkthrough.** VS Code opens **Get Started with GemDB Code** the first time you
    install GemDB Code. It takes you through setup, the GemDB Shell, a notebook, exploring a real
    application, and stopping the database. To open it again, see
    [The guided walkthrough](#the-guided-walkthrough).
 
-5. **Try the Brain Freeze demo.** You are ready to explore a working application. To get started,
-   click [The Brain Freeze demo](#the-brain-freeze-demo).
+5. **Try the Brain Freeze demo.** You are ready to explore a working application. When VS Code
+   prompts you to trust the folder, choose to trust it, so Python can run there. For more
+   information, see [Trusting `~/GemDB`](#trusting-gemdb). To get started, click
+   [The Brain Freeze demo](#the-brain-freeze-demo).
 
 ## Features to check out
 
@@ -128,7 +132,9 @@ for VSCodium and other compatible editors, from
 - A local Python installation. All Python runs inside the database, on the Python implementation
   that ships with the extension. GemDB Code never uses a Python installed on your machine.
 - The Jupyter or Python extensions, or `ipykernel`. GemDB Notebooks use VS Code's built-in notebook
-  support, so leave the built-in **Jupyter Notebook support** extension enabled.
+  support, so leave the built-in **Jupyter Notebook support** extension enabled. VS Code may offer
+  to install Microsoft's Python extension when you open a notebook or Python file; GemDB Code does
+  not need it.
 - Node.js. The `gemdb` command runs on VS Code's own runtime.
 - `pip` or a virtual environment. There is no package installation step; your own `.py` files can be
   imported once their directory is on `sys.path`.
@@ -601,7 +607,9 @@ the database keeps running after VS Code closes. Uninstall in this order:
    restart, the **GemDB Code** icon is gone from the activity bar and `gemdb` is no longer on the
    PATH of VS Code's terminals.
 5. **Delete `~/GemDB`** to remove what is left: the `gemdb` command, logs and bookkeeping files, the
-   Brain Freeze demo and any commits you made in it, and your database if you kept it.
+   Brain Freeze demo and any commits you made in it, and your database if you kept it. The engine's
+   files are read-only, so make them writable first: run `chmod -R u+w ~/GemDB`, then
+   `rm -rf ~/GemDB`.
 
 If you connected an AI agent outside VS Code, remove GemDB Code's entry from that client's
 configuration too. For Claude Code, run `claude mcp remove gemdb --scope local` in the folder where
