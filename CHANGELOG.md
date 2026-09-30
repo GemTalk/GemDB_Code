@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Debug view shows the Python call stack — methods named with their class, frames from other cells
   and imported files in place — and the paused line is highlighted. Variables shows each frame's
   locals and the notebook's globals, and expands objects into their attributes, lists and sets into
-  their items (a page at a time for big ones) and dicts into their entries. **Continue** resumes
+  their items (a page at a time for big ones) and dicts into their entries. Classes, functions and
+  modules are folded into their own rows, as in VS Code's Python debugger, so the data stands out. **Continue** resumes
   the cell; **Stop** ends it. There is nothing to launch or configure. Stepping and red-dot
   breakpoints are not supported yet, and the debugger says so when asked.
 

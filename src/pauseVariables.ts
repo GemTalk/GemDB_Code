@@ -156,7 +156,7 @@ both isNil ifFalse: [
     locals := [PyFrame ___pyLocalsFromFrameContentsList___: (p at: 5)]
       on: Error do: [:e | e return: nil].
     (locals notNil and: [locals size > 0])
-      ifTrue: [reg add: locals. out print: reg size]
+      ifTrue: [reg add: { #gemdbScope. locals }. out print: reg size]
       ifFalse: [out nextPutAll: '0'].
     out nextPut: record]].
 scope := nil.
@@ -167,7 +167,7 @@ ${
 scopes notNil ifTrue: [scope := scopes at: ${literal(scopeKey)} ifAbsent: [nil]].`
 }
 (scope notNil and: [scope size > 0])
-  ifTrue: [reg add: scope. out print: reg size]
+  ifTrue: [reg add: { #gemdbScope. scope }. out print: reg size]
   ifFalse: [out nextPutAll: '0'].
 out nextPut: record.
 out contents encodeAsUTF8`;
@@ -188,12 +188,20 @@ export function parseFrameRefs(raw: string): { locals: number[]; globals: number
  * from `start` (0-based), registering the expandable ones.
  *
  * Names follow what a Python user reads: a dict entry by its key's repr, a list
- * item by `[i]`, an attribute by its name. Dunder names (`__builtins__`,
+ * item by `[i]`, an attribute by its name.
+ *
+ * A *scope* — a frame's Locals, the notebook's Globals — is registered as
+ * `{#gemdbScope. dict}` and reads differently: its data is listed by name,
+ * sorted, and its classes, functions and modules are folded into collapsed
+ * `class variables`, `function variables` and `module variables` rows at the
+ * top, as VS Code's Python debugger does, so the values being debugged are
+ * not lost among definitions. Only scopes are grouped; an ordinary dict that
+ * holds functions shows every entry. Dunder names (`__builtins__`,
  * `__name__` and friends) are left out, as they are noise in a namespace; a
  * key that merely starts with `__` is kept.
  */
 export function childrenQuery(ref: number, start: number, count: number): string {
-  return `| reg obj kids out field record none saved describe childrenOf start count |
+  return `| reg obj kids out field record none saved describe childrenOf start count isDunder nameOf |
 ${PREAMBLE}
 start := ${start}.
 count := ${count}.
@@ -202,6 +210,41 @@ obj := (reg notNil and: [${ref} between: 1 and: reg size]) ifTrue: [reg at: ${re
 ${CHILDREN_OF}
 ${DESCRIBE}
 ${withQuietConsole(`
+  isDunder := [:key :nm |
+    (key isString or: [key isSymbol])
+      and: [nm size > 4 and: [(nm copyFrom: 1 to: 2) = '__' and: [(nm copyFrom: nm size - 1 to: nm size) = '__']]]].
+  nameOf := [:key |
+    (key isString or: [key isSymbol])
+      ifTrue: [key asString]
+      ifFalse: [[(key @env1:__repr__) asString] on: AbstractException do: [:e | e return: key printString]]].
+  (obj class == Array and: [obj size = 2 and: [(obj at: 1) == #gemdbScope]])
+    ifTrue: [| data groups |
+      "A scope: data first-class, the rest folded away by kind."
+      data := OrderedCollection new.
+      groups := { 'class variables' -> OrderedCollection new.
+        'function variables' -> OrderedCollection new.
+        'module variables' -> OrderedCollection new }.
+      (obj at: 2) keysAndValuesDo: [:key :v | | nm tname bucket |
+        nm := nameOf value: key.
+        (isDunder value: key value: nm) ifFalse: [
+          tname := [((v @env1:___pyAttrLoad___: #'__class__') @env1:___pyAttrLoad___: #'__name__') asString]
+            on: AbstractException do: [:e | e return: ''].
+          bucket := (v notNil and: [v isBehavior])
+            ifTrue: [(groups at: 1) value]
+            ifFalse: [(#('function' 'builtin_function_or_method' 'method') includes: tname)
+              ifTrue: [(groups at: 2) value]
+              ifFalse: [tname = 'module' ifTrue: [(groups at: 3) value] ifFalse: [data]]].
+          bucket add: nm -> v]].
+      groups do: [:g |
+        g value isEmpty ifFalse: [
+          reg add: { #gemdbGroup. (g value asSortedCollection: [:a :b | a key <= b key]) asArray }.
+          out nextPutAll: g key; nextPut: field; nextPut: field; nextPut: field;
+            print: reg size; nextPut: field; print: 0; nextPut: field; print: g value size; nextPut: record]].
+      (data asSortedCollection: [:a :b | a key <= b key]) do: [:a | describe value: a key value: a value]]
+    ifFalse: [
+  (obj class == Array and: [obj size = 2 and: [(obj at: 1) == #gemdbGroup]])
+    ifTrue: [(obj at: 2) do: [:a | describe value: a key value: a value]]
+    ifFalse: [
   kids := obj isNil ifTrue: [nil] ifFalse: [childrenOf value: obj].
   kids notNil ifTrue: [| items shown |
     items := kids at: 2.
@@ -213,15 +256,12 @@ ${withQuietConsole(`
       ifFalse: [
         items do: [:pair | | key nm |
           key := pair at: 1.
-          nm := (key isString or: [key isSymbol])
-            ifTrue: [key asString]
-            ifFalse: [[(key @env1:__repr__) asString] on: AbstractException do: [:e | e return: key printString]].
-          ((nm size > 4 and: [(nm copyFrom: 1 to: 2) = '__' and: [(nm copyFrom: nm size - 1 to: nm size) = '__']])
-              and: [key isString or: [key isSymbol]])
+          nm := nameOf value: key.
+          (isDunder value: key value: nm)
             ifFalse: [
               shown >= start ifTrue: [
                 (shown - start) < count ifTrue: [describe value: nm value: (pair at: 2)]].
-              shown := shown + 1]]]]`)}
+              shown := shown + 1]]]]]]`)}
 out contents encodeAsUTF8`;
 }
 

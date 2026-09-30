@@ -159,6 +159,10 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
       seen.data = parseChildren(
         run(childrenQuery(seen.globals.find((v) => v.name === 'data')!.ref, 0, 500)),
       );
+      const group = (name: string) =>
+        parseChildren(run(childrenQuery(seen.globals.find((v) => v.name === name)!.ref, 0, 500)));
+      seen.classes = group('class variables');
+      seen.functions = group('function variables');
       return 'continue';
     });
     const printed: string[] = [];
@@ -172,7 +176,7 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
         '    def __repr__(self):',
         '        print("repr ran")',
         '        return f"P({self.name!r})"',
-        'data = {"k": [1, 2.5, "s"], 3: None}',
+        'data = {"k": [1, 2.5, "s"], 3: None, "f": len}',
         'big = list(range(1000))',
         'def go(p, n=2):',
         '    local = [p, (1, 2)]',
@@ -197,10 +201,18 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
     expect(seen.local.map((v) => v.name)).toEqual(['[0]', '[1]']);
     expect(seen.local[1]).toMatchObject({ value: '(1, 2)', type: 'tuple', indexed: 2 });
     expect(seen.tags.map((v) => v.value).sort()).toEqual(["'a'", "'b'"]);
-    // Globals are the notebook's names — this cell's and earlier cells' — without the dunder noise.
+    // Globals are the notebook's names — this cell's and earlier cells' — without the dunder
+    // noise, with classes and functions folded into groups at the top and the data sorted below.
     const globalNames = seen.globals.map((v) => v.name);
-    expect(globalNames).toEqual(expect.arrayContaining(['P', 'big', 'data', 'go']));
+    expect(globalNames.slice(0, 2)).toEqual(['class variables', 'function variables']);
+    expect(globalNames).toEqual(expect.arrayContaining(['big', 'data']));
+    expect(globalNames).not.toContain('P');
+    expect(globalNames).not.toContain('go');
     expect(globalNames.filter((n) => /^__.*__$/.test(n))).toEqual([]);
+    const dataNames = globalNames.slice(2);
+    expect(dataNames).toEqual([...dataNames].sort());
+    expect(seen.classes.map((v) => v.name)).toContain('P');
+    expect(seen.functions.map((v) => v.name)).toContain('go');
     // A big list says how big it is and hands over a page on request.
     expect(seen.globals.find((v) => v.name === 'big')).toMatchObject({ indexed: 1000, named: 0 });
     expect(seen.bigPage.map((v) => [v.name, v.value])).toEqual([
@@ -213,6 +225,8 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
         ['3', 'None'],
       ]),
     );
+    // An ordinary dict is not a scope: a function in it stays an ordinary entry.
+    expect(seen.data.map((v) => v.name)).toContain('f');
     // __repr__ printed while the Variables were read, and none of it reached the cell.
     expect(printed.join('')).toBe('after\n');
     expect(result.value).toBe('2');
