@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`breakpoint()` in a notebook cell opens the debugger.** The cell pauses, VS Code's Run and
+  Debug view shows the Python call stack — methods named with their class, frames from other cells
+  and imported files in place — and the paused line is highlighted. **Continue** resumes the cell;
+  **Stop** ends it. There is nothing to launch or configure. Stepping, variables and red-dot
+  breakpoints are not supported yet, and the debugger says so when asked.
+
+### Fixed
+
+- **`breakpoint()` in a file run with `gemdb` or Run Python File in GemDB no longer leaves you at a
+  `topaz 1>` prompt.** It prints where it was and the script carries on. The GemDB Shell does the
+  same, where it used to fail with `a Halt occurred (error 2709)`.
+
 ## [1.5.3] - 2026-09-28
 
 The engine moves to GemStone 4.0.0.a4, so an existing database has to be

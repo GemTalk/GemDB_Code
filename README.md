@@ -379,6 +379,11 @@ database)**.
   the notebook's session; run `gemdb.abort()` to discard those too.
 - `print()` output streams into the cell while the cell runs. `input()` opens an input box, and
   pressing Escape raises `KeyboardInterrupt`.
+- `breakpoint()` pauses the cell and opens VS Code's debugger on it, with no setup: the Call Stack
+  shows the Python frames and the paused line is highlighted. **Continue** resumes the cell where
+  it paused; **Stop** ends it. Stepping, variables and red-dot breakpoints are not supported yet.
+  In the GemDB Shell and in **Run Python File in GemDB**, `breakpoint()` prints where it was and
+  the code carries on.
 - Each notebook has its own session and its own transaction, so a commit in one notebook never
   commits another notebook's half-finished changes. Closing a notebook ends its session and discards
   anything it has not committed.

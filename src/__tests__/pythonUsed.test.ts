@@ -42,7 +42,7 @@ const { initTelemetry } = await import('../telemetry');
 
 function cell(source: string): unknown {
   return {
-    document: { getText: () => source },
+    document: { getText: () => source, uri: { toString: () => 'file:///a.ipynb#cell' } },
     notebook: { uri: { toString: () => 'file:///a.ipynb' } },
   };
 }

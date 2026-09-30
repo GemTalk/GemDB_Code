@@ -26,6 +26,7 @@ import {
   resetActiveNotebook,
 } from './notebook';
 import { isMcpRunning, startMcpServer, stopMcpServer } from './mcp';
+import { registerBreakpointDebugger } from './debugger';
 import { cloneBrainFreeze, initPendingReadme, showPromisedReadme } from './demo';
 import { confirmMcpEnabled, registerMcpProvider, registerWithClient } from './mcpRegistration';
 import {
@@ -145,6 +146,11 @@ export function activate(context: vscode.ExtensionContext): void {
       cancel.dispose();
     }
   });
+
+  // Python's breakpoint() in a notebook cell opens VS Code's debugger on the
+  // paused cell — no Debug command, no launch configuration: the user just
+  // runs the code. Continue resumes the cell; Stop ends it.
+  context.subscriptions.push(registerBreakpointDebugger());
 
   // Every command that changes state refreshes the view afterwards, so the
   // status readout can never disagree with what just happened.

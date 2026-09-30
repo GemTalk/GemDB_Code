@@ -93,6 +93,21 @@ describe.skipIf(!ready || !canMakeFixture())('the gemdb command', () => {
     expect(ran.code).toBe(0);
   });
 
+  it('says where a breakpoint() was and carries on, rather than stranding at a topaz prompt', async () => {
+    fs.writeFileSync(
+      path.join(workDir, 'paused.py'),
+      'def f():\n    breakpoint()\n    return "went on"\nprint(f())\n',
+    );
+    // Merged, as a terminal shows it: the notice is written to sys.stderr,
+    // which file mode currently routes to stdout along with print().
+    const ran = await run(['paused.py'], undefined, true);
+    expect(ran.stdout).toBe(
+      'breakpoint() at paused.py:2: the debugger opens in notebooks for now; continuing.\n' +
+        'went on\n',
+    );
+    expect(ran.code).toBe(0);
+  });
+
   it('keeps stdout, reports the error on stderr, and exits nonzero', async () => {
     const ran = await gemdb('both.py');
     expect(ran.stdout).toContain('partial');

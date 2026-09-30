@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { noteRunningCell } from './debugger';
 import { ensureRunning } from './lifecycle';
 import { errorMessage, log } from './log';
 import { PyResult, isErrorResult, resetScope, runPython } from './pythonQueries';
@@ -121,9 +122,13 @@ export class GemDbNotebookController {
     const textOutput = (text: string): vscode.NotebookCellOutput =>
       new vscode.NotebookCellOutput([vscode.NotebookCellOutputItem.text(text, 'text/plain')]);
 
+    // A breakpoint() in this cell opens the debugger here, so it needs to
+    // know which cell is running to show a `<grail>` frame in it.
+    const owner = notebookOwner(cell.notebook);
+    noteRunningCell(owner.key, cell.document.uri.toString());
     let result: PyResult;
     try {
-      result = await runPython(source, notebookOwner(cell.notebook), (chunk) => {
+      result = await runPython(source, owner, (chunk) => {
         printed += chunk;
         execution.replaceOutput([textOutput(printed)]);
       });
@@ -136,6 +141,8 @@ export class GemDbNotebookController {
       log(`Notebook cell failed: ${message}`);
       this.endWithError(execution, message);
       return;
+    } finally {
+      noteRunningCell(owner.key, undefined);
     }
     reportPythonUsed(SURFACE.notebook, EVIDENCE.executed);
 

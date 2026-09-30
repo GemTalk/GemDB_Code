@@ -280,6 +280,40 @@ export interface FakeController {
   dispose(): void;
 }
 
+export const NotebookCellKind = { Markup: 1, Code: 2 } as const;
+
+/** What `debug.startDebugging` answers; a test sets it to false to refuse. */
+export const __debugStartResult = { value: true };
+
+/** What `debug.startDebugging` was asked to start, for a test to inspect. */
+export const __debugStarts: unknown[] = [];
+/** The options each of those starts passed. */
+export const __debugStartOptions: unknown[] = [];
+
+/** Debug adapter factories registered so far, by debug type. */
+export const __debugFactories = new Map<string, unknown>();
+
+export const debug = {
+  registerDebugAdapterDescriptorFactory: (type: string, factory: unknown) => {
+    __debugFactories.set(type, factory);
+    return new Disposable(() => __debugFactories.delete(type));
+  },
+  startDebugging: (
+    _folder: unknown,
+    configuration: unknown,
+    options?: unknown,
+  ): Promise<boolean> => {
+    __debugStarts.push(configuration);
+    __debugStartOptions.push(options);
+    return Promise.resolve(__debugStartResult.value);
+  },
+  stopDebugging: (): Promise<void> => Promise.resolve(),
+};
+
+export class DebugAdapterInlineImplementation {
+  constructor(readonly implementation: unknown) {}
+}
+
 /** Controllers created so far, so a test can reach the one under test. */
 export const __controllers: FakeController[] = [];
 
@@ -321,6 +355,7 @@ export const notebooks = {
 };
 
 export const workspace = {
+  notebookDocuments: [] as unknown[],
   getConfiguration(section: string) {
     return {
       get<T>(key: string, fallback: T): T {

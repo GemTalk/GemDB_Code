@@ -274,6 +274,20 @@ SessionTemps current at: #'GrailConsole'
         label := 'GemDB run ', label.
         label size > 31 ifTrue: [label := label copyFrom: 1 to: 31].
         [System cacheName: label] on: Error do: [:ignored | ignored return: nil].
+        "breakpoint() has no debugger to open in file mode. Left alone, its Halt
+        goes past every handler to topaz, which abandons this block and leaves
+        the user at a topaz 1> prompt holding a session. So the hook says where
+        it was and returns, and the script carries on -- the same sentence the
+        GemDB Shell prints (session.ts breakpointNotice). Measured: assigning
+        sys.breakpointhook does not dirty the transaction, and _getframe(1)
+        inside the hook is the frame that called breakpoint()."
+        [(System myUserProfile symbolList objectNamed: #'ModuleAst') ifNotNil: [:m |
+            m evaluateSource: 'import sys
+def _gemdb_breakpoint(*args, **kws):
+    f = sys._getframe(1)
+    sys.stderr.write("breakpoint() at %s:%d: the debugger opens in notebooks for now; continuing.\\n" % (f.f_code.co_filename, f.f_lineno))
+sys.breakpointhook = _gemdb_breakpoint']]
+            on: AbstractException do: [:ignored | ignored return: nil].
         target = '-m'
             ifTrue: [importlib runModule: (args at: ofs + 2)]
             ifFalse: [importlib runPath: target].

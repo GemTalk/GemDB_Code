@@ -42,10 +42,10 @@ vi.mock('../pythonQueries', () => ({
 
 const { GemDbNotebookController } = await import('../notebook');
 
-/** A notebook cell, reduced to the two things the controller reads. */
+/** A notebook cell, reduced to what the controller reads. */
 function cell(source: string, notebook = 'file:///a.ipynb'): unknown {
   return {
-    document: { getText: () => source },
+    document: { getText: () => source, uri: { toString: () => `${notebook}#cell` } },
     notebook: { uri: { toString: () => notebook } },
   };
 }

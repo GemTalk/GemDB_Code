@@ -102,6 +102,13 @@
         }
       ]
     },
+    "debuggers": [
+      {
+        "type": "gemdb",
+        "label": "GemDB",
+        "hiddenWhen": "true"
+      }
+    ],
     "views": {
       "gemdb": [
         {

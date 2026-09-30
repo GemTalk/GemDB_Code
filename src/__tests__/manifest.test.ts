@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
+import { DEBUG_TYPE } from '../debugger';
 
 /**
  * What package.json promises VS Code about trust, held to it.
@@ -17,7 +18,10 @@ import { describe, expect, it } from 'vitest';
 
 interface Manifest {
   capabilities?: { untrustedWorkspaces?: { supported?: unknown } };
-  contributes: { configuration: { properties: Record<string, { scope?: string }> } };
+  contributes: {
+    configuration: { properties: Record<string, { scope?: string }> };
+    debuggers?: Array<{ type: string; hiddenWhen?: string }>;
+  };
 }
 
 const manifest = JSON.parse(
@@ -29,6 +33,15 @@ describe('the manifest', () => {
     // Undeclared means disabled: the demo's README, the status bar and every
     // command would vanish in any folder the user has not trusted yet.
     expect(manifest.capabilities?.untrustedWorkspaces?.supported).toBe('limited');
+  });
+
+  it('declares the breakpoint() debugger under the type the code starts it with', () => {
+    // A mismatch fails silently: startDebugging answers false, and every
+    // breakpoint() stops its cell with "could not open the debugger".
+    const debuggers = manifest.contributes.debuggers ?? [];
+    expect(debuggers.map((d) => d.type)).toEqual([DEBUG_TYPE]);
+    // Nobody launches it by hand, so it stays out of the Run and Debug picker.
+    expect(debuggers[0].hiddenWhen).toBe('true');
   });
 
   it('scopes every setting to the machine', () => {

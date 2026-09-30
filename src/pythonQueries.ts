@@ -1,5 +1,6 @@
 import {
   ExecutionInterrupted,
+  ExecutionStopped,
   GciSession,
   OutputSink,
   SessionOwner,
@@ -59,7 +60,8 @@ const FRAME = '\u001f';
  * The result of one framed evaluation, or — when `interrupt()` had to end it
  * at a forwarder stop, where nothing gem-side gets to compose a message — the
  * same `Error:` line Grail itself produces for a KeyboardInterrupt, so every
- * display path treats the two identically.
+ * display path treats the two identically. A run stopped from the debugger at
+ * a breakpoint() gets an `Error:` line of its own for the same reason.
  */
 async function framed(evaluation: Promise<string>): Promise<PyResult> {
   try {
@@ -67,6 +69,10 @@ async function framed(evaluation: Promise<string>): Promise<PyResult> {
   } catch (e) {
     if (e instanceof ExecutionInterrupted) {
       return { output: '', value: 'Error: KeyboardInterrupt - ' };
+    }
+    // Stop at a breakpoint(): the user ended the run from the debugger.
+    if (e instanceof ExecutionStopped) {
+      return { output: '', value: `Error: ${e.message}` };
     }
     throw e;
   }
