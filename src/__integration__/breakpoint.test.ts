@@ -3,6 +3,12 @@ import * as path from 'path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { stageGrail } from '../grail';
 import { PythonFrame, parsePythonStack, pythonStackQuery } from '../haltStack';
+import {
+  childrenQuery,
+  parseChildren,
+  parseFrameRefs,
+  registerFramesQuery,
+} from '../pauseVariables';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
 import { runPython } from '../pythonQueries';
 import {
@@ -131,6 +137,85 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
     expect('early()').toContain(seen.frames[1].lineText.trim());
     expect(seen.frames[1].lineText.trim()).not.toBe('');
     expect(result.value).toBe('1');
+  });
+
+  it('shows each frame’s locals and the notebook’s globals, expandable, without disturbing the cell', async () => {
+    const seen: Record<string, ReturnType<typeof parseChildren>> = {};
+    setHaltHandler(async (request) => {
+      const run = (q: string) => request.session.execute(q);
+      const refs = parseFrameRefs(run(registerFramesQuery(request.process, NB.key)));
+      // Grail's own pdb.set_trace frame comes first, then go, then <module>.
+      const goRef = refs.locals[refs.locals.length - 2];
+      seen.go = parseChildren(run(childrenQuery(goRef, 0, 500)));
+      const byName = (name: string) => seen.go.find((v) => v.name === name)!;
+      seen.p = parseChildren(run(childrenQuery(byName('p').ref, 0, 500)));
+      seen.local = parseChildren(run(childrenQuery(byName('local').ref, 0, 500)));
+      seen.tags = parseChildren(
+        run(childrenQuery(seen.p.find((v) => v.name === 'tags')!.ref, 0, 500)),
+      );
+      seen.globals = parseChildren(run(childrenQuery(refs.globals, 0, 500)));
+      const big = seen.globals.find((v) => v.name === 'big')!;
+      seen.bigPage = parseChildren(run(childrenQuery(big.ref, 998, 50)));
+      seen.data = parseChildren(
+        run(childrenQuery(seen.globals.find((v) => v.name === 'data')!.ref, 0, 500)),
+      );
+      return 'continue';
+    });
+    const printed: string[] = [];
+
+    const result = await runPython(
+      [
+        'class P:',
+        '    def __init__(self, name):',
+        '        self.name = name',
+        '        self.tags = {"a", "b"}',
+        '    def __repr__(self):',
+        '        print("repr ran")',
+        '        return f"P({self.name!r})"',
+        'data = {"k": [1, 2.5, "s"], 3: None}',
+        'big = list(range(1000))',
+        'def go(p, n=2):',
+        '    local = [p, (1, 2)]',
+        '    breakpoint()',
+        '    print("after")',
+        '    return n',
+        'go(P("ann"))',
+      ].join('\n'),
+      NB,
+      (chunk) => printed.push(chunk),
+    );
+
+    expect(seen.go.map((v) => [v.name, v.value, v.type])).toEqual(
+      expect.arrayContaining([
+        ['n', '2', 'int'],
+        ['p', "P('ann')", 'P'],
+        ['local', "[P('ann'), (1, 2)]", 'list'],
+      ]),
+    );
+    expect(seen.p.map((v) => v.name).sort()).toEqual(['name', 'tags']);
+    // A list reads by position from 0, not as Smalltalk's 1-based keys.
+    expect(seen.local.map((v) => v.name)).toEqual(['[0]', '[1]']);
+    expect(seen.local[1]).toMatchObject({ value: '(1, 2)', type: 'tuple', indexed: 2 });
+    expect(seen.tags.map((v) => v.value).sort()).toEqual(["'a'", "'b'"]);
+    // Globals are the notebook's names — this cell's and earlier cells' — without the dunder noise.
+    const globalNames = seen.globals.map((v) => v.name);
+    expect(globalNames).toEqual(expect.arrayContaining(['P', 'big', 'data', 'go']));
+    expect(globalNames.filter((n) => /^__.*__$/.test(n))).toEqual([]);
+    // A big list says how big it is and hands over a page on request.
+    expect(seen.globals.find((v) => v.name === 'big')).toMatchObject({ indexed: 1000, named: 0 });
+    expect(seen.bigPage.map((v) => [v.name, v.value])).toEqual([
+      ['[998]', '998'],
+      ['[999]', '999'],
+    ]);
+    expect(seen.data.map((v) => [v.name, v.value])).toEqual(
+      expect.arrayContaining([
+        ['k', "[1, 2.5, 's']"],
+        ['3', 'None'],
+      ]),
+    );
+    // __repr__ printed while the Variables were read, and none of it reached the cell.
+    expect(printed.join('')).toBe('after\n');
+    expect(result.value).toBe('2');
   });
 
   it('ends the cell on Stop, and the session is still usable', async () => {

@@ -22,7 +22,9 @@ vi.mock('../session', () => ({
 }));
 
 const { locateCell, parsePythonStack } = await import('../haltStack');
-const { PauseDebugAdapter, registerBreakpointDebugger, toDapFrames } = await import('../debugger');
+const { parseChildren, parseFrameRefs } = await import('../pauseVariables');
+const { PauseDebugAdapter, registerBreakpointDebugger, scopesFor, toDapFrames, toDapVariable } =
+  await import('../debugger');
 
 const F = '\u001f';
 const R = '\u001e';
@@ -195,12 +197,55 @@ describe('toDapFrames', () => {
   });
 });
 
+describe('scopesFor and toDapVariable', () => {
+  it('offers only the scopes a frame has', () => {
+    expect(scopesFor(0, 0)).toEqual([]);
+    expect(scopesFor(0, 4).map((s) => s.name)).toEqual(['Globals']);
+  });
+
+  it('tells VS Code how many items a list has, so it pages them', () => {
+    expect(
+      toDapVariable({
+        name: 'rows',
+        value: '[...]',
+        type: 'list',
+        ref: 7,
+        indexed: 10_000,
+        named: 0,
+      }),
+    ).toEqual({
+      name: 'rows',
+      value: '[...]',
+      type: 'list',
+      variablesReference: 7,
+      indexedVariables: 10_000,
+    });
+    expect(
+      toDapVariable({ name: 'n', value: '3', type: 'int', ref: 0, indexed: 0, named: 0 }),
+    ).toEqual({
+      name: 'n',
+      value: '3',
+      type: 'int',
+      variablesReference: 0,
+    });
+  });
+});
+
 /** Drive an adapter and collect what it sends. */
 function adapterFor(pause: { answer: (c: HaltAnswer) => void } | undefined) {
   const sent: Array<Record<string, unknown>> = [];
   const adapter = new PauseDebugAdapter(() =>
     pause
-      ? { label: 'a.ipynb', frames: [{ id: 1, name: 'f', line: 2, column: 1 }], ...pause }
+      ? {
+          label: 'a.ipynb',
+          frames: [{ id: 1, name: 'f', line: 2, column: 1 }],
+          scopes: (frameId: number) => (frameId === 1 ? scopesFor(3, 9) : []),
+          variables: (ref: number, start: number, count: number) =>
+            ref === 3
+              ? [{ name: `from ${start}, ${count}`, value: '1', variablesReference: 0 }]
+              : [],
+          ...pause,
+        }
       : undefined,
   );
   adapter.onDidSendMessage((m) => sent.push(m as Record<string, unknown>));
@@ -235,6 +280,28 @@ describe('PauseDebugAdapter', () => {
       stackFrames: [{ id: 1, name: 'f', line: 2, column: 1 }],
       totalFrames: 1,
     });
+  });
+
+  it('answers a frame’s Locals and Globals, and pages a row’s children', () => {
+    const { request, response } = adapterFor({ answer: () => {} });
+    request('initialize');
+    request('launch', { gemdbPause: '1' });
+    request('scopes', { frameId: 1 });
+    expect(response('scopes')?.body).toEqual({
+      scopes: [
+        { name: 'Locals', variablesReference: 3, presentationHint: 'locals', expensive: false },
+        { name: 'Globals', variablesReference: 9, presentationHint: 'globals', expensive: true },
+      ],
+    });
+    request('variables', { variablesReference: 3, start: 200, count: 100 });
+    expect(response('variables')?.body).toEqual({
+      variables: [{ name: 'from 200, 100', value: '1', variablesReference: 0 }],
+    });
+    // No count means "all", which is capped at one page.
+    request('variables', { variablesReference: 3 });
+    expect(
+      (response('variables')?.body as { variables: Array<{ name: string }> }).variables[0].name,
+    ).toBe('from 0, 500');
   });
 
   it('resumes the evaluation on Continue and ends the session', () => {
@@ -446,5 +513,21 @@ describe('registerBreakpointDebugger', () => {
     registration.dispose();
     await expect(answered).resolves.toBe('stop');
     expect(installed).toBeUndefined();
+  });
+});
+
+describe('the variables queries’ answers', () => {
+  it('reads each frame’s locals ref and, last, the globals ref', () => {
+    expect(parseFrameRefs(`1${R}2${R}0${R}3${R}`)).toEqual({ locals: [1, 2, 0], globals: 3 });
+    expect(parseFrameRefs(`0${R}`)).toEqual({ locals: [], globals: 0 });
+  });
+
+  it('reads one row per child, with its counts', () => {
+    expect(
+      parseChildren(row('tags', "{'a', 'b'}", 'set', 8, 2, 0) + row('n', '2', 'int', 0, 0, 0)),
+    ).toEqual([
+      { name: 'tags', value: "{'a', 'b'}", type: 'set', ref: 8, indexed: 2, named: 0 },
+      { name: 'n', value: '2', type: 'int', ref: 0, indexed: 0, named: 0 },
+    ]);
   });
 });

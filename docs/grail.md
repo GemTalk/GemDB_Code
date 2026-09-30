@@ -158,7 +158,16 @@ when it agrees; and every cell compiles under the filename `<grail>`, so a
 cell frame finds its cell by the text of its line (from the span, or from
 `___curPosPositionsFromSource___:` on the home method). All of these
 selectors are private to Grail; `haltStack.ts` fails soft if one moves, and
-`src/__integration__/breakpoint.test.ts` is what notices.
+`src/__integration__/breakpoint.test.ts` is what notices. The Variables view
+reads locals with `PyFrame ___pyLocalsFromFrameContentsList___:` (which merges
+a Python frame's Smalltalk frames and adds `self`) and keeps every object it
+may expand in a per-pause registry in `SessionTemps`, dropped before the
+evaluation resumes (`pauseVariables.ts`). Two measured traps there: every
+Smalltalk sequence answers `keysAndValuesDo:` with 1-based keys, so sequences
+must be tested before dictionaries or a list reads as entries 1, 2, 3; and a
+`__repr__` that prints would send to the paused cell's `#GrailConsole`
+forwarder, so each query swaps in a WriteStream for its own duration and puts
+the cell's back in an `ensure:`.
 
 **The console box says what the sink takes, because the sink cannot be
 asked.** `SessionTemps #GrailConsole` holds an Array; slot 1 is the sink, and

@@ -3,6 +3,15 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { CellText, PythonFrame, locateCell, parsePythonStack, pythonStackQuery } from './haltStack';
 import { errorMessage, log } from './log';
+import {
+  PAGE,
+  PauseVariable,
+  childrenQuery,
+  clearRegistryQuery,
+  parseChildren,
+  parseFrameRefs,
+  registerFramesQuery,
+} from './pauseVariables';
 import { HaltAnswer, HaltRequest, setHaltHandler } from './session';
 
 /**
@@ -22,10 +31,11 @@ import { HaltAnswer, HaltRequest, setHaltHandler } from './session';
  * never saves on the way in (`suppressSaveBeforeStart`): reaching a
  * breakpoint() must not write the notebook to disk.
  *
- * Deliberately small for now: the call stack and the highlight, Continue and
- * Stop. Stepping, variables, evaluation and Restart answer "not yet" rather
- * than pretending, and red-dot breakpoints report themselves unverified,
- * because Grail has no step or breakpoint support to build them on.
+ * Deliberately small for now: the call stack, the highlight, each frame's
+ * Locals and the notebook's Globals, Continue and Stop. Stepping, evaluation
+ * and Restart answer "not yet" rather than pretending, and red-dot breakpoints
+ * report themselves unverified, because Grail has no step or breakpoint
+ * support to build them on.
  *
  * The adapter is inline (`DebugAdapterInlineImplementation`) and speaks the
  * Debug Adapter Protocol directly rather than through `@vscode/debugadapter`:
@@ -49,12 +59,71 @@ export interface DapFrame {
   presentationHint?: 'normal' | 'subtle';
 }
 
+/** A scope row, as the Debug Adapter Protocol spells it. */
+export interface DapScope {
+  name: string;
+  variablesReference: number;
+  presentationHint?: 'locals' | 'globals';
+  expensive: boolean;
+}
+
+/** A variable row, as the Debug Adapter Protocol spells it. */
+export interface DapVariable {
+  name: string;
+  value: string;
+  type?: string;
+  variablesReference: number;
+  indexedVariables?: number;
+  namedVariables?: number;
+}
+
 /** One evaluation sitting at a breakpoint(), waiting for the user. */
 export interface Pause {
   label: string;
   frames: DapFrame[];
+  /** The Locals and Globals of one frame, by its DAP id. */
+  scopes(frameId: number): DapScope[];
+  /** The children of one expandable row, `count` of them from `start`. */
+  variables(ref: number, start: number, count: number): DapVariable[];
   /** Settle the pause. Only the first call counts. */
   answer(choice: HaltAnswer): void;
+}
+
+/** The scopes of a frame whose locals are at `locals` and globals at `globals` (0 = none). */
+export function scopesFor(locals: number, globals: number): DapScope[] {
+  const scopes: DapScope[] = [];
+  if (locals > 0) {
+    scopes.push({
+      name: 'Locals',
+      variablesReference: locals,
+      presentationHint: 'locals',
+      expensive: false,
+    });
+  }
+  if (globals > 0) {
+    scopes.push({
+      name: 'Globals',
+      variablesReference: globals,
+      presentationHint: 'globals',
+      expensive: true,
+    });
+  }
+  return scopes;
+}
+
+/**
+ * A row for the Variables view. A list or set says how many items it has, so
+ * VS Code pages it rather than asking for ten million rows at once.
+ */
+export function toDapVariable(v: PauseVariable): DapVariable {
+  return {
+    name: v.name,
+    value: v.value,
+    ...(v.type ? { type: v.type } : {}),
+    variablesReference: v.ref,
+    ...(v.indexed > 0 ? { indexedVariables: v.indexed } : {}),
+    ...(v.named > 0 ? { namedVariables: v.named } : {}),
+  };
 }
 
 /** Pauses by id, so a launch request can find the one it was started for. */
@@ -260,12 +329,20 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
         this.respond(request, { stackFrames: frames, totalFrames: frames.length });
         return;
       }
-      case 'scopes':
-        this.respond(request, { scopes: [] });
+      case 'scopes': {
+        const frameId = Number(request.arguments?.frameId ?? 0);
+        this.respond(request, { scopes: this.pause?.scopes(frameId) ?? [] });
         return;
-      case 'variables':
-        this.respond(request, { variables: [] });
+      }
+      case 'variables': {
+        const ref = Number(request.arguments?.variablesReference ?? 0);
+        const start = Number(request.arguments?.start ?? 0);
+        const count = Number(request.arguments?.count ?? 0) || PAGE;
+        this.respond(request, {
+          variables: this.pause?.variables(ref, start, Math.min(count, PAGE)) ?? [],
+        });
         return;
+      }
       case 'continue':
         this.respond(request, { allThreadsContinued: true });
         this.settle('continue');
@@ -416,6 +493,50 @@ function readFrames(request: HaltRequest): DapFrame[] {
 }
 
 /**
+ * Register each frame's locals, and the notebook's globals, for the Variables
+ * view. Answers the scopes per DAP frame id. A failure costs the variables,
+ * never the pause.
+ *
+ * The walk here lists the frames `breakpoint()` itself added, which
+ * `parsePythonStack` drops from the front; both walks are the same Grail walk,
+ * so aligning from the innermost *user* frame means taking the last
+ * `frameCount` entries.
+ */
+function readScopes(request: HaltRequest, frameCount: number): Map<number, DapScope[]> {
+  const scopes = new Map<number, DapScope[]>();
+  try {
+    const owner = request.session.owner;
+    const { locals, globals } = parseFrameRefs(
+      request.session.execute(
+        registerFramesQuery(request.process, owner.kind === 'notebook' ? owner.key : undefined),
+      ),
+    );
+    const mine = locals.slice(Math.max(0, locals.length - frameCount));
+    mine.forEach((ref, index) => scopes.set(index + 1, scopesFor(ref, globals)));
+  } catch (e) {
+    log(`Could not read the variables at breakpoint(): ${errorMessage(e)}`);
+  }
+  return scopes;
+}
+
+/** The children of one registered object. A failure shows as no children, not an error. */
+function readChildren(
+  request: HaltRequest,
+  ref: number,
+  start: number,
+  count: number,
+): DapVariable[] {
+  try {
+    return parseChildren(request.session.execute(childrenQuery(ref, start, count))).map(
+      toDapVariable,
+    );
+  } catch (e) {
+    log(`Could not read variable ${ref} at breakpoint(): ${errorMessage(e)}`);
+    return [];
+  }
+}
+
+/**
  * Answer every breakpoint() in this window with a debug session.
  *
  * The halt handler registers the pause, starts a debug session aimed at it,
@@ -447,10 +568,27 @@ export function registerBreakpointDebugger(): vscode.Disposable {
           settled = true;
           pauses.delete(id);
           sessionsByPause.delete(id);
+          // Before resuming: the registry holds the pause's objects, and only
+          // the paused session can drop it. A closed session has nothing to drop.
+          if (request.session.connected) {
+            try {
+              request.session.execute(clearRegistryQuery());
+            } catch (e) {
+              log(`Could not clear the variables of a pause: ${errorMessage(e)}`);
+            }
+          }
           log(`breakpoint() in ${label}: ${choice}`);
           resolve(choice);
         };
-        pauses.set(id, { label, frames: readFrames(request), answer });
+        const frames = readFrames(request);
+        const scopes = readScopes(request, frames.length);
+        pauses.set(id, {
+          label,
+          frames,
+          scopes: (frameId) => scopes.get(frameId) ?? [],
+          variables: (ref, start, count) => readChildren(request, ref, start, count),
+          answer,
+        });
 
         // Interrupted or closed while paused: take the debugger down with it.
         request.onCancel(() => {
