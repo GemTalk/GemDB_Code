@@ -160,14 +160,27 @@ cell frame finds its cell by the text of its line (from the span, or from
 selectors are private to Grail; `haltStack.ts` fails soft if one moves, and
 `src/__integration__/breakpoint.test.ts` is what notices. The Variables view
 reads locals with `PyFrame ___pyLocalsFromFrameContentsList___:` (which merges
-a Python frame's Smalltalk frames and adds `self`) and keeps every object it
-may expand in a per-pause registry in `SessionTemps`, dropped before the
-evaluation resumes (`pauseVariables.ts`). Two measured traps there: every
-Smalltalk sequence answers `keysAndValuesDo:` with 1-based keys, so sequences
-must be tested before dictionaries or a list reads as entries 1, 2, 3; and a
-`__repr__` that prints would send to the paused cell's `#GrailConsole`
-forwarder, so each query swaps in a WriteStream for its own duration and puts
-the cell's back in an `ensure:`.
+a Python frame's Smalltalk frames and adds `self`), in the same walk as the
+stack so a frame cannot be paired with another's locals, and keeps every
+object it may expand in a per-pause registry in `SessionTemps`, dropped before
+the evaluation resumes (`pauseVariables.ts`). Every query made while paused
+goes through `queryWhilePaused` in `session.ts` — nonblocking, one at a time,
+soft-broken past a two-second budget — never `execute`, because a Variables
+row runs the user's own `__repr__`. Measured traps there: every Smalltalk
+sequence answers `keysAndValuesDo:` with 1-based keys, so sequences must be
+tested before dictionaries or a list reads as entries 1, 2, 3; a `__repr__`
+that prints would send to the paused cell's `#GrailConsole` forwarder, so each
+query swaps in a WriteStream for its own duration and puts the cell's back in
+an `ensure:`; a `__repr__` that reaches `breakpoint()` or `input()` stops the
+query past every handler, and `GciTsClearStack` on it runs that `ensure:` and
+leaves the paused cell resumable; the soft break is a `Break`, a
+`ControlInterrupt` that `on: AbstractException do:` catches, which is what
+lets one slow `__repr__` be cut short while the rest of the rows still arrive;
+and a Python `set` answers `detect:` without running its block, so it is read
+with `do:`. A direct `pdb.set_trace()` in file mode still strands the user at
+`topaz 1>`: patching it needs `import pdb`, which was measured to dirty the
+transaction, and file mode's first statement already cannot open
+`gemdb.transaction()` for that reason.
 
 **The console box says what the sink takes, because the sink cannot be
 asked.** `SessionTemps #GrailConsole` holds an Array; slot 1 is the sink, and

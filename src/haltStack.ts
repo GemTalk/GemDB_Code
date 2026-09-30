@@ -26,11 +26,26 @@ export interface PythonFrame {
   file: string;
   /** Text from the frame's line — often a slice of it — which is how a `<grail>` frame finds its cell. */
   lineText: string;
+  /** Registry position of the frame's locals, when the query registered them (`pauseVariables.ts`); 0 for none. */
+  locals?: number;
 }
 
 /** Field and record separators: characters with no place in names, paths or source lines. */
-const FIELD = '\u001f';
-const RECORD = '\u001e';
+export const FIELD = '\u001f';
+export const RECORD = '\u001e';
+
+/**
+ * Smalltalk spliced into the stack query by a caller that wants more from the
+ * same walk: `temps` are declared, `setup` runs first, `perFrame` runs for
+ * each frame with the pair in `p` (appending its own fields to `out`), and
+ * `after` runs last.
+ */
+export interface StackQueryExtras {
+  temps: string;
+  setup: string;
+  perFrame: string;
+  after: string;
+}
 
 /**
  * Smalltalk that answers the Python frames of the suspended process `processOop`.
@@ -46,19 +61,31 @@ const RECORD = '\u001e';
  * qualified with its class when its method belongs to a Python class rather
  * than to a module — the receiver-side test Grail's own walk makes, done on
  * the defining class.
+ *
+ * Each frame is described inside its own error guard: a frame Grail cannot
+ * place becomes a `?` row with no line, rather than failing the query and
+ * costing every other frame.
  */
-export function pythonStackQuery(processOop: bigint): string {
-  return `| proc both pairs out modCls field record |
+export function pythonStackQuery(processOop: bigint, extras?: StackQueryExtras): string {
+  return `| proc both pairs out modCls field record placeholder ${extras?.temps ?? ''} |
 proc := Object _objectForOop: ${processOop}.
 modCls := System myUserProfile symbolList objectNamed: #'module'.
 field := Character codePoint: 31.
 record := Character codePoint: 30.
 out := WriteStream on: Unicode7 new.
+placeholder := WriteStream on: Unicode7 new.
+placeholder nextPutAll: '?'; nextPut: field.
+4 timesRepeat: [placeholder nextPutAll: '0'; nextPut: field].
+placeholder nextPutAll: '<grail>'; nextPut: field.
+placeholder := placeholder contents.
+${extras?.setup ?? ''}
 both := BaseException ___framesAndLevelsOfSuspendedProcess___: proc.
 both isNil ifFalse: [
   pairs := BaseException ___liveFramePairsFrom___: (both at: 1)
     generatorBody: false levels: (both at: 2) offset: 0 running: false.
-  pairs do: [:p | | meth home cls name span line file text |
+  pairs do: [:p |
+    out nextPutAll: ([| meth home cls name span line file text rec |
+    rec := WriteStream on: Unicode7 new.
     meth := p at: 1.
     home := [meth homeMethod] on: Error do: [:e | meth].
     cls := home inClass.
@@ -71,15 +98,15 @@ both isNil ifFalse: [
     (span notNil and: [span size >= 1 and: [line notNil and: [(span at: 1) ~= line]]])
       ifTrue: [span := nil].
     file := [BaseException ___liveFrameFilenameFor___: home] on: Error do: [:e | '<grail>'].
-    out nextPutAll: name; nextPut: field;
+    rec nextPutAll: name; nextPut: field;
       print: (line ifNil: [0]); nextPut: field.
     (span notNil and: [span size >= 4])
-      ifTrue: [out print: ((span at: 2) ifNil: [0]); nextPut: field;
+      ifTrue: [rec print: ((span at: 2) ifNil: [0]); nextPut: field;
         print: ((span at: 3) ifNil: [0]); nextPut: field;
         print: ((span at: 4) ifNil: [0]); nextPut: field]
-      ifFalse: [out nextPutAll: '0'; nextPut: field; nextPutAll: '0'; nextPut: field;
+      ifFalse: [rec nextPutAll: '0'; nextPut: field; nextPutAll: '0'; nextPut: field;
         nextPutAll: '0'; nextPut: field].
-    out nextPutAll: file asString; nextPut: field.
+    rec nextPutAll: file asString; nextPut: field.
     text := (span notNil and: [span size >= 5 and: [(span at: 5) isString]])
       ifTrue: [span at: 5] ifFalse: [nil].
     (text isNil and: [line notNil and: [file asString = '<grail>']]) ifTrue: [
@@ -87,8 +114,11 @@ both isNil ifFalse: [
           detect: [:pos | pos size >= 5 and: [(pos at: 1) = line and: [(pos at: 5) isString]]]
           ifNone: [nil]) ifNotNil: [:pos | pos at: 5]]
         on: Error do: [:e | nil]].
-    text ifNotNil: [out nextPutAll: text].
+    text ifNotNil: [rec nextPutAll: text].
+    rec contents] on: Error do: [:e | e return: placeholder]).
+    ${extras?.perFrame ?? ''}
     out nextPut: record]].
+${extras?.after ?? ''}
 out contents encodeAsUTF8`;
 }
 
@@ -100,25 +130,35 @@ out contents encodeAsUTF8`;
  * their code, not in Grail's stub, so leading frames from that file go.
  */
 export function parsePythonStack(raw: string): PythonFrame[] {
-  const frames = raw
-    .split(RECORD)
-    .filter((record) => record.length > 0)
-    .map((record): PythonFrame => {
-      const [name, line, column, endLine, endColumn, file, lineText] = record.split(FIELD);
-      const int = (value: string | undefined): number => {
-        const parsed = Number.parseInt(value ?? '', 10);
-        return Number.isFinite(parsed) ? parsed : 0;
-      };
-      return {
-        name: name || '?',
-        line: int(line),
-        column: int(column),
-        endLine: int(endLine),
-        endColumn: int(endColumn),
-        file: file || '<grail>',
-        lineText: lineText ?? '',
-      };
-    });
+  return withoutBreakpointStub(
+    raw
+      .split(RECORD)
+      .filter((record) => record.length > 0)
+      .map(parseFrame),
+  );
+}
+
+/** One frame record. An eighth field, when there is one, is the frame's locals ref. */
+export function parseFrame(record: string): PythonFrame {
+  const [name, line, column, endLine, endColumn, file, lineText, locals] = record.split(FIELD);
+  const int = (value: string | undefined): number => {
+    const parsed = Number.parseInt(value ?? '', 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  return {
+    name: name || '?',
+    line: int(line),
+    column: int(column),
+    endLine: int(endLine),
+    endColumn: int(endColumn),
+    file: file || '<grail>',
+    lineText: lineText ?? '',
+    ...(locals === undefined ? {} : { locals: int(locals) }),
+  };
+}
+
+/** Drop the leading frames `breakpoint()` itself added (see `parsePythonStack`). */
+export function withoutBreakpointStub(frames: PythonFrame[]): PythonFrame[] {
   let first = 0;
   while (first < frames.length && isBreakpointStub(frames[first])) first++;
   return frames.slice(first);
@@ -126,6 +166,15 @@ export function parsePythonStack(raw: string): PythonFrame[] {
 
 function isBreakpointStub(frame: PythonFrame): boolean {
   return /[/\\]stdlib[/\\]pdb\.py$/.test(frame.file);
+}
+
+/**
+ * The first line of a frame's text, trimmed. A statement that spans lines — a
+ * call black wrapped over four — arrives whole, and one cell line can only
+ * ever hold its first.
+ */
+export function firstLineOf(lineText: string): string {
+  return lineText.split(/\r?\n/, 1)[0].trim();
 }
 
 /** Where a notebook cell's text is, for `locateCell`. */
@@ -142,8 +191,9 @@ export interface CellText {
  * Grail compiles each cell under the one filename `<grail>`, so the filename
  * cannot say which cell a function was defined in — but the frame carries
  * text from its line (Grail's span, often a slice of the line), and that text
- * sits at that line in exactly the cell that defined it. The running cell is checked first, since that is
- * where a breakpoint() usually is and it breaks any tie.
+ * sits at that line in exactly the cell that defined it — its first line, for
+ * a statement that spans several. The running cell is checked first, since
+ * that is where a breakpoint() usually is and it breaks any tie.
  */
 export function locateCell(
   frame: PythonFrame,
@@ -155,7 +205,7 @@ export function locateCell(
     const text = cell.lines[frame.line - 1];
     if (text === undefined) return false;
     // Without the line text to compare, only the running cell is a fair guess.
-    const wanted = frame.lineText.trim();
+    const wanted = firstLineOf(frame.lineText);
     if (!wanted) return cell === running;
     return text.includes(wanted);
   };

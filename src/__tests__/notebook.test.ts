@@ -267,6 +267,83 @@ describe('the notebook kernel', () => {
     expect(controller.executions.map((e) => e.success)).toEqual([false, true]);
   });
 
+  it('stops the queued cells when a cell could not run at all', async () => {
+    runPython.mockRejectedValueOnce(
+      new Error('The session was closed while paused at breakpoint().'),
+    );
+    const controller = newController();
+
+    await run(controller, [cell('breakpoint()'), cell('2'), cell('3')]);
+
+    // The next cell would log in afresh, without the state the first one had.
+    expect(runPython).toHaveBeenCalledTimes(1);
+    expect(controller.executions.map((e) => e.success)).toEqual([false]);
+  });
+
+  it('runs a second request for the same notebook only after the first has finished', async () => {
+    let finishFirst: (result: PyResult) => void = () => {};
+    runPython.mockImplementationOnce(
+      () => new Promise<PyResult>((resolve) => (finishFirst = resolve)),
+    );
+    const controller = newController();
+    const first = run(controller, [cell('breakpoint()')]);
+    await vi.waitFor(() => expect(runPython).toHaveBeenCalledTimes(1));
+
+    const second = run(controller, [cell('2')]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const callsWhileFirstRan = runPython.mock.calls.length;
+    finishFirst(py('1'));
+    await Promise.all([first, second]);
+
+    expect(callsWhileFirstRan).toBe(1);
+    expect(runPython.mock.calls.map(([source]) => source)).toEqual(['breakpoint()', '2']);
+  });
+
+  it('ends a run waiting behind another when the user interrupts', async () => {
+    isErrorResult.mockImplementation((result) => result.startsWith('Error: '));
+    let finishFirst: (result: PyResult) => void = () => {};
+    runPython.mockImplementationOnce(
+      () => new Promise<PyResult>((resolve) => (finishFirst = resolve)),
+    );
+    const controller = newController();
+    const first = run(controller, [cell('breakpoint()')]);
+    await vi.waitFor(() => expect(runPython).toHaveBeenCalledTimes(1));
+    const second = run(controller, [cell('2')]);
+
+    await controller.interruptHandler?.({ uri: { toString: () => 'file:///a.ipynb' } });
+    finishFirst(py('Error: KeyboardInterrupt - '));
+    await Promise.all([first, second]);
+
+    expect(runPython).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs no cell when the user interrupts while the database is still starting', async () => {
+    let started: (running: boolean) => void = () => {};
+    ensureRunning.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => (started = resolve)),
+    );
+    const controller = newController();
+    const running = run(controller, [cell('1'), cell('2')]);
+    await vi.waitFor(() => expect(ensureRunning).toHaveBeenCalled());
+
+    await controller.interruptHandler?.({ uri: { toString: () => 'file:///a.ipynb' } });
+    started(true);
+    await running;
+
+    expect(runPython).not.toHaveBeenCalled();
+  });
+
+  it('does not hold one notebook’s run behind another’s', async () => {
+    runPython.mockImplementationOnce(() => new Promise<PyResult>(() => {}));
+    const controller = newController();
+    void run(controller, [cell('breakpoint()', 'file:///a.ipynb')]);
+    await vi.waitFor(() => expect(runPython).toHaveBeenCalledTimes(1));
+
+    await run(controller, [cell('2', 'file:///b.ipynb')]);
+
+    expect(runPython).toHaveBeenCalledTimes(2);
+  });
+
   it('clears the previous run’s output as soon as a cell starts', async () => {
     const controller = newController();
     let atStart: unknown;

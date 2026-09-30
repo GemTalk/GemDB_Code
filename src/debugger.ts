@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { CellText, PythonFrame, locateCell, parsePythonStack, pythonStackQuery } from './haltStack';
+import { CellText, PythonFrame, firstLineOf, locateCell } from './haltStack';
 import { errorMessage, log } from './log';
 import {
   PAGE,
@@ -9,8 +9,8 @@ import {
   childrenQuery,
   clearRegistryQuery,
   parseChildren,
-  parseFrameRefs,
-  registerFramesQuery,
+  parsePausedStack,
+  pausedStackQuery,
 } from './pauseVariables';
 import { HaltAnswer, HaltRequest, setHaltHandler } from './session';
 
@@ -84,7 +84,7 @@ export interface Pause {
   /** The Locals and Globals of one frame, by its DAP id. */
   scopes(frameId: number): DapScope[];
   /** The children of one expandable row, `count` of them from `start`. */
-  variables(ref: number, start: number, count: number): DapVariable[];
+  variables(ref: number, start: number, count: number): Promise<DapVariable[]>;
   /** Settle the pause. Only the first call counts. */
   answer(choice: HaltAnswer): void;
 }
@@ -112,8 +112,9 @@ export function scopesFor(locals: number, globals: number): DapScope[] {
 }
 
 /**
- * A row for the Variables view. A list or set says how many items it has, so
- * VS Code pages it rather than asking for ten million rows at once.
+ * A row for the Variables view. A list or set — or a dict too big for one
+ * page — says how many items it has, so VS Code pages it rather than asking
+ * for ten million rows at once.
  */
 export function toDapVariable(v: PauseVariable): DapVariable {
   return {
@@ -180,7 +181,7 @@ function columnsOn(
       endColumn: utf16Offset(text, frame.endColumn) + 1,
     };
   }
-  const wanted = frame.lineText.trim();
+  const wanted = firstLineOf(frame.lineText);
   const at = wanted ? text.indexOf(wanted) : -1;
   if (at >= 0) return { column: at + 1, endColumn: at + wanted.length + 1 };
   const start = text.search(/\S/);
@@ -196,7 +197,7 @@ function columnsOn(
  * there by the cell's URI — VS Code opens a `vscode-notebook-cell:` path as
  * the cell itself — and labelled the way the cell is labelled on screen. A
  * frame with nowhere to go is kept, dimmed: its name is still worth reading
- * in the stack.
+ * in the stack. Each file is read once, however many frames are in it.
  */
 export function toDapFrames(
   frames: PythonFrame[],
@@ -204,6 +205,11 @@ export function toDapFrames(
   cells: CellText[],
   readLines: LineReader = () => undefined,
 ): DapFrame[] {
+  const files = new Map<string, string[] | undefined>();
+  const linesOf = (file: string): string[] | undefined => {
+    if (!files.has(file)) files.set(file, readLines(file));
+    return files.get(file);
+  };
   return frames.map((frame, index): DapFrame => {
     const id = index + 1;
     let source: DapFrame['source'];
@@ -217,7 +223,7 @@ export function toDapFrames(
       }
     } else if (frame.file) {
       source = { name: path.basename(frame.file), path: frame.file };
-      text = frame.line > 0 ? readLines(frame.file)?.[frame.line - 1] : undefined;
+      text = frame.line > 0 ? linesOf(frame.file)?.[frame.line - 1] : undefined;
     }
     const columns = source && frame.line > 0 ? columnsOn(text, frame) : undefined;
     return {
@@ -288,7 +294,10 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
         const id = String(request.arguments?.gemdbPause ?? '');
         this.pause = this.lookup(id);
         if (!this.pause) {
-          this.fail(request, 'Nothing is paused at breakpoint().', true);
+          // The pause ended — interrupted, its session closed — before VS Code
+          // got here. There is nothing to show and nothing gone wrong, so the
+          // session just ends, with no error for the user to dismiss.
+          this.respond(request);
           this.end();
           return;
         }
@@ -337,10 +346,18 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
       case 'variables': {
         const ref = Number(request.arguments?.variablesReference ?? 0);
         const start = Number(request.arguments?.start ?? 0);
+        // No count means "all". A row with more than a page reports its
+        // children as indexed, which VS Code asks for a page at a time, so
+        // capping here never hides a row.
         const count = Number(request.arguments?.count ?? 0) || PAGE;
-        this.respond(request, {
-          variables: this.pause?.variables(ref, start, Math.min(count, PAGE)) ?? [],
-        });
+        const pause = this.pause;
+        if (!pause) {
+          this.respond(request, { variables: [] });
+          return;
+        }
+        void pause
+          .variables(ref, start, Math.min(count, PAGE))
+          .then((variables) => this.respond(request, { variables }));
         return;
       }
       case 'continue':
@@ -480,56 +497,50 @@ function readFileLines(file: string): string[] | undefined {
   }
 }
 
-/** Read the paused stack. A failure costs the frames, never the pause. */
-function readFrames(request: HaltRequest): DapFrame[] {
-  try {
-    const frames = parsePythonStack(request.session.execute(pythonStackQuery(request.process)));
-    const { running, cells } = notebookCells(request.session.owner.key);
-    return toDapFrames(frames, running, cells, readFileLines);
-  } catch (e) {
-    log(`Could not read the stack at breakpoint(): ${errorMessage(e)}`);
-    return [];
-  }
+/** What the debugger shows of one pause: its frames and, by DAP frame id, their scopes. */
+interface PauseView {
+  frames: DapFrame[];
+  scopes: Map<number, DapScope[]>;
 }
 
 /**
- * Register each frame's locals, and the notebook's globals, for the Variables
- * view. Answers the scopes per DAP frame id. A failure costs the variables,
- * never the pause.
+ * Read the paused stack and register its variables, in one walk. A failure
+ * costs the frames and variables, never the pause.
  *
- * The walk here lists the frames `breakpoint()` itself added, which
- * `parsePythonStack` drops from the front; both walks are the same Grail walk,
- * so aligning from the innermost *user* frame means taking the last
- * `frameCount` entries.
+ * The notebook's globals are offered only under a frame a cell compiled
+ * (`<grail>`): a frame in an imported module has that module's globals, which
+ * Grail does not hand over here, and showing the notebook's under it would
+ * mislead.
  */
-function readScopes(request: HaltRequest, frameCount: number): Map<number, DapScope[]> {
-  const scopes = new Map<number, DapScope[]>();
+async function readPause(request: HaltRequest): Promise<PauseView> {
   try {
     const owner = request.session.owner;
-    const { locals, globals } = parseFrameRefs(
-      request.session.execute(
-        registerFramesQuery(request.process, owner.kind === 'notebook' ? owner.key : undefined),
+    const { frames, globals } = parsePausedStack(
+      await request.query(
+        pausedStackQuery(request.process, owner.kind === 'notebook' ? owner.key : undefined),
       ),
     );
-    const mine = locals.slice(Math.max(0, locals.length - frameCount));
-    mine.forEach((ref, index) => scopes.set(index + 1, scopesFor(ref, globals)));
+    const scopes = new Map<number, DapScope[]>();
+    frames.forEach((frame, index) =>
+      scopes.set(index + 1, scopesFor(frame.locals ?? 0, frame.file === '<grail>' ? globals : 0)),
+    );
+    const { running, cells } = notebookCells(owner.key);
+    return { frames: toDapFrames(frames, running, cells, readFileLines), scopes };
   } catch (e) {
-    log(`Could not read the variables at breakpoint(): ${errorMessage(e)}`);
+    log(`Could not read the stack at breakpoint(): ${errorMessage(e)}`);
+    return { frames: [], scopes: new Map() };
   }
-  return scopes;
 }
 
 /** The children of one registered object. A failure shows as no children, not an error. */
-function readChildren(
+async function readChildren(
   request: HaltRequest,
   ref: number,
   start: number,
   count: number,
-): DapVariable[] {
+): Promise<DapVariable[]> {
   try {
-    return parseChildren(request.session.execute(childrenQuery(ref, start, count))).map(
-      toDapVariable,
-    );
+    return parseChildren(await request.query(childrenQuery(ref, start, count))).map(toDapVariable);
   } catch (e) {
     log(`Could not read variable ${ref} at breakpoint(): ${errorMessage(e)}`);
     return [];
@@ -550,7 +561,8 @@ export function registerBreakpointDebugger(): vscode.Disposable {
   const factory = vscode.debug.registerDebugAdapterDescriptorFactory(DEBUG_TYPE, {
     createDebugAdapterDescriptor(session) {
       const id = String(session.configuration.gemdbPause ?? '');
-      sessionsByPause.set(id, session);
+      // A pause that already ended needs no session to stop later.
+      if (pauses.has(id)) sessionsByPause.set(id, session);
       return new vscode.DebugAdapterInlineImplementation(
         new PauseDebugAdapter((wanted) => pauses.get(wanted)),
       );
@@ -568,27 +580,25 @@ export function registerBreakpointDebugger(): vscode.Disposable {
           settled = true;
           pauses.delete(id);
           sessionsByPause.delete(id);
-          // Before resuming: the registry holds the pause's objects, and only
-          // the paused session can drop it. A closed session has nothing to drop.
+          // Queued before the evaluation resumes, which waits for it: the
+          // registry holds the pause's objects, and only the paused session
+          // can drop it. A closed session has nothing to drop.
           if (request.session.connected) {
-            try {
-              request.session.execute(clearRegistryQuery());
-            } catch (e) {
-              log(`Could not clear the variables of a pause: ${errorMessage(e)}`);
-            }
+            request
+              .query(clearRegistryQuery())
+              .catch((e: unknown) =>
+                log(`Could not clear the variables of a pause: ${errorMessage(e)}`),
+              );
           }
           log(`breakpoint() in ${label}: ${choice}`);
           resolve(choice);
         };
-        const frames = readFrames(request);
-        const scopes = readScopes(request, frames.length);
-        pauses.set(id, {
-          label,
-          frames,
-          scopes: (frameId) => scopes.get(frameId) ?? [],
-          variables: (ref, start, count) => readChildren(request, ref, start, count),
-          answer,
-        });
+        const couldNotOpen = (): void => {
+          void vscode.window.showErrorMessage(
+            'GemDB could not open the debugger at breakpoint(), so the run was stopped.',
+          );
+          answer('stop');
+        };
 
         // Interrupted or closed while paused: take the debugger down with it.
         request.onCancel(() => {
@@ -598,30 +608,36 @@ export function registerBreakpointDebugger(): vscode.Disposable {
         });
 
         log(`breakpoint() in ${label}: paused`);
-        vscode.debug
-          .startDebugging(
-            undefined,
-            {
-              type: DEBUG_TYPE,
-              request: 'launch',
-              name: `GemDB: ${label}`,
-              gemdbPause: id,
-            },
-            { suppressSaveBeforeStart: true },
-          )
-          .then(
-            (started) => {
-              if (started) return;
-              void vscode.window.showErrorMessage(
-                'GemDB could not open the debugger at breakpoint(), so the run was stopped.',
-              );
-              answer('stop');
-            },
-            (e: unknown) => {
-              log(`Could not start the debugger: ${errorMessage(e)}`);
-              answer('stop');
-            },
-          );
+        void readPause(request).then(({ frames, scopes }) => {
+          if (settled) return;
+          pauses.set(id, {
+            label,
+            frames,
+            scopes: (frameId) => scopes.get(frameId) ?? [],
+            variables: (ref, start, count) => readChildren(request, ref, start, count),
+            answer,
+          });
+          vscode.debug
+            .startDebugging(
+              undefined,
+              {
+                type: DEBUG_TYPE,
+                request: 'launch',
+                name: `GemDB: ${label}`,
+                gemdbPause: id,
+              },
+              { suppressSaveBeforeStart: true },
+            )
+            .then(
+              (started) => {
+                if (!started) couldNotOpen();
+              },
+              (e: unknown) => {
+                log(`Could not start the debugger: ${errorMessage(e)}`);
+                couldNotOpen();
+              },
+            );
+        });
       }),
   );
 

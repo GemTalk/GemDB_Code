@@ -5,6 +5,7 @@ import {
   __debugStartResult,
   __debugStarts,
   DebugAdapterInlineImplementation,
+  window,
 } from '../__mocks__/vscode';
 import type { HaltAnswer, HaltHandler, HaltRequest } from '../session';
 
@@ -22,7 +23,7 @@ vi.mock('../session', () => ({
 }));
 
 const { locateCell, parsePythonStack } = await import('../haltStack');
-const { parseChildren, parseFrameRefs } = await import('../pauseVariables');
+const { clearRegistryQuery, parseChildren, parsePausedStack } = await import('../pauseVariables');
 const { PauseDebugAdapter, registerBreakpointDebugger, scopesFor, toDapFrames, toDapVariable } =
   await import('../debugger');
 
@@ -30,12 +31,18 @@ const F = '\u001f';
 const R = '\u001e';
 const row = (...fields: Array<string | number>): string => fields.join(F) + R;
 
-describe('parsePythonStack', () => {
+/** Let the handler's queries and VS Code's promises run. */
+const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+describe('reading the paused stack', () => {
   it('reads one frame per record, innermost first', () => {
     const raw =
       row('K.find', 4, 12, 4, 24, '<grail>', '            breakpoint()') +
       row('<module>', 12, 0, 12, 7, '<grail>', 'outer()');
-    expect(parsePythonStack(raw)).toEqual([
+
+    const frames = parsePythonStack(raw);
+
+    expect(frames).toEqual([
       {
         name: 'K.find',
         line: 4,
@@ -68,11 +75,16 @@ describe('parsePythonStack', () => {
         '/root/grail/src/python/stdlib/pdb.py',
         'sys.breakpoint()',
       ) + row('go', 5, 0, 5, 9, '<grail>', 'x()');
-    expect(parsePythonStack(raw).map((f) => f.name)).toEqual(['go']);
+
+    const frames = parsePythonStack(raw);
+
+    expect(frames.map((f) => f.name)).toEqual(['go']);
   });
 
   it('keeps a frame Grail could not place, with zeros rather than NaN', () => {
-    expect(parsePythonStack(row('helper', '', '', '', '', '/m.py', ''))).toEqual([
+    const frames = parsePythonStack(row('helper', '', '', '', '', '/m.py', ''));
+
+    expect(frames).toEqual([
       { name: 'helper', line: 0, column: 0, endLine: 0, endColumn: 0, file: '/m.py', lineText: '' },
     ]);
   });
@@ -80,9 +92,29 @@ describe('parsePythonStack', () => {
   it('answers no frames for an empty stack', () => {
     expect(parsePythonStack('')).toEqual([]);
   });
+
+  it('keeps each frame’s locals with that frame when the stub frame is dropped', () => {
+    const raw =
+      row('pdb.set_trace', 32, 0, 0, 0, '/g/stdlib/pdb.py', 'x', 1) +
+      row('go', 5, 0, 0, 0, '<grail>', 'x()', 2) +
+      row('<module>', 7, 0, 0, 0, '<grail>', 'go()', 0) +
+      `9${R}`;
+
+    const { frames, globals } = parsePausedStack(raw);
+
+    expect(frames.map((f) => [f.name, f.locals])).toEqual([
+      ['go', 2],
+      ['<module>', 0],
+    ]);
+    expect(globals).toBe(9);
+  });
+
+  it('answers no frames and no globals for an empty walk', () => {
+    expect(parsePausedStack(`0${R}`)).toEqual({ frames: [], globals: 0 });
+  });
 });
 
-describe('locateCell', () => {
+describe('finding the cell a frame came from', () => {
   const frame = (line: number, lineText: string, file = '<grail>') =>
     ({ name: 'f', line, column: 0, endLine: line, endColumn: 1, file, lineText }) as const;
   const one = { uri: 'cell:1', lines: ['def f():', '    breakpoint()'] };
@@ -98,6 +130,7 @@ describe('locateCell', () => {
 
   it('prefers the running cell when two cells hold the same line', () => {
     const copy = { uri: 'cell:3', lines: ['x = 1', 'f()'] };
+
     expect(locateCell(frame(2, 'f()'), copy, [two, copy])).toBe('cell:3');
   });
 
@@ -110,9 +143,17 @@ describe('locateCell', () => {
     expect(locateCell(frame(1, 'x = 1', '/m.py'), two, [two])).toBeUndefined();
     expect(locateCell(frame(0, 'x = 1'), two, [two])).toBeUndefined();
   });
+
+  it('finds a statement that spans several lines by its first', () => {
+    const wrapped = { uri: 'cell:w', lines: ['result = compute(', '    a,', '    b,', ')'] };
+
+    const uri = locateCell(frame(1, 'result = compute(\n    a,\n    b,\n)'), undefined, [wrapped]);
+
+    expect(uri).toBe('cell:w');
+  });
 });
 
-describe('toDapFrames', () => {
+describe('placing frames in the editor', () => {
   const cell = {
     uri: 'vscode-notebook-cell:/a.ipynb#c1',
     lines: ['def f():', '    breakpoint()'],
@@ -135,6 +176,7 @@ describe('toDapFrames', () => {
       cell,
       [cell],
     );
+
     expect(dap).toEqual({
       id: 1,
       name: 'f',
@@ -148,16 +190,19 @@ describe('toDapFrames', () => {
 
   it('highlights the statement inside a def, where Grail gives no span, from the frame’s text', () => {
     const [dap] = toDapFrames([frame({ lineText: 'breakpoint(' })], cell, [cell]);
+
     expect(dap).toMatchObject({ line: 2, column: 5, endLine: 2, endColumn: 16 });
   });
 
   it('falls back to the line from its first non-blank character', () => {
     const [dap] = toDapFrames([frame({ lineText: '' })], cell, [cell]);
+
     expect(dap).toMatchObject({ column: 5, endColumn: 17 });
   });
 
   it('counts columns in UTF-16 units, so an emoji before the breakpoint lands right', () => {
     const emoji = { uri: 'cell:e', lines: ['x = "😀"; breakpoint()'], label: 'Cell 1' };
+
     // Grail counts code points: breakpoint() starts at 9 and ends at 21; in UTF-16
     // the emoji is two units, so the offsets move by one.
     const [dap] = toDapFrames(
@@ -165,6 +210,7 @@ describe('toDapFrames', () => {
       emoji,
       [emoji],
     );
+
     expect(emoji.lines[0].slice(dap.column - 1, (dap.endColumn ?? 0) - 1)).toBe('breakpoint()');
   });
 
@@ -184,6 +230,7 @@ describe('toDapFrames', () => {
       [],
       () => ['', '', '', '', '        breakpoint()'],
     );
+
     expect(dap).toMatchObject({
       source: { name: 'probemod.py', path: '/w/probemod.py' },
       column: 9,
@@ -191,43 +238,54 @@ describe('toDapFrames', () => {
     });
   });
 
+  it('reads a file once however many frames are in it', () => {
+    const readLines = vi.fn(() => ['def f(n):', '    return f(n - 1)']);
+    const deep = Array.from({ length: 50 }, () => frame({ file: '/w/rec.py' }));
+
+    toDapFrames(deep, undefined, [], readLines);
+
+    expect(readLines).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps a frame with nowhere to show it, dimmed and without a range', () => {
     const [dap] = toDapFrames([frame({ name: 'g', line: 3, lineText: 'nowhere' })], cell, [cell]);
+
     expect(dap).toEqual({ id: 1, name: 'g', line: 3, column: 1, presentationHint: 'subtle' });
   });
 });
 
-describe('scopesFor and toDapVariable', () => {
+describe('scopes and variable rows', () => {
   it('offers only the scopes a frame has', () => {
     expect(scopesFor(0, 0)).toEqual([]);
     expect(scopesFor(0, 4).map((s) => s.name)).toEqual(['Globals']);
   });
 
   it('tells VS Code how many items a list has, so it pages them', () => {
-    expect(
-      toDapVariable({
-        name: 'rows',
-        value: '[...]',
-        type: 'list',
-        ref: 7,
-        indexed: 10_000,
-        named: 0,
-      }),
-    ).toEqual({
+    const rows = toDapVariable({
+      name: 'rows',
+      value: '[...]',
+      type: 'list',
+      ref: 7,
+      indexed: 10_000,
+      named: 0,
+    });
+    const leaf = toDapVariable({
+      name: 'n',
+      value: '3',
+      type: 'int',
+      ref: 0,
+      indexed: 0,
+      named: 0,
+    });
+
+    expect(rows).toEqual({
       name: 'rows',
       value: '[...]',
       type: 'list',
       variablesReference: 7,
       indexedVariables: 10_000,
     });
-    expect(
-      toDapVariable({ name: 'n', value: '3', type: 'int', ref: 0, indexed: 0, named: 0 }),
-    ).toEqual({
-      name: 'n',
-      value: '3',
-      type: 'int',
-      variablesReference: 0,
-    });
+    expect(leaf).toEqual({ name: 'n', value: '3', type: 'int', variablesReference: 0 });
   });
 });
 
@@ -241,9 +299,11 @@ function adapterFor(pause: { answer: (c: HaltAnswer) => void } | undefined) {
           frames: [{ id: 1, name: 'f', line: 2, column: 1 }],
           scopes: (frameId: number) => (frameId === 1 ? scopesFor(3, 9) : []),
           variables: (ref: number, start: number, count: number) =>
-            ref === 3
-              ? [{ name: `from ${start}, ${count}`, value: '1', variablesReference: 0 }]
-              : [],
+            Promise.resolve(
+              ref === 3
+                ? [{ name: `from ${start}, ${count}`, value: '1', variablesReference: 0 }]
+                : [],
+            ),
           ...pause,
         }
       : undefined,
@@ -258,14 +318,18 @@ function adapterFor(pause: { answer: (c: HaltAnswer) => void } | undefined) {
   return { adapter, sent, request, events, response };
 }
 
-describe('PauseDebugAdapter', () => {
+describe('the debug adapter', () => {
   it('reports stopped once attach and configurationDone have both arrived', () => {
     const { request, events } = adapterFor({ answer: () => {} });
+
     request('initialize');
-    expect(events()).toEqual(['initialized']);
+    const afterInitialize = events();
     request('attach', { gemdbPause: '1' });
-    expect(events()).toEqual(['initialized']);
+    const afterAttach = events();
     request('configurationDone');
+
+    expect(afterInitialize).toEqual(['initialized']);
+    expect(afterAttach).toEqual(['initialized']);
     expect(events()).toEqual(['initialized', 'stopped']);
   });
 
@@ -273,8 +337,10 @@ describe('PauseDebugAdapter', () => {
     const { request, response } = adapterFor({ answer: () => {} });
     request('initialize');
     request('attach', { gemdbPause: '1' });
+
     request('threads');
     request('stackTrace', { threadId: 1 });
+
     expect(response('threads')?.body).toEqual({ threads: [{ id: 1, name: 'a.ipynb' }] });
     expect(response('stackTrace')?.body).toEqual({
       stackFrames: [{ id: 1, name: 'f', line: 2, column: 1 }],
@@ -282,26 +348,36 @@ describe('PauseDebugAdapter', () => {
     });
   });
 
-  it('answers a frame’s Locals and Globals, and pages a row’s children', () => {
+  it('answers a frame’s Locals and Globals, and pages a row’s children', async () => {
     const { request, response } = adapterFor({ answer: () => {} });
     request('initialize');
     request('launch', { gemdbPause: '1' });
+
     request('scopes', { frameId: 1 });
+    request('variables', { variablesReference: 3, start: 200, count: 100 });
+    await settle();
+
     expect(response('scopes')?.body).toEqual({
       scopes: [
         { name: 'Locals', variablesReference: 3, presentationHint: 'locals', expensive: false },
         { name: 'Globals', variablesReference: 9, presentationHint: 'globals', expensive: true },
       ],
     });
-    request('variables', { variablesReference: 3, start: 200, count: 100 });
     expect(response('variables')?.body).toEqual({
       variables: [{ name: 'from 200, 100', value: '1', variablesReference: 0 }],
     });
-    // No count means "all", which is capped at one page.
+  });
+
+  it('reads one page when VS Code asks for all of a row’s children', async () => {
+    const { request, response } = adapterFor({ answer: () => {} });
+    request('initialize');
+    request('launch', { gemdbPause: '1' });
+
     request('variables', { variablesReference: 3 });
-    expect(
-      (response('variables')?.body as { variables: Array<{ name: string }> }).variables[0].name,
-    ).toBe('from 0, 500');
+    await settle();
+
+    const { variables } = response('variables')?.body as { variables: Array<{ name: string }> };
+    expect(variables[0].name).toBe('from 0, 500');
   });
 
   it('resumes the evaluation on Continue and ends the session', () => {
@@ -309,11 +385,13 @@ describe('PauseDebugAdapter', () => {
     const { request, events, adapter } = adapterFor({ answer });
     request('initialize');
     request('attach', { gemdbPause: '1' });
+
     request('continue', { threadId: 1 });
-    expect(answer).toHaveBeenCalledWith('continue');
-    expect(events()).toContain('terminated');
     adapter.dispose(); // VS Code disposes after terminated; that must not re-answer
+
+    expect(answer).toHaveBeenCalledWith('continue');
     expect(answer).toHaveBeenCalledTimes(1);
+    expect(events()).toContain('terminated');
   });
 
   it('stops the evaluation on Stop', () => {
@@ -321,8 +399,10 @@ describe('PauseDebugAdapter', () => {
     const { request } = adapterFor({ answer });
     request('initialize');
     request('attach', { gemdbPause: '1' });
+
     request('terminate');
     request('disconnect');
+
     expect(answer).toHaveBeenCalledWith('stop');
     expect(answer).toHaveBeenCalledTimes(1);
   });
@@ -332,7 +412,9 @@ describe('PauseDebugAdapter', () => {
     const { request, adapter } = adapterFor({ answer });
     request('initialize');
     request('attach', { gemdbPause: '1' });
+
     adapter.dispose();
+
     expect(answer).toHaveBeenCalledWith('stop');
   });
 
@@ -341,9 +423,13 @@ describe('PauseDebugAdapter', () => {
     const { request, response } = adapterFor({ answer });
     request('initialize');
     request('attach', { gemdbPause: '1' });
-    for (const step of ['next', 'stepIn', 'stepOut']) {
+
+    const replies = ['next', 'stepIn', 'stepOut'].map((step) => {
       request(step, { threadId: 1 });
-      const reply = response(step);
+      return response(step);
+    });
+
+    for (const reply of replies) {
       expect(reply?.success).toBe(false);
       expect((reply?.body as { error: { showUser: boolean } }).error.showUser).toBe(true);
       expect(reply?.message).toMatch(/Stepping isn't supported yet/);
@@ -354,7 +440,9 @@ describe('PauseDebugAdapter', () => {
   it('reports red-dot breakpoints as unverified rather than pretending', () => {
     const { request, response } = adapterFor({ answer: () => {} });
     request('initialize');
+
     request('setBreakpoints', { breakpoints: [{ line: 3 }] });
+
     expect(response('setBreakpoints')?.body).toEqual({
       breakpoints: [
         { verified: false, line: 3, message: 'GemDB stops only at breakpoint() for now.' },
@@ -365,8 +453,10 @@ describe('PauseDebugAdapter', () => {
   it('accepts a launch request the way it accepts attach', () => {
     const { request, response, events } = adapterFor({ answer: () => {} });
     request('initialize');
+
     request('launch', { gemdbPause: '1' });
     request('configurationDone');
+
     expect(response('launch')?.success).toBe(true);
     expect(events()).toContain('stopped');
   });
@@ -375,42 +465,60 @@ describe('PauseDebugAdapter', () => {
     const answer = vi.fn();
     const { request, response } = adapterFor({ answer });
     request('initialize');
+    request('launch', { gemdbPause: '1' });
+
+    request('restart');
+
     expect(
       (response('initialize')?.body as { supportsRestartRequest: boolean }).supportsRestartRequest,
     ).toBe(true);
-    request('launch', { gemdbPause: '1' });
-    request('restart');
     expect(response('restart')?.success).toBe(false);
     expect(response('restart')?.message).toMatch(/Restarting isn't supported yet/);
     expect(answer).not.toHaveBeenCalled();
   });
 
-  it('refuses to attach to a pause that is not there, and ends', () => {
+  it('ends quietly when the pause it was started for has already ended', () => {
     const { request, response, events } = adapterFor(undefined);
     request('initialize');
+
     request('attach', { gemdbPause: 'gone' });
-    expect(response('attach')?.success).toBe(false);
+
+    // Nothing went wrong, so nothing is put in front of the user.
+    expect(response('attach')?.success).toBe(true);
     expect(events()).toContain('terminated');
+    expect(events()).not.toContain('stopped');
   });
 });
 
-describe('registerBreakpointDebugger', () => {
+describe('opening the debugger at a breakpoint()', () => {
   beforeEach(() => {
     __debugStarts.length = 0;
     __debugStartOptions.length = 0;
     __debugStartResult.value = true;
   });
 
-  function haltRequest(): HaltRequest & { cancel: () => void } {
+  /** A paused `<grail>` frame with locals at 3 over a module frame with locals at 4; globals at 9. */
+  const PAUSED =
+    row('go', 5, 0, 5, 4, '<grail>', 'go()', 3) +
+    row('helper', 2, 0, 0, 0, '/w/mod.py', 'return f()', 4) +
+    `9${R}`;
+
+  function haltRequest(): HaltRequest & { cancel: () => void; queries: string[] } {
     const cancels: Array<() => void> = [];
+    const queries: string[] = [];
     return {
       session: {
         owner: { key: 'file:///a.ipynb', kind: 'notebook', label: 'a.ipynb' },
-        execute: () => row('go', 5, 0, 5, 4, '<grail>', 'go()'),
+        connected: true,
       } as unknown as HaltRequest['session'],
       process: 42n,
+      query: (code) => {
+        queries.push(code);
+        return Promise.resolve(code.includes('Suspended') ? PAUSED : '');
+      },
       onCancel: (callback) => cancels.push(callback),
       cancel: () => cancels.forEach((c) => c()),
+      queries,
     };
   }
 
@@ -425,76 +533,134 @@ describe('registerBreakpointDebugger', () => {
     >;
   }
 
+  /** Send one request to an adapter and answer what it sent back for that command. */
+  function ask(
+    adapter: InstanceType<typeof PauseDebugAdapter>,
+    command: string,
+    args: Record<string, unknown> = {},
+  ): Array<Record<string, unknown>> {
+    const sent: Array<Record<string, unknown>> = [];
+    const listener = adapter.onDidSendMessage((m) => sent.push(m as Record<string, unknown>));
+    adapter.handleMessage({ seq: 1, type: 'request', command, arguments: args });
+    listener.dispose();
+    return sent;
+  }
+
+  const pauseIdOf = (index: number): string =>
+    (__debugStarts[index] as { gemdbPause: string }).gemdbPause;
+
   it('starts a debug session for a halt and settles it from the adapter', async () => {
     const registration = registerBreakpointDebugger();
     const answered = installed!(haltRequest());
-    await Promise.resolve();
+    await settle();
+    const adapter = adapterForLastStart();
+
+    ask(adapter, 'initialize');
+    ask(adapter, 'attach', { gemdbPause: pauseIdOf(0) });
+    const [stack] = ask(adapter, 'stackTrace');
+    ask(adapter, 'continue');
+
     // Launch, not attach: an attach session shows Disconnect where Stop belongs.
     expect(__debugStarts).toEqual([
       expect.objectContaining({ type: 'gemdb', request: 'launch', name: 'GemDB: a.ipynb' }),
     ]);
     // Reaching a breakpoint() must not save the notebook.
     expect(__debugStartOptions).toEqual([{ suppressSaveBeforeStart: true }]);
-    const adapter = adapterForLastStart();
-    let seq = 1;
-    const sent: Array<Record<string, unknown>> = [];
-    adapter.onDidSendMessage((m) => sent.push(m as Record<string, unknown>));
-    const id = (__debugStarts[0] as { gemdbPause: string }).gemdbPause;
-    adapter.handleMessage({ seq: seq++, type: 'request', command: 'initialize' });
-    adapter.handleMessage({
-      seq: seq++,
-      type: 'request',
-      command: 'attach',
-      arguments: { gemdbPause: id },
-    });
-    adapter.handleMessage({ seq: seq++, type: 'request', command: 'stackTrace', arguments: {} });
-    const stack = sent.find((m) => m.command === 'stackTrace')?.body as {
-      stackFrames: Array<{ name: string }>;
-    };
-    expect(stack.stackFrames.map((f) => f.name)).toEqual(['go']);
-    adapter.handleMessage({ seq: seq++, type: 'request', command: 'continue', arguments: {} });
+    const { stackFrames } = stack.body as { stackFrames: Array<{ name: string }> };
+    expect(stackFrames.map((f) => f.name)).toEqual(['go', 'helper']);
     await expect(answered).resolves.toBe('continue');
+    registration.dispose();
+  });
+
+  it('offers the notebook’s globals under a cell’s frame, not under an imported module’s', async () => {
+    const registration = registerBreakpointDebugger();
+    const answered = installed!(haltRequest());
+    await settle();
+    const adapter = adapterForLastStart();
+    ask(adapter, 'launch', { gemdbPause: pauseIdOf(0) });
+
+    const [cellScopes] = ask(adapter, 'scopes', { frameId: 1 });
+    const [moduleScopes] = ask(adapter, 'scopes', { frameId: 2 });
+
+    const names = (reply: Record<string, unknown>) =>
+      (reply.body as { scopes: Array<{ name: string; variablesReference: number }> }).scopes.map(
+        (s) => [s.name, s.variablesReference],
+      );
+    expect(names(cellScopes)).toEqual([
+      ['Locals', 3],
+      ['Globals', 9],
+    ]);
+    expect(names(moduleScopes)).toEqual([['Locals', 4]]);
+    registration.dispose();
+    await expect(answered).resolves.toBe('stop');
+  });
+
+  it('drops the pause’s registry before the evaluation resumes', async () => {
+    const registration = registerBreakpointDebugger();
+    const request = haltRequest();
+    const answered = installed!(request);
+    await settle();
+    const adapter = adapterForLastStart();
+    ask(adapter, 'launch', { gemdbPause: pauseIdOf(0) });
+    let queriesWhenAnswered: string[] = [];
+    void answered.then(() => (queriesWhenAnswered = [...request.queries]));
+
+    ask(adapter, 'continue');
+    await answered;
+
+    // The session runs queries in order and resumes only after the last, so
+    // the clear being queued before the answer is what keeps the registry
+    // from outliving the pause.
+    expect(queriesWhenAnswered[queriesWhenAnswered.length - 1]).toBe(clearRegistryQuery());
     registration.dispose();
   });
 
   it('keeps two pauses in one run apart: a late disconnect from the first settles nothing', async () => {
     const registration = registerBreakpointDebugger();
     const first = installed!(haltRequest());
-    await Promise.resolve();
+    await settle();
     const firstAdapter = adapterForLastStart();
-    const firstId = (__debugStarts[0] as { gemdbPause: string }).gemdbPause;
-    firstAdapter.handleMessage({
-      seq: 1,
-      type: 'request',
-      command: 'launch',
-      arguments: { gemdbPause: firstId },
-    });
-    firstAdapter.handleMessage({ seq: 2, type: 'request', command: 'continue', arguments: {} });
+    ask(firstAdapter, 'launch', { gemdbPause: pauseIdOf(0) });
+    ask(firstAdapter, 'continue');
     await expect(first).resolves.toBe('continue');
-
     const second = installed!(haltRequest());
-    await Promise.resolve();
-    const secondId = (__debugStarts[1] as { gemdbPause: string }).gemdbPause;
-    expect(secondId).not.toBe(firstId);
+    await settle();
+
     // VS Code tears the first session down after it ended; that must not reach the second pause.
-    firstAdapter.handleMessage({ seq: 3, type: 'request', command: 'disconnect', arguments: {} });
+    ask(firstAdapter, 'disconnect');
     firstAdapter.dispose();
     const secondAdapter = adapterForLastStart();
-    secondAdapter.handleMessage({
-      seq: 1,
-      type: 'request',
-      command: 'launch',
-      arguments: { gemdbPause: secondId },
-    });
-    secondAdapter.handleMessage({ seq: 2, type: 'request', command: 'continue', arguments: {} });
+    ask(secondAdapter, 'launch', { gemdbPause: pauseIdOf(1) });
+    ask(secondAdapter, 'continue');
+
+    expect(pauseIdOf(1)).not.toBe(pauseIdOf(0));
     await expect(second).resolves.toBe('continue');
     registration.dispose();
   });
 
-  it('stops the run when the debugger cannot start', async () => {
+  it('stops the run, saying why, when the debugger cannot start', async () => {
     __debugStartResult.value = false;
+    const shown = vi.spyOn(window, 'showErrorMessage');
     const registration = registerBreakpointDebugger();
-    await expect(installed!(haltRequest())).resolves.toBe('stop');
+
+    const answered = installed!(haltRequest());
+
+    await expect(answered).resolves.toBe('stop');
+    expect(shown).toHaveBeenCalledWith(expect.stringMatching(/could not open the debugger/));
+    shown.mockRestore();
+    registration.dispose();
+  });
+
+  it('stops the run, saying why, when starting the debugger fails outright', async () => {
+    __debugStartResult.value = new Error('no debug service');
+    const shown = vi.spyOn(window, 'showErrorMessage');
+    const registration = registerBreakpointDebugger();
+
+    const answered = installed!(haltRequest());
+
+    await expect(answered).resolves.toBe('stop');
+    expect(shown).toHaveBeenCalledWith(expect.stringMatching(/could not open the debugger/));
+    shown.mockRestore();
     registration.dispose();
   });
 
@@ -502,30 +668,45 @@ describe('registerBreakpointDebugger', () => {
     const registration = registerBreakpointDebugger();
     const request = haltRequest();
     const answered = installed!(request);
+
     request.cancel();
+
     await expect(answered).resolves.toBe('stop');
+    registration.dispose();
+  });
+
+  it('opens no debugger for a pause cancelled while its stack was being read', async () => {
+    const registration = registerBreakpointDebugger();
+    const request = haltRequest();
+    const answered = installed!(request);
+
+    request.cancel();
+    await settle();
+
+    await expect(answered).resolves.toBe('stop');
+    expect(__debugStarts).toEqual([]);
     registration.dispose();
   });
 
   it('uninstalls its handler and stops anything still paused when disposed', async () => {
     const registration = registerBreakpointDebugger();
     const answered = installed!(haltRequest());
+    await settle();
+
     registration.dispose();
+
     await expect(answered).resolves.toBe('stop');
     expect(installed).toBeUndefined();
   });
 });
 
 describe('the variables queries’ answers', () => {
-  it('reads each frame’s locals ref and, last, the globals ref', () => {
-    expect(parseFrameRefs(`1${R}2${R}0${R}3${R}`)).toEqual({ locals: [1, 2, 0], globals: 3 });
-    expect(parseFrameRefs(`0${R}`)).toEqual({ locals: [], globals: 0 });
-  });
-
   it('reads one row per child, with its counts', () => {
-    expect(
-      parseChildren(row('tags', "{'a', 'b'}", 'set', 8, 2, 0) + row('n', '2', 'int', 0, 0, 0)),
-    ).toEqual([
+    const raw = row('tags', "{'a', 'b'}", 'set', 8, 2, 0) + row('n', '2', 'int', 0, 0, 0);
+
+    const rows = parseChildren(raw);
+
+    expect(rows).toEqual([
       { name: 'tags', value: "{'a', 'b'}", type: 'set', ref: 8, indexed: 2, named: 0 },
       { name: 'n', value: '2', type: 'int', ref: 0, indexed: 0, named: 0 },
     ]);

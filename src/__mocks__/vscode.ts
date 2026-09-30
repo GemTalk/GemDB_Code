@@ -282,8 +282,8 @@ export interface FakeController {
 
 export const NotebookCellKind = { Markup: 1, Code: 2 } as const;
 
-/** What `debug.startDebugging` answers; a test sets it to false to refuse. */
-export const __debugStartResult = { value: true };
+/** What `debug.startDebugging` answers; a test sets it to false to refuse, or to an Error to reject. */
+export const __debugStartResult: { value: boolean | Error } = { value: true };
 
 /** What `debug.startDebugging` was asked to start, for a test to inspect. */
 export const __debugStarts: unknown[] = [];
@@ -305,7 +305,8 @@ export const debug = {
   ): Promise<boolean> => {
     __debugStarts.push(configuration);
     __debugStartOptions.push(options);
-    return Promise.resolve(__debugStartResult.value);
+    const result = __debugStartResult.value;
+    return result instanceof Error ? Promise.reject(result) : Promise.resolve(result);
   },
   stopDebugging: (): Promise<void> => Promise.resolve(),
 };

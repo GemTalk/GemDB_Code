@@ -4,10 +4,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { stageGrail } from '../grail';
 import { PythonFrame, parsePythonStack, pythonStackQuery } from '../haltStack';
 import {
+  PauseVariable,
   childrenQuery,
   parseChildren,
-  parseFrameRefs,
-  registerFramesQuery,
+  parsePausedStack,
+  pausedStackQuery,
 } from '../pauseVariables';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
 import { runPython } from '../pythonQueries';
@@ -35,6 +36,13 @@ const ext = process.cwd();
 const haveExtent = haveTestExtent();
 
 const NB: SessionOwner = { key: 'file:///bp.ipynb', kind: 'notebook', label: 'bp.ipynb' };
+
+/** A notebook of its own, for a test whose globals must not meet another test's. */
+const notebook = (name: string): SessionOwner => ({
+  key: `file:///${name}.ipynb`,
+  kind: 'notebook',
+  label: `${name}.ipynb`,
+});
 
 /** A cell whose breakpoint() sits three calls deep in a method. */
 const CELL = [
@@ -89,7 +97,7 @@ function canMakeFixture(): boolean {
 function answering(choice: HaltAnswer, printed: string[]) {
   const seen: { frames: PythonFrame[]; printedAtHalt: string } = { frames: [], printedAtHalt: '' };
   setHaltHandler(async (request: HaltRequest) => {
-    seen.frames = parsePythonStack(request.session.execute(pythonStackQuery(request.process)));
+    seen.frames = parsePythonStack(await request.query(pythonStackQuery(request.process)));
     seen.printedAtHalt = printed.join('');
     return choice;
   });
@@ -141,28 +149,26 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
 
   it('shows each frame’s locals and the notebook’s globals, expandable, without disturbing the cell', async () => {
     const seen: Record<string, ReturnType<typeof parseChildren>> = {};
+    let frameNames: string[] = [];
     setHaltHandler(async (request) => {
-      const run = (q: string) => request.session.execute(q);
-      const refs = parseFrameRefs(run(registerFramesQuery(request.process, NB.key)));
-      // Grail's own pdb.set_trace frame comes first, then go, then <module>.
-      const goRef = refs.locals[refs.locals.length - 2];
-      seen.go = parseChildren(run(childrenQuery(goRef, 0, 500)));
+      const children = async (ref: number, start = 0, count = 500) =>
+        parseChildren(await request.query(childrenQuery(ref, start, count)));
+      const { frames, globals } = parsePausedStack(
+        await request.query(pausedStackQuery(request.process, NB.key)),
+      );
+      frameNames = frames.map((f) => f.name);
+      seen.go = await children(frames.find((f) => f.name === 'go')!.locals!);
       const byName = (name: string) => seen.go.find((v) => v.name === name)!;
-      seen.p = parseChildren(run(childrenQuery(byName('p').ref, 0, 500)));
-      seen.local = parseChildren(run(childrenQuery(byName('local').ref, 0, 500)));
-      seen.tags = parseChildren(
-        run(childrenQuery(seen.p.find((v) => v.name === 'tags')!.ref, 0, 500)),
-      );
-      seen.globals = parseChildren(run(childrenQuery(refs.globals, 0, 500)));
+      seen.p = await children(byName('p').ref);
+      seen.local = await children(byName('local').ref);
+      seen.tags = await children(seen.p.find((v) => v.name === 'tags')!.ref);
+      seen.globals = await children(globals);
       const big = seen.globals.find((v) => v.name === 'big')!;
-      seen.bigPage = parseChildren(run(childrenQuery(big.ref, 998, 50)));
-      seen.data = parseChildren(
-        run(childrenQuery(seen.globals.find((v) => v.name === 'data')!.ref, 0, 500)),
-      );
-      const group = (name: string) =>
-        parseChildren(run(childrenQuery(seen.globals.find((v) => v.name === name)!.ref, 0, 500)));
-      seen.classes = group('class variables');
-      seen.functions = group('function variables');
+      seen.bigPage = await children(big.ref, 998, 50);
+      seen.data = await children(seen.globals.find((v) => v.name === 'data')!.ref);
+      const group = (name: string) => children(seen.globals.find((v) => v.name === name)!.ref);
+      seen.classes = await group('class variables');
+      seen.functions = await group('function variables');
       return 'continue';
     });
     const printed: string[] = [];
@@ -189,6 +195,8 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
       (chunk) => printed.push(chunk),
     );
 
+    // One walk gives the frames and their locals: Grail's stub is gone, go is first.
+    expect(frameNames).toEqual(['go', '<module>']);
     expect(seen.go.map((v) => [v.name, v.value, v.type])).toEqual(
       expect.arrayContaining([
         ['n', '2', 'int'],
@@ -213,23 +221,140 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
     expect(dataNames).toEqual([...dataNames].sort());
     expect(seen.classes.map((v) => v.name)).toContain('P');
     expect(seen.functions.map((v) => v.name)).toContain('go');
-    // A big list says how big it is and hands over a page on request.
-    expect(seen.globals.find((v) => v.name === 'big')).toMatchObject({ indexed: 1000, named: 0 });
+    // A big list says how big it is, in place of a repr of every item, and
+    // hands over a page on request.
+    expect(seen.globals.find((v) => v.name === 'big')).toMatchObject({
+      value: 'list with 1000 items',
+      indexed: 1000,
+      named: 0,
+    });
     expect(seen.bigPage.map((v) => [v.name, v.value])).toEqual([
       ['[998]', '998'],
       ['[999]', '999'],
     ]);
+    // A dict entry is named by its key's repr, so a str key reads as one.
     expect(seen.data.map((v) => [v.name, v.value])).toEqual(
       expect.arrayContaining([
-        ['k', "[1, 2.5, 's']"],
+        ["'k'", "[1, 2.5, 's']"],
         ['3', 'None'],
       ]),
     );
     // An ordinary dict is not a scope: a function in it stays an ordinary entry.
-    expect(seen.data.map((v) => v.name)).toContain('f');
+    expect(seen.data.map((v) => v.name)).toContain("'f'");
     // __repr__ printed while the Variables were read, and none of it reached the cell.
     expect(printed.join('')).toBe('after\n');
     expect(result.value).toBe('2');
+  });
+
+  it('reads dicts whole: every entry, a page at a time when big, keys told apart', async () => {
+    const seen: Record<string, PauseVariable[]> = {};
+    const nb = notebook('bp-dicts');
+    setHaltHandler(async (request) => {
+      const children = async (ref: number, start = 0, count = 500) =>
+        parseChildren(await request.query(childrenQuery(ref, start, count)));
+      const { globals } = parsePausedStack(
+        await request.query(pausedStackQuery(request.process, nb.key)),
+      );
+      seen.globals = await children(globals);
+      const ref = (name: string) => seen.globals.find((v) => v.name === name)!.ref;
+      seen.huge = await children(ref('huge'), 1500, 100);
+      seen.meta = await children(ref('meta'));
+      seen.keys = await children(ref('keys'));
+      return 'continue';
+    });
+
+    await runPython(
+      [
+        'huge = {i: i * 2 for i in range(2000)}',
+        'meta = {"__version__": "1.0", "name": "x"}',
+        'keys = {1: "int", "1": "str", "a\x1fb": "odd"}',
+        'breakpoint()',
+      ].join('\n'),
+      nb,
+    );
+
+    // More entries than one page: reported as indexed, so VS Code pages them.
+    const huge = seen.globals.find((v) => v.name === 'huge')!;
+    expect(huge).toMatchObject({ indexed: 2000, named: 0 });
+    expect(seen.huge).toHaveLength(100);
+    expect(seen.huge[0]).toMatchObject({ name: '1500', value: '3000' });
+    // Dunder keys are hidden only in a namespace; in a dict they are data.
+    expect(seen.globals.find((v) => v.name === 'meta')).toMatchObject({ named: 2 });
+    expect(seen.meta.map((v) => v.name).sort()).toEqual(["'__version__'", "'name'"]);
+    // 1 and '1' differ, and a separator character in a key shifts nothing.
+    expect(seen.keys.map((v) => [v.name, v.value])).toEqual(
+      expect.arrayContaining([
+        ['1', "'int'"],
+        ["'1'", "'str'"],
+        ["'a\\x1fb'", "'odd'"],
+      ]),
+    );
+  });
+
+  it('gives up on a __repr__ that never returns, keeping the other rows and the pause', async () => {
+    let rows: PauseVariable[] = [];
+    let took = 0;
+    const nb = notebook('bp-spin');
+    setHaltHandler(async (request) => {
+      const { globals } = parsePausedStack(
+        await request.query(pausedStackQuery(request.process, nb.key)),
+      );
+      const started = Date.now();
+      rows = parseChildren(await request.query(childrenQuery(globals, 0, 500)));
+      took = Date.now() - started;
+      return 'continue';
+    });
+
+    const result = await runPython(
+      [
+        'class Spin:',
+        '    def __repr__(self):',
+        '        while True:',
+        '            pass',
+        'a_spin = Spin()',
+        'b_after = 7',
+        'breakpoint()',
+        '"went on"',
+      ].join('\n'),
+      nb,
+    );
+
+    expect(rows.find((v) => v.name === 'a_spin')?.value).toBe('<__repr__ took too long>');
+    expect(rows.find((v) => v.name === 'b_after')?.value).toBe('7');
+    expect(took).toBeLessThan(10_000);
+    expect(result.value).toBe("'went on'");
+  });
+
+  it('keeps the cell’s print() when a __repr__ read from the debugger reaches breakpoint()', async () => {
+    let failed = false;
+    const nb = notebook('bp-nested');
+    setHaltHandler(async (request) => {
+      const { globals } = parsePausedStack(
+        await request.query(pausedStackQuery(request.process, nb.key)),
+      );
+      await request.query(childrenQuery(globals, 0, 500)).catch(() => (failed = true));
+      return 'continue';
+    });
+    const printed: string[] = [];
+
+    const result = await runPython(
+      [
+        'class Nested:',
+        '    def __repr__(self):',
+        '        breakpoint()',
+        '        return "n"',
+        'n = Nested()',
+        'breakpoint()',
+        'print("still printing")',
+        '"done"',
+      ].join('\n'),
+      nb,
+      (chunk) => printed.push(chunk),
+    );
+
+    expect(failed).toBe(true);
+    expect(printed.join('')).toBe('still printing\n');
+    expect(result.value).toBe("'done'");
   });
 
   it('ends the cell on Stop, and the session is still usable', async () => {
