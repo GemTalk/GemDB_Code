@@ -44,6 +44,11 @@ export interface PyResult {
   output: string;
   /** The result's `__repr__`, empty for `None`, or an `Error: …` line. */
   value: string;
+  /**
+   * The user ended the run — Stop at a breakpoint(), or an interrupt — rather
+   * than the code failing. A notebook stops its queue of cells on this.
+   */
+  stopped?: boolean;
 }
 
 /**
@@ -68,11 +73,11 @@ async function framed(evaluation: Promise<string>): Promise<PyResult> {
     return splitFramed(await evaluation);
   } catch (e) {
     if (e instanceof ExecutionInterrupted) {
-      return { output: '', value: 'Error: KeyboardInterrupt - ' };
+      return { output: '', value: 'Error: KeyboardInterrupt - ', stopped: true };
     }
     // Stop at a breakpoint(): the user ended the run from the debugger.
     if (e instanceof ExecutionStopped) {
-      return { output: '', value: `Error: ${e.message}` };
+      return { output: '', value: `Error: ${e.message}`, stopped: true };
     }
     throw e;
   }

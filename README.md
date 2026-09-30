@@ -382,8 +382,8 @@ database)**.
 - `breakpoint()` pauses the cell and opens VS Code's debugger on it, with no setup: the Call Stack
   shows the Python frames, the paused line is highlighted, and Variables shows each frame's locals
   and the notebook's globals, expandable into attributes, items and entries, with classes and
-  functions folded into their own rows. **Continue** resumes
-  the cell where it paused; **Stop** ends it. Stepping and red-dot breakpoints are not supported
+  functions folded into their own rows. **Continue** resumes the cell where it paused; **Stop**
+  ends it, along with any cells queued after it. Stepping and red-dot breakpoints are not supported
   yet.
   In the GemDB Shell and in **Run Python File in GemDB**, `breakpoint()` prints where it was and
   the code carries on.

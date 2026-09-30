@@ -267,7 +267,7 @@ export interface FakeController {
   supportsExecutionOrder?: boolean;
   description?: string;
   executeHandler?: (cells: unknown[]) => unknown;
-  interruptHandler?: () => unknown;
+  interruptHandler?: (notebook: unknown) => unknown;
   /** Every execution this controller created, in the order it created them. */
   executions: FakeExecution[];
   createNotebookCellExecution(cell: unknown): {

@@ -28,6 +28,7 @@ const isErrorResult = vi.fn<(result: string) => boolean>();
 interface PyResult {
   output: string;
   value: string;
+  stopped?: boolean;
 }
 
 const py = (value: string, output = ''): PyResult => ({ output, value });
@@ -233,5 +234,47 @@ describe('the notebook kernel', () => {
     await run(controller, [cell('1'), cell('2')]);
 
     expect(controller.executions.map((e) => e.success)).toEqual([false, true]);
+  });
+
+  it('stops the queued cells when the user stopped the run at a breakpoint()', async () => {
+    isErrorResult.mockImplementation((result) => result.startsWith('Error: '));
+    runPython.mockResolvedValueOnce({
+      output: '',
+      value: 'Error: Stopped at breakpoint() in the debugger.',
+      stopped: true,
+    });
+    const controller = newController();
+    await run(controller, [cell('breakpoint()'), cell('2'), cell('3')]);
+
+    // Only the stopped cell ran; the two behind it never started.
+    expect(controller.executions.map((e) => e.success)).toEqual([false]);
+    expect(runPython).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops the queued cells when the user interrupts, and runs the next batch normally', async () => {
+    isErrorResult.mockImplementation((result) => result.startsWith('Error: '));
+    const controller = newController();
+    // The interrupt arrives while the first cell is running.
+    runPython.mockImplementationOnce(async () => {
+      await controller.interruptHandler?.({ uri: { toString: () => 'file:///a.ipynb' } });
+      return py('Error: Break - a Break occurred');
+    });
+    await run(controller, [cell('while True: pass'), cell('2')]);
+    expect(controller.executions).toHaveLength(1);
+
+    runPython.mockResolvedValueOnce(py('3'));
+    await run(controller, [cell('3')]);
+    expect(controller.executions.map((e) => e.success)).toEqual([false, true]);
+  });
+
+  it('clears the previous run’s output as soon as a cell starts', async () => {
+    const controller = newController();
+    let atStart: unknown;
+    runPython.mockImplementationOnce(async () => {
+      atStart = controller.executions[0].output;
+      return py('1');
+    });
+    await run(controller, [cell('1')]);
+    expect(atStart).toEqual([]);
   });
 });

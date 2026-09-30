@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   locals and the notebook's globals, and expands objects into their attributes, lists and sets into
   their items (a page at a time for big ones) and dicts into their entries. Classes, functions and
   modules are folded into their own rows, as in VS Code's Python debugger, so the data stands out. **Continue** resumes
-  the cell; **Stop** ends it. There is nothing to launch or configure. Stepping and red-dot
+  the cell; **Stop** ends it, and the cells queued after it (as does the cell's interrupt button)
+  do not start. There is nothing to launch or configure. Stepping and red-dot
   breakpoints are not supported yet, and the debugger says so when asked.
 
 ### Fixed
@@ -396,7 +397,7 @@ about topaz.
   between every ASCII letter, and anything above U+00FF truncated to one byte
   — so a `•` in an ASCII-art rabbit turned the whole drawing into binary.
   `input()` had the mirror-image fault: a line typed at the terminal arrived
-  one character per *byte*, so `wörld` came back six characters long and
+  one character per _byte_, so `wörld` came back six characters long and
   mojibake. Only this mode was affected; the GemDB Shell and notebooks were
   always right, because they exchange characters over the client connection
   rather than bytes through a file. Needs the matching Grail change
@@ -451,11 +452,11 @@ them, and listed in the panel.
 ### Changed
 
 - **Each notebook now runs in its own database session.** Two notebooks no
-  longer share variables *or* a transaction. This is what every other notebook
+  longer share variables _or_ a transaction. This is what every other notebook
   tool does — VS Code's Jupyter extension starts a kernel per notebook — but
   here it fixes something sharper than convention: a `commit()` in one notebook
   used to commit another's half-finished changes, and
-  `with gemdb.transaction():` refused to start whenever *any* open notebook had
+  `with gemdb.transaction():` refused to start whenever _any_ open notebook had
   left the shared session dirty, naming pending changes you could not see from
   where you were standing. Interrupting a cell now stops only that notebook's
   work, and closing a notebook gives its session back.
@@ -509,7 +510,7 @@ them, and listed in the panel.
 ### Known limitations
 
 - **A script's first statement cannot be `gemdb.transaction()`.** `gemdb
-  file.py` starts with a session that already has pending changes — the Python
+file.py` starts with a session that already has pending changes — the Python
   runtime's own `runPath` makes them, not your code — so a transaction block
   opened on line 1 blames you for them. Call `commit()` or `abort()` first. The
   fix belongs in the Python runtime; the GemDB Shell and notebooks are
@@ -519,7 +520,7 @@ them, and listed in the panel.
   some of those, and every GemDB Shell takes another — so perhaps six or seven
   notebooks can be open at a time. A login refused for that reason now says so
   in those terms: what this window is holding, how long each has been idle, and
-  which one closing would free. Sessions held by *other* VS Code windows are
+  which one closing would free. Sessions held by _other_ VS Code windows are
   not listed, because nothing yet publishes them where another window can read
   them.
 
@@ -534,7 +535,7 @@ Linux joins macOS, and the Python you can write gets meaningfully bigger:
   packages — `darwin-arm64`, `linux-x64`, `linux-arm64` — and the Marketplace
   offers each machine only the one that can run there. Just one thing was ever
   platform-specific (the Python runtime's compiled shim); everything else
-  already handled Linux. Each package is now built *and* tested on a runner of
+  already handled Linux. Each package is now built _and_ tested on a runner of
   its own architecture, against a real database, which is what makes the
   support honest rather than assumed.
 - **`import gemdb` works in a fresh database.** The `gemdb` module is deployed
@@ -609,7 +610,7 @@ gets out of the way.
   password prompt yourself; it never handles your password. Declining breaks
   nothing: the panel keeps showing what is needed and GemDB asks again when it
   genuinely blocks running Python.
-- **The GemDB Shell.** A Python prompt that runs *inside* the database, as a VS
+- **The GemDB Shell.** A Python prompt that runs _inside_ the database, as a VS
   Code pseudoterminal rather than an external process. Ctrl+C interrupts the
   running Python and returns you to the prompt, `exit()` or Ctrl+D leaves, and
   errors come back as Python errors. Each shell is its own database session, so
@@ -637,7 +638,7 @@ gets out of the way.
   platform-specific extension (`darwin-arm64`), so the Marketplace does not
   offer it elsewhere, and the extension refuses to activate if sideloaded. The
   reason is Grail's CPython shim: a native library compiled against a specific
-  engine version *on* the platform it targets, and a build missing the right one
+  engine version _on_ the platform it targets, and a build missing the right one
   would install cleanly and then fail at the first `import`. Intel Macs and
   Linux are a build away — the code already handles them — and Windows is
   further out, needing WSL. Use the Apple Silicon build of VS Code; an Intel

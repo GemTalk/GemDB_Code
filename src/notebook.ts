@@ -55,6 +55,8 @@ export const CONTROLLER_ID = 'gemdb-python';
 export class GemDbNotebookController {
   private readonly controller: vscode.NotebookController;
   private executionOrder = 0;
+  /** Notebooks whose run the user interrupted, so their queued cells do not start. */
+  private readonly interrupted = new Set<string>();
 
   constructor(private readonly extensionPath: string) {
     this.controller = vscode.notebooks.createNotebookController(
@@ -69,8 +71,11 @@ export class GemDbNotebookController {
     // Interrupt only this notebook's session. VS Code hands the handler the
     // notebook that asked, and now that each has a session of its own, one
     // notebook's Ctrl+C no longer stops another's cell.
-    this.controller.interruptHandler = async (notebook) =>
-      interruptSessionFor(notebookOwner(notebook).key);
+    this.controller.interruptHandler = async (notebook) => {
+      const key = notebookOwner(notebook).key;
+      this.interrupted.add(key);
+      interruptSessionFor(key);
+    };
   }
 
   dispose(): void {
@@ -81,6 +86,11 @@ export class GemDbNotebookController {
    * Cells run one at a time. They share a single database session and the
    * call into it is synchronous, so there is no concurrency to be had — and
    * running them in order is what makes a notebook reproducible anyway.
+   *
+   * A cell whose code fails does not stop the ones after it. A cell the *user*
+   * ended does — Stop in the debugger at a breakpoint(), or the interrupt
+   * button — as in Jupyter: stopping a run means the rest of it too, not
+   * "this cell, then carry on with the next".
    */
   private async executeCells(cells: vscode.NotebookCell[]): Promise<void> {
     // Running a cell is a request to run Python, and Python only runs inside
@@ -91,9 +101,13 @@ export class GemDbNotebookController {
         this.failCell(cell, 'GemDB is not running, so the cell was not run.');
       return;
     }
+    const keys = new Set(cells.map((cell) => notebookOwner(cell.notebook).key));
+    for (const key of keys) this.interrupted.delete(key);
     for (const cell of cells) {
-      await this.executeCell(cell);
+      const stopped = await this.executeCell(cell);
+      if (stopped || this.interrupted.has(notebookOwner(cell.notebook).key)) break;
     }
+    for (const key of keys) this.interrupted.delete(key);
   }
 
   /** Mark a cell failed without having attempted it. */
@@ -103,16 +117,21 @@ export class GemDbNotebookController {
     this.endWithError(execution, message);
   }
 
-  private async executeCell(cell: vscode.NotebookCell): Promise<void> {
+  /** Run one cell. Answers whether the user ended the run while it ran. */
+  private async executeCell(cell: vscode.NotebookCell): Promise<boolean> {
     const execution = this.controller.createNotebookCellExecution(cell);
     execution.executionOrder = ++this.executionOrder;
     execution.start(Date.now());
+    // The previous run's output goes now, not when this run first prints: a
+    // cell paused at breakpoint() has printed nothing yet, and leaving the
+    // last run's error under it reads as this run's.
+    execution.replaceOutput([]);
 
     const source = cell.document.getText();
     if (!source.trim()) {
       execution.replaceOutput([]);
       execution.end(true, Date.now());
-      return;
+      return false;
     }
 
     // print() streams: each chunk repaints the cell's text output, so a
@@ -140,7 +159,7 @@ export class GemDbNotebookController {
       const message = errorMessage(e);
       log(`Notebook cell failed: ${message}`);
       this.endWithError(execution, message);
-      return;
+      return false;
     } finally {
       noteRunningCell(owner.key, undefined);
     }
@@ -158,12 +177,13 @@ export class GemDbNotebookController {
     if (isErrorResult(result.value)) {
       execution.replaceOutput(outputs);
       this.appendError(execution, result.value);
-      return;
+      return result.stopped === true;
     }
 
     if (result.value) outputs.push(textOutput(result.value));
     execution.replaceOutput(outputs);
     execution.end(true, Date.now());
+    return false;
   }
 
   private endWithError(execution: vscode.NotebookCellExecution, message: string): void {
