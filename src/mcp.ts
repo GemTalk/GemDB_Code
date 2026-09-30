@@ -3,7 +3,7 @@ import * as net from 'net';
 import * as path from 'path';
 import { execFileSync, spawn } from 'child_process';
 import * as vscode from 'vscode';
-import { DB_PASSWORD, DB_USER, STONE_NAME, mcpPort, mcpReadOnly, rootPath } from './config';
+import { dbPassword, dbUser, mcpPort, mcpReadOnly, rootPath, stoneName } from './config';
 import { errorMessage, log, logStep } from './log';
 import { engineEnvironment } from './processes';
 import { grailPath, installedMcpStamp, mcpPath, mcpRouterStatePath, mcpStampPath } from './paths';
@@ -156,9 +156,9 @@ export function installMcp(
   const env = {
     ...process.env,
     ...engineEnvironment(),
-    GS_STONE: STONE_NAME,
-    GS_USER: DB_USER,
-    GS_PASS: DB_PASSWORD,
+    GS_STONE: stoneName(),
+    GS_USER: dbUser(),
+    GS_PASS: dbPassword(),
   };
 
   return new Promise((resolve, reject) => {
@@ -356,9 +356,9 @@ function runTopaz(script: string, label: string): Promise<string> {
  */
 function topazLogin(): string {
   return [
-    `set gemstone !tcp@localhost#server!${STONE_NAME}`,
-    `set username ${DB_USER}`,
-    `set password ${DB_PASSWORD}`,
+    `set gemstone !tcp@localhost#server!${stoneName()}`,
+    `set username ${dbUser()}`,
+    `set password ${dbPassword()}`,
     'login',
     'iferr 1 stk',
   ].join('\n');
@@ -464,9 +464,9 @@ async function ensureReadOnlyUser(): Promise<boolean> {
       env: {
         ...process.env,
         ...engineEnvironment(),
-        GS_STONE: STONE_NAME,
-        GS_USER: DB_USER,
-        GS_PASS: DB_PASSWORD,
+        GS_STONE: stoneName(),
+        GS_USER: dbUser(),
+        GS_PASS: dbPassword(),
         MCP_RO_USER: READ_ONLY_USER,
       },
     });
@@ -570,7 +570,7 @@ export async function startMcpServer(): Promise<boolean> {
     `    at: 'grailDirectory' put: ${smalltalkString(grailPath())}; yourself);`,
     '  yourself).',
     ...(mcpReadOnly() ? [`r workerUserId: ${smalltalkString(READ_ONLY_USER)}.`] : []),
-    `r serverTitle: ${smalltalkString(`GemDB (${STONE_NAME})`)}.`,
+    `r serverTitle: ${smalltalkString(`GemDB (${stoneName()})`)}.`,
     `r forkOnPort: ${port}`,
     '%',
     'logout',

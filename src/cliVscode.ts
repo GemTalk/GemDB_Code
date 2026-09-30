@@ -17,11 +17,21 @@ import * as fs from 'fs';
  */
 
 const SETTINGS: Record<string, string | undefined> = {
-  // The wrapper exports the root path as GEMSTONE_GLOBAL_DIR — the engine
-  // keeps its lock files there, so it is always set and always right. Absent
-  // (someone running the bundle by hand), the defaults are the defaults.
-  'gemdb.rootPath': process.env.GEMSTONE_GLOBAL_DIR,
+  // The wrapper exports the root path as GEMDB_ROOT_PATH. Wrappers generated
+  // before it existed exported it only as GEMSTONE_GLOBAL_DIR — the engine
+  // keeps its lock files there, which is the root path for GemDB's own
+  // database but the administrator's lock directory for an external one, so
+  // the explicit variable wins. Absent both (someone running the bundle by
+  // hand), the defaults are the defaults.
+  'gemdb.rootPath': process.env.GEMDB_ROOT_PATH ?? process.env.GEMSTONE_GLOBAL_DIR,
   'gemdb.engineVersion': process.env.GEMDB_ENGINE_VERSION,
+  // Set only by a wrapper generated for an external database; see config.ts.
+  'gemdb.externalDatabase.gemstone': process.env.GEMDB_EXTERNAL_GEMSTONE,
+  'gemdb.externalDatabase.globalDirectory': process.env.GEMDB_EXTERNAL_GLOBAL_DIRECTORY,
+  'gemdb.externalDatabase.stone': process.env.GEMDB_EXTERNAL_STONE,
+  'gemdb.externalDatabase.netldi': process.env.GEMDB_EXTERNAL_NETLDI,
+  'gemdb.externalDatabase.user': process.env.GEMDB_EXTERNAL_USER,
+  'gemdb.externalDatabase.passwordFile': process.env.GEMDB_EXTERNAL_PASSWORD_FILE,
 };
 
 export const workspace = {
