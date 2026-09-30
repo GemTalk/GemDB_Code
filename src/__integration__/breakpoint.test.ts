@@ -6,9 +6,20 @@ import { PythonFrame, parsePythonStack, pythonStackQuery } from '../haltStack';
 import {
   PauseVariable,
   childrenQuery,
+  commitQuery,
+  freeKeyQuery,
+  inspectQuery,
+  keyTakenQuery,
   parseChildren,
   parsePausedStack,
+  parseSaveSuggestion,
   pausedStackQuery,
+  removeCommittedQuery,
+  removeSavedQuery,
+  rootListingQuery,
+  saveSuggestionQuery,
+  saveToRootQuery,
+  unquote,
 } from '../pauseVariables';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
 import { runPython } from '../pythonQueries';
@@ -17,8 +28,10 @@ import {
   HaltRequest,
   SessionOwner,
   closeSessionFor,
+  executeAsync,
   interruptSessionFor,
   logoutAll,
+  sessionForIfOpen,
   setHaltHandler,
 } from '../session';
 import { createDatabaseWithPython, Fixture, haveTestExtent, makeFixture } from './fixture';
@@ -355,6 +368,89 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
     expect(failed).toBe(true);
     expect(printed.join('')).toBe('still printing\n');
     expect(result.value).toBe("'done'");
+  });
+
+  it('saves a paused object under gemdb.root, for other sessions once the notebook commits', async () => {
+    const nb = notebook('bp-save');
+    const other = notebook('bp-save-other');
+    const seen: Record<string, string> = {};
+    setHaltHandler(async (request) => {
+      const { globals } = parsePausedStack(
+        await request.query(pausedStackQuery(request.process, nb.key)),
+      );
+      const rows = parseChildren(await request.query(childrenQuery(globals, 0, 500)));
+      const row = (name: string) => rows.find((v) => v.name === name)!;
+      const suggestion = parseSaveSuggestion(
+        await request.query(saveSuggestionQuery(row('e').handle)),
+      );
+      seen.type = suggestion.type;
+      seen.label = suggestion.label ?? '';
+      seen.free = unquote(await request.query(freeKeyQuery('employee_barbara')));
+      seen.saved = unquote(await request.query(saveToRootQuery(row('e').handle, seen.free)));
+      // A plain value has no children, and is saved all the same.
+      seen.leaf = unquote(await request.query(saveToRootQuery(row('count').handle, 'bp_count')));
+      seen.taken = await request.query(keyTakenQuery(seen.free));
+      // Not committed, so only the paused notebook's own session can inspect it.
+      seen.inspected = await request.query(inspectQuery(seen.free, false));
+      // Taking back a save not yet committed leaves nothing behind.
+      await request.query(saveToRootQuery(row('count').handle, 'bp_taken_back'));
+      seen.takenBack = unquote(await request.query(removeSavedQuery('bp_taken_back')));
+      seen.stillThere = await request.query(keyTakenQuery('bp_taken_back'));
+      return 'continue';
+    });
+
+    await runPython(
+      [
+        'import gemdb',
+        'class E:',
+        '    def __init__(self, name):',
+        '        self.name = name',
+        'e = E("Barbara")',
+        'count = 42',
+        'gemdb.root["employee_barbara"] = "taken already"',
+        'breakpoint()',
+      ].join('\n'),
+      nb,
+    );
+    const sameNotebook = await runPython('gemdb.root[' + JSON.stringify(seen.free) + '].name', nb);
+    const beforeCommit = await runPython(
+      `import gemdb\n${JSON.stringify(seen.free)} in gemdb.root`,
+      other,
+    );
+    const committed = await sessionForIfOpen(nb.key)!.executeAsync(commitQuery());
+    const afterCommit = await runPython(
+      `gemdb.abort()\nx = gemdb.root[${JSON.stringify(seen.free)}]\n(x.name, type(x).__name__, gemdb.root["bp_count"])`,
+      other,
+    );
+    const listing = parseChildren(await executeAsync(rootListingQuery()));
+    const [committedSelf, ...committedChildren] = parseChildren(
+      await executeAsync(inspectQuery(seen.free, true)),
+    );
+    const missing = await executeAsync(inspectQuery('no_such_key', true));
+    const removed = unquote(await executeAsync(removeCommittedQuery('bp_count')));
+    const afterRemove = await runPython('gemdb.abort()\n"bp_count" in gemdb.root', other);
+
+    expect(seen).toMatchObject({ type: 'E', label: 'Barbara', saved: 'saved', leaf: 'saved' });
+    // The suggested key steps past one already in use.
+    expect(seen.free).toBe('employee_barbara_2');
+    expect(seen.taken).toBe('true');
+    expect(seen.takenBack).toBe('removed');
+    expect(seen.stillThere).toBe('false');
+    expect(sameNotebook.value).toBe("'Barbara'");
+    expect(beforeCommit.value).toBe('False');
+    expect(unquote(committed)).toBe('committed');
+    expect(afterCommit.value).toBe("('Barbara', 'E', 42)");
+    expect(listing.find((v) => v.name === 'employee_barbara_2')).toMatchObject({ type: 'E' });
+    expect(listing.find((v) => v.name === 'bp_count')).toMatchObject({ value: '42', type: 'int' });
+    const [pendingSelf, ...pendingChildren] = parseChildren(seen.inspected);
+    expect(pendingSelf).toMatchObject({ name: 'value', type: 'E', named: 1 });
+    expect(pendingChildren.map((c) => [c.name, c.value])).toEqual([['name', "'Barbara'"]]);
+    expect(committedSelf).toMatchObject({ type: 'E' });
+    expect(committedChildren.map((c) => c.name)).toEqual(['name']);
+    expect(missing).toMatch(/^Error: KeyError/);
+    // Removing a committed entry commits the removal alone, for every session.
+    expect(removed).toBe('removed');
+    expect(afterRemove.value).toBe('False');
   });
 
   it('ends the cell on Stop, and the session is still usable', async () => {

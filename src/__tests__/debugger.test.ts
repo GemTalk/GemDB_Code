@@ -255,6 +255,19 @@ describe('placing frames in the editor', () => {
 });
 
 describe('scopes and variable rows', () => {
+  it('lets a cell’s top level, which has no Locals, open on its Globals', () => {
+    // VS Code opens the first scope not marked expensive.
+    const [first] = scopesFor(0, 4).filter((scope) => !scope.expensive);
+
+    expect(first?.name).toBe('Globals');
+  });
+
+  it('opens a function’s frame on its Locals, not its Globals', () => {
+    const [first] = scopesFor(3, 4).filter((scope) => !scope.expensive);
+
+    expect(first?.name).toBe('Locals');
+  });
+
   it('offers only the scopes a frame has', () => {
     expect(scopesFor(0, 0)).toEqual([]);
     expect(scopesFor(0, 4).map((s) => s.name)).toEqual(['Globals']);
@@ -268,6 +281,7 @@ describe('scopes and variable rows', () => {
       ref: 7,
       indexed: 10_000,
       named: 0,
+      handle: 7,
     });
     const leaf = toDapVariable({
       name: 'n',
@@ -276,6 +290,7 @@ describe('scopes and variable rows', () => {
       ref: 0,
       indexed: 0,
       named: 0,
+      handle: 8,
     });
 
     expect(rows).toEqual({
@@ -360,7 +375,7 @@ describe('the debug adapter', () => {
     expect(response('scopes')?.body).toEqual({
       scopes: [
         { name: 'Locals', variablesReference: 3, presentationHint: 'locals', expensive: false },
-        { name: 'Globals', variablesReference: 9, presentationHint: 'globals', expensive: true },
+        { name: 'Globals', variablesReference: 9, presentationHint: 'globals', expensive: false },
       ],
     });
     expect(response('variables')?.body).toEqual({
@@ -702,13 +717,14 @@ describe('opening the debugger at a breakpoint()', () => {
 
 describe('the variables queries’ answers', () => {
   it('reads one row per child, with its counts', () => {
-    const raw = row('tags', "{'a', 'b'}", 'set', 8, 2, 0) + row('n', '2', 'int', 0, 0, 0);
+    const raw = row('tags', "{'a', 'b'}", 'set', 8, 2, 0, 8) + row('n', '2', 'int', 0, 0, 0, 9);
 
     const rows = parseChildren(raw);
 
+    // A leaf has no ref — it cannot be expanded — but it has a handle, so it can be saved.
     expect(rows).toEqual([
-      { name: 'tags', value: "{'a', 'b'}", type: 'set', ref: 8, indexed: 2, named: 0 },
-      { name: 'n', value: '2', type: 'int', ref: 0, indexed: 0, named: 0 },
+      { name: 'tags', value: "{'a', 'b'}", type: 'set', ref: 8, indexed: 2, named: 0, handle: 8 },
+      { name: 'n', value: '2', type: 'int', ref: 0, indexed: 0, named: 0, handle: 9 },
     ]);
   });
 });

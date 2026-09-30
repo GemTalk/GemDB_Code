@@ -57,6 +57,12 @@ export interface PauseVariable {
   indexed: number;
   /** Children read in one go by name — a dict's entries, an object's attributes. */
   named: number;
+  /**
+   * Registry position of the row's object whether or not it has children, so
+   * any row can be saved (`saveToRootQuery`); 0 for a row with no object,
+   * such as a group heading.
+   */
+  handle: number;
 }
 
 /**
@@ -94,8 +100,8 @@ const CHILDREN_OF = `
                         names isEmpty ifTrue: [nil] ifFalse: [{ #ivars. names. names size }]]]]]]].`;
 
 /**
- * Smalltalk that writes one row for `v`, named `nm`, and registers `v` when it
- * has children.
+ * Smalltalk that writes one row for `v`, named `nm`, and registers `v` — as
+ * the row's `ref` when it has children, and always as its `handle`.
  *
  * Its repr is the user's `__repr__`, run through `reprOf`: a big container
  * shows its size instead, and a long string is asked for the repr of its
@@ -124,10 +130,11 @@ const DESCRIBE = `
         ifTrue: [idx := n] ifFalse: [named := n]].
     out nextPutAll: (clean value: nm asString); nextPut: field; nextPutAll: (clean value: text); nextPut: field;
       nextPutAll: (clean value: tname); nextPut: field.
+    reg add: v.
     n > 0
-      ifTrue: [reg add: v. out print: reg size]
+      ifTrue: [out print: reg size]
       ifFalse: [out nextPutAll: '0'].
-    out nextPut: field; print: idx; nextPut: field; print: named; nextPut: record].`;
+    out nextPut: field; print: idx; nextPut: field; print: named; nextPut: field; print: reg size; nextPut: record].`;
 
 /**
  * Smalltalk for the blocks every row needs.
@@ -229,6 +236,32 @@ export function parsePausedStack(raw: string): { frames: PythonFrame[]; globals:
 }
 
 /**
+ * Smalltalk that writes a row for each of `obj`'s children, `count` of them
+ * from `start`. Expects `describe`, `childrenOf`, `nameOf`, `kids` and `last`.
+ */
+const LIST_CHILDREN = `
+  kids := obj isNil ifTrue: [nil] ifFalse: [childrenOf value: obj].
+  kids notNil ifTrue: [| kind src i |
+    kind := kids at: 1.
+    src := kids at: 2.
+    last := (start + count) min: (kids at: 3).
+    kind == #seq ifTrue: [
+      (start + 1) to: last do: [:k | describe value: '[' , (k - 1) printString , ']' value: (src at: k)]].
+    kind == #ivars ifTrue: [
+      (start + 1) to: last do: [:k | describe value: (src at: k) value: (obj instVarAt: k)]].
+    kind == #coll ifTrue: [
+      i := 0.
+      src do: [:x |
+        i := i + 1.
+        (i > start and: [i <= last]) ifTrue: [describe value: '[' , (i - 1) printString , ']' value: x]]].
+    (kind == #dict or: [kind == #attrs]) ifTrue: [
+      i := 0.
+      src keysAndValuesDo: [:key :x |
+        i := i + 1.
+        (i > start and: [i <= last]) ifTrue: [
+          describe value: (kind == #dict ifTrue: [nameOf value: key] ifFalse: [key asString]) value: x]]]]`;
+
+/**
  * Smalltalk that lists the children of registry entry `ref`, `count` of them
  * from `start` (0-based), registering the expandable ones.
  *
@@ -290,38 +323,20 @@ ${withQuietConsole(`
             out nextPutAll: row key; nextPut: field; nextPut: field; nextPut: field;
               print: reg size; nextPut: field;
               print: (n > ${PAGE} ifTrue: [n] ifFalse: [0]); nextPut: field;
-              print: (n > ${PAGE} ifTrue: [0] ifFalse: [n]); nextPut: record]
+              print: (n > ${PAGE} ifTrue: [0] ifFalse: [n]); nextPut: field; nextPutAll: '0'; nextPut: record]
           ifFalse: [describe value: row key value: row value]].
       rows size > last ifTrue: [
         out nextPutAll: '...'; nextPut: field;
           print: rows size - last; nextPutAll: ' more not shown'; nextPut: field; nextPut: field;
-          nextPutAll: '0'; nextPut: field; nextPutAll: '0'; nextPut: field; nextPutAll: '0'; nextPut: record]]
+          nextPutAll: '0'; nextPut: field; nextPutAll: '0'; nextPut: field; nextPutAll: '0'; nextPut: field;
+          nextPutAll: '0'; nextPut: record]]
     ifFalse: [
   (obj class == Array and: [obj size = 2 and: [(obj at: 1) == #gemdbGroup]])
     ifTrue: [
       last := (start + count) min: (obj at: 2) size.
       (start + 1) to: last do: [:i | | a | a := (obj at: 2) at: i. describe value: a key value: a value]]
     ifFalse: [
-  kids := obj isNil ifTrue: [nil] ifFalse: [childrenOf value: obj].
-  kids notNil ifTrue: [| kind src i |
-    kind := kids at: 1.
-    src := kids at: 2.
-    last := (start + count) min: (kids at: 3).
-    kind == #seq ifTrue: [
-      (start + 1) to: last do: [:k | describe value: '[' , (k - 1) printString , ']' value: (src at: k)]].
-    kind == #ivars ifTrue: [
-      (start + 1) to: last do: [:k | describe value: (src at: k) value: (obj instVarAt: k)]].
-    kind == #coll ifTrue: [
-      i := 0.
-      src do: [:x |
-        i := i + 1.
-        (i > start and: [i <= last]) ifTrue: [describe value: '[' , (i - 1) printString , ']' value: x]]].
-    (kind == #dict or: [kind == #attrs]) ifTrue: [
-      i := 0.
-      src keysAndValuesDo: [:key :x |
-        i := i + 1.
-        (i > start and: [i <= last]) ifTrue: [
-          describe value: (kind == #dict ifTrue: [nameOf value: key] ifFalse: [key asString]) value: x]]]]]]`)}
+${LIST_CHILDREN}]]`)}
 out contents encodeAsUTF8`;
 }
 
@@ -331,7 +346,7 @@ export function parseChildren(raw: string): PauseVariable[] {
     .split(RECORD)
     .filter((r) => r.length > 0)
     .map((record): PauseVariable => {
-      const [name, value, type, ref, indexed, named] = record.split(FIELD);
+      const [name, value, type, ref, indexed, named, handle] = record.split(FIELD);
       const int = (s: string | undefined): number => Number.parseInt(s ?? '', 10) || 0;
       return {
         name: name ?? '?',
@@ -340,6 +355,7 @@ export function parseChildren(raw: string): PauseVariable[] {
         ref: int(ref),
         indexed: int(indexed),
         named: int(named),
+        handle: int(handle),
       };
     });
 }
@@ -347,4 +363,208 @@ export function parseChildren(raw: string): PauseVariable[] {
 /** Smalltalk that drops the pause's registry, so nothing is kept alive past the pause. */
 export function clearRegistryQuery(): string {
   return `SessionTemps current removeKey: #'${REGISTRY}' ifAbsent: []. 'cleared' encodeAsUTF8`;
+}
+
+// ---------------------------------------------------------------------------
+// Saving a row's object under gemdb.root.
+// ---------------------------------------------------------------------------
+
+/** A Python str literal for `text`. JSON's escapes are all valid in Python. */
+function pythonString(text: string): string {
+  return JSON.stringify(text);
+}
+
+/**
+ * Smalltalk that runs Python in a fresh, throwaway scope — never a notebook's,
+ * so nothing here leaves a name in the user's globals — with `_gemdb_value`
+ * bound to registry entry `handle` when one is given. Answers the Python
+ * value's printString, or an `Error: …` line.
+ */
+function pythonInFreshScope(source: string, handle?: number, first = ''): string {
+  const bind =
+    handle === undefined
+      ? ''
+      : `reg := SessionTemps current at: #'${REGISTRY}' otherwise: nil.
+(reg notNil and: [${handle} between: 1 and: reg size])
+  ifFalse: [^ 'Error: that value is no longer available' encodeAsUTF8].
+scope at: #'_gemdb_value' put: (reg at: ${handle}).`;
+  return `| dispatcher scope reg r |
+${first}
+dispatcher := System myUserProfile symbolList objectNamed: #'ModuleAst'.
+scope := SymbolDictionary new.
+${bind}
+r := [(dispatcher evaluateSource: '${escapeString(source)}' usingModuleScope: scope) printString]
+  on: AbstractException do: [:e | 'Error: ' , e class name , ' - ' , e messageText asString].
+r encodeAsUTF8`;
+}
+
+/**
+ * Smalltalk that answers what a good key for registry entry `handle` is made
+ * of: its Python type name and, when it has one, the first of the attributes
+ * that usually identify an object (`name`, `id`, …) holding a str or a number.
+ */
+export function saveSuggestionQuery(handle: number): string {
+  return `| reg v tname label field |
+field := Character codePoint: 31.
+reg := SessionTemps current at: #'${REGISTRY}' otherwise: nil.
+v := (reg notNil and: [${handle} between: 1 and: reg size]) ifTrue: [reg at: ${handle}] ifFalse: [nil].
+tname := [((v @env1:___pyAttrLoad___: #'__class__') @env1:___pyAttrLoad___: #'__name__') asString]
+  on: AbstractException do: [:e | e return: v class name asString].
+label := nil.
+#(#name #id #key #title #label #slug #username #email) do: [:attr | | x |
+  label isNil ifTrue: [
+    x := [v @env1:___pyAttrLoad___: attr] on: AbstractException do: [:e | e return: nil].
+    (x notNil and: [x isString or: [x isNumber]]) ifTrue: [label := x asString]]].
+(tname , (String with: field) , (label ifNil: [''])) encodeAsUTF8`;
+}
+
+/** Parse `saveSuggestionQuery`'s answer. */
+export function parseSaveSuggestion(raw: string): { type: string; label?: string } {
+  const [type, label] = raw.split(FIELD);
+  return { type: type ?? '', ...(label ? { label } : {}) };
+}
+
+/** Smalltalk that answers the first of `base`, `base_2`, `base_3`, … not yet in gemdb.root. */
+export function freeKeyQuery(base: string): string {
+  return pythonInFreshScope(
+    [
+      'import gemdb',
+      `_base = ${pythonString(base)}`,
+      '_key = _base',
+      '_n = 2',
+      'while _key in gemdb.root:',
+      '    _key = _base + "_" + str(_n)',
+      '    _n += 1',
+      '_key',
+    ].join('\n'),
+  );
+}
+
+/** Smalltalk that answers whether gemdb.root already has `key`, as `true` or `false`. */
+export function keyTakenQuery(key: string): string {
+  return pythonInFreshScope(`import gemdb\n${pythonString(key)} in gemdb.root`);
+}
+
+/**
+ * Smalltalk that puts registry entry `handle` in gemdb.root under `key`,
+ * through Python so it is exactly what `gemdb.root[key] = value` in a cell
+ * would do. It does not commit: the notebook's next commit writes it, with
+ * everything else the notebook has changed. Answers `'saved'` or an error.
+ */
+export function saveToRootQuery(handle: number, key: string): string {
+  return pythonInFreshScope(
+    `import gemdb\ngemdb.root[${pythonString(key)}] = _gemdb_value\n"saved"`,
+    handle,
+  );
+}
+
+/** A Python printString of a str, `'saved'`, back to its text. */
+export function unquote(printed: string): string {
+  return /^'.*'$/s.test(printed) ? printed.slice(1, -1).replace(/''/g, "'") : printed;
+}
+
+/**
+ * Smalltalk that takes back a save not yet committed: deletes `key` from
+ * gemdb.root in the notebook's own session, where the save is. Nothing is
+ * committed; a notebook with nothing else changed is left with nothing to do.
+ */
+export function removeSavedQuery(key: string): string {
+  return pythonInFreshScope(
+    `import gemdb\nif ${pythonString(key)} in gemdb.root:\n    del gemdb.root[${pythonString(key)}]\n"removed"`,
+  );
+}
+
+/**
+ * Smalltalk, for a session with no work of its own (the extension's), that
+ * deletes a committed `key` from gemdb.root and commits that alone: a fresh
+ * view first, so the commit carries nothing but the removal. Answers
+ * `'removed'`, or an `Error: …` line — a conflict when another session
+ * changed gemdb.root since.
+ */
+export function removeCommittedQuery(key: string): string {
+  return pythonInFreshScope(
+    `import gemdb\ndel gemdb.root[${pythonString(key)}]\ngemdb.commit()\n"removed"`,
+    undefined,
+    'System abortTransaction.',
+  );
+}
+
+/** Smalltalk that commits this session's transaction through `gemdb.commit()`. */
+export function commitQuery(): string {
+  return pythonInFreshScope('import gemdb\ngemdb.commit()\n"committed"');
+}
+
+/** Smalltalk that discards this session's uncommitted changes through `gemdb.abort()`. */
+export function abortQuery(): string {
+  return pythonInFreshScope('import gemdb\ngemdb.abort()\n"aborted"');
+}
+
+/** Smalltalk that answers whether this session has changes a commit would write. */
+export function needsCommitQuery(): string {
+  return `System needsCommit printString encodeAsUTF8`;
+}
+
+/** The most gemdb.root entries the Saved Objects view lists. */
+export const ROOT_LISTING_LIMIT = 200;
+
+/**
+ * Smalltalk, for a session with no work of its own (the extension's), that
+ * takes a fresh view and lists what is committed under gemdb.root: one row per
+ * entry, in the Variables view's row format, a str key by its text. Values
+ * are shown with the same bounded repr as the debugger's rows. `gemdb.root`
+ * is a Python object (`_Root`), not a Smalltalk dictionary, so its entries
+ * come from its own `items()`.
+ */
+export function rootListingQuery(): string {
+  return `| reg obj out field record none saved describe childrenOf reprOf late clean isLeaf dispatcher root |
+${PREAMBLE}
+reg := OrderedCollection new.
+${HELPERS}
+${CHILDREN_OF}
+${DESCRIBE}
+System abortTransaction.
+dispatcher := System myUserProfile symbolList objectNamed: #'ModuleAst'.
+root := dispatcher evaluateSource: 'import gemdb
+list(gemdb.root.items())[:${ROOT_LISTING_LIMIT}]' usingModuleScope: SymbolDictionary new.
+${withQuietConsole(`
+  root do: [:pair | | key |
+    key := pair at: 1.
+    describe value: (key isString ifTrue: [key] ifFalse: [(reprOf value: key) ifNil: [key printString]])
+      value: (pair at: 2)]`)}
+out contents encodeAsUTF8`;
+}
+
+/** How many of a saved object's children its hover shows. */
+export const INSPECT_ROWS = 12;
+
+/**
+ * Smalltalk that describes `gemdb.root[key]` for a hover: a first row for the
+ * object itself (its counts say how many children it has), then its first
+ * `INSPECT_ROWS` children. `fresh` takes a new view first — right for the
+ * extension's own session, which reads what is committed, and wrong for a
+ * notebook's, whose uncommitted work is the very thing being looked at.
+ * Answers an `Error: …` line when the key is not there.
+ */
+export function inspectQuery(key: string, fresh: boolean): string {
+  return `| reg obj kids out field record none saved describe childrenOf start count last nameOf reprOf late clean isLeaf dispatcher |
+${PREAMBLE}
+reg := OrderedCollection new.
+start := 0.
+count := ${INSPECT_ROWS}.
+${HELPERS}
+${CHILDREN_OF}
+${DESCRIBE}
+${fresh ? 'System abortTransaction.' : ''}
+dispatcher := System myUserProfile symbolList objectNamed: #'ModuleAst'.
+obj := [dispatcher evaluateSource: '${escapeString(`import gemdb\ngemdb.root[${pythonString(key)}]`)}'
+    usingModuleScope: SymbolDictionary new]
+  on: AbstractException do: [:e | e return: e].
+(obj isKindOf: AbstractException)
+  ifTrue: [('Error: ' , obj class name , ' - ' , obj messageText asString) encodeAsUTF8]
+  ifFalse: [
+${withQuietConsole(`
+  nameOf := [:k | (reprOf value: k) ifNil: [k printString]].
+  describe value: 'value' value: obj.
+${LIST_CHILDREN}`)}
+out contents encodeAsUTF8]`;
 }

@@ -27,6 +27,7 @@ import {
 } from './notebook';
 import { isMcpRunning, startMcpServer, stopMcpServer } from './mcp';
 import { registerBreakpointDebugger } from './debugger';
+import { registerSavedObjects } from './savedObjects';
 import { cloneBrainFreeze, initPendingReadme, showPromisedReadme } from './demo';
 import { confirmMcpEnabled, registerMcpProvider, registerWithClient } from './mcpRegistration';
 import {
@@ -81,7 +82,10 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // The notebook kernel is registered even on an unsupported platform so the
   // kernel picker explains itself, rather than silently offering nothing.
-  const notebooks = new GemDbNotebookController(extensionPath);
+  // Saved Objects shows what gemdb.root holds and each notebook's pending
+  // changes, so it re-reads after every cell: a cell is where commits happen.
+  const savedObjects = registerSavedObjects(context);
+  const notebooks = new GemDbNotebookController(extensionPath, () => savedObjects.refresh());
   context.subscriptions.push(notebooks);
 
   // The MCP server is offered to this editor for free: VS Code has an API for

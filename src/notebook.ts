@@ -65,7 +65,11 @@ export class GemDbNotebookController {
   /** Each notebook's last requested run, so a new request waits its turn. */
   private readonly runs = new Map<string, Promise<void>>();
 
-  constructor(private readonly extensionPath: string) {
+  constructor(
+    private readonly extensionPath: string,
+    /** Told after every cell, which is where a notebook's commits happen. */
+    private readonly onCellFinished: () => void = () => {},
+  ) {
     this.controller = vscode.notebooks.createNotebookController(
       CONTROLLER_ID,
       NOTEBOOK_TYPE,
@@ -190,6 +194,7 @@ export class GemDbNotebookController {
       return true;
     } finally {
       noteRunningCell(owner.key, undefined);
+      this.onCellFinished();
     }
     reportPythonUsed(SURFACE.notebook, EVIDENCE.executed);
 

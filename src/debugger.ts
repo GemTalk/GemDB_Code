@@ -32,7 +32,8 @@ import { HaltAnswer, HaltRequest, setHaltHandler } from './session';
  * breakpoint() must not write the notebook to disk.
  *
  * Deliberately small for now: the call stack, the highlight, each frame's
- * Locals and the notebook's Globals, Continue and Stop. Stepping, evaluation
+ * Locals and the notebook's Globals, Continue and Stop, and saving a row's
+ * object under gemdb.root (`savedObjects.ts`). Stepping, evaluation
  * and Restart answer "not yet" rather than pretending, and red-dot breakpoints
  * report themselves unverified, because Grail has no step or breakpoint
  * support to build them on.
@@ -80,6 +81,8 @@ export interface DapVariable {
 /** One evaluation sitting at a breakpoint(), waiting for the user. */
 export interface Pause {
   label: string;
+  /** The session owner the paused evaluation belongs to — a notebook's key. */
+  ownerKey?: string;
   frames: DapFrame[];
   /** The Locals and Globals of one frame, by its DAP id. */
   scopes(frameId: number): DapScope[];
@@ -87,9 +90,24 @@ export interface Pause {
   variables(ref: number, start: number, count: number): Promise<DapVariable[]>;
   /** Settle the pause. Only the first call counts. */
   answer(choice: HaltAnswer): void;
+  /**
+   * The registry handle of the row called `name` under `containerRef`, as
+   * last listed — how a command on a row reaches its object in the gem.
+   */
+  handleFor?(containerRef: number, name: string): number | undefined;
+  /** Run a query in the paused session (see `HaltRequest.query`). */
+  query?(code: string): Promise<string>;
 }
 
-/** The scopes of a frame whose locals are at `locals` and globals at `globals` (0 = none). */
+/**
+ * The scopes of a frame whose locals are at `locals` and globals at `globals`
+ * (0 = none).
+ *
+ * Neither is marked expensive. VS Code opens the first scope that is not, so
+ * a function's frame opens on its Locals, and a cell's top level — which has
+ * no Locals, its names being the notebook's globals — opens on Globals rather
+ * than showing nothing open at all.
+ */
 export function scopesFor(locals: number, globals: number): DapScope[] {
   const scopes: DapScope[] = [];
   if (locals > 0) {
@@ -105,7 +123,7 @@ export function scopesFor(locals: number, globals: number): DapScope[] {
       name: 'Globals',
       variablesReference: globals,
       presentationHint: 'globals',
-      expensive: true,
+      expensive: false,
     });
   }
   return scopes;
@@ -130,6 +148,19 @@ export function toDapVariable(v: PauseVariable): DapVariable {
 /** Pauses by id, so a launch request can find the one it was started for. */
 const pauses = new Map<string, Pause>();
 let nextPauseId = 1;
+/** Pause ids by VS Code debug session id, for a command run on a Variables row. */
+const pausesByDebugSession = new Map<string, string>();
+
+/** The pause a debug session was started for, if it is still paused. */
+export function pauseForDebugSession(sessionId: string | undefined): Pause | undefined {
+  const id = sessionId === undefined ? undefined : pausesByDebugSession.get(sessionId);
+  return id === undefined ? undefined : pauses.get(id);
+}
+
+/** The pause a notebook's evaluation is sitting at, if any. */
+export function pauseForOwner(ownerKey: string): Pause | undefined {
+  return [...pauses.values()].find((pause) => pause.ownerKey === ownerKey);
+}
 
 /** The running cell per notebook, so a `<grail>` frame prefers it. */
 const runningCells = new Map<string, string>();
@@ -532,19 +563,32 @@ async function readPause(request: HaltRequest): Promise<PauseView> {
   }
 }
 
-/** The children of one registered object. A failure shows as no children, not an error. */
+/**
+ * The children of one registered object. A failure shows as no children, not
+ * an error. Each row's handle is noted under `handles`, keyed by its
+ * container and name, which is all a Variables-row command is handed.
+ */
 async function readChildren(
   request: HaltRequest,
+  handles: Map<string, number>,
   ref: number,
   start: number,
   count: number,
 ): Promise<DapVariable[]> {
   try {
-    return parseChildren(await request.query(childrenQuery(ref, start, count))).map(toDapVariable);
+    const rows = parseChildren(await request.query(childrenQuery(ref, start, count)));
+    for (const row of rows) {
+      if (row.handle > 0) handles.set(handleKey(ref, row.name), row.handle);
+    }
+    return rows.map(toDapVariable);
   } catch (e) {
     log(`Could not read variable ${ref} at breakpoint(): ${errorMessage(e)}`);
     return [];
   }
+}
+
+function handleKey(containerRef: number, name: string): string {
+  return `${containerRef}\u0000${name}`;
 }
 
 /**
@@ -562,7 +606,10 @@ export function registerBreakpointDebugger(): vscode.Disposable {
     createDebugAdapterDescriptor(session) {
       const id = String(session.configuration.gemdbPause ?? '');
       // A pause that already ended needs no session to stop later.
-      if (pauses.has(id)) sessionsByPause.set(id, session);
+      if (pauses.has(id)) {
+        sessionsByPause.set(id, session);
+        pausesByDebugSession.set(session.id, id);
+      }
       return new vscode.DebugAdapterInlineImplementation(
         new PauseDebugAdapter((wanted) => pauses.get(wanted)),
       );
@@ -580,6 +627,9 @@ export function registerBreakpointDebugger(): vscode.Disposable {
           settled = true;
           pauses.delete(id);
           sessionsByPause.delete(id);
+          for (const [sessionId, pauseId] of pausesByDebugSession) {
+            if (pauseId === id) pausesByDebugSession.delete(sessionId);
+          }
           // Queued before the evaluation resumes, which waits for it: the
           // registry holds the pause's objects, and only the paused session
           // can drop it. A closed session has nothing to drop.
@@ -610,12 +660,16 @@ export function registerBreakpointDebugger(): vscode.Disposable {
         log(`breakpoint() in ${label}: paused`);
         void readPause(request).then(({ frames, scopes }) => {
           if (settled) return;
+          const handles = new Map<string, number>();
           pauses.set(id, {
             label,
+            ownerKey: request.session.owner.key,
             frames,
             scopes: (frameId) => scopes.get(frameId) ?? [],
-            variables: (ref, start, count) => readChildren(request, ref, start, count),
+            variables: (ref, start, count) => readChildren(request, handles, ref, start, count),
             answer,
+            handleFor: (containerRef, name) => handles.get(handleKey(containerRef, name)),
+            query: (code) => request.query(code),
           });
           vscode.debug
             .startDebugging(

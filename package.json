@@ -116,6 +116,21 @@
           "icon": "resources/gemdb-sidebar.svg",
           "name": "GemDB",
           "type": "tree"
+        },
+        {
+          "id": "gemdbSavedObjects",
+          "icon": "resources/gemdb-sidebar.svg",
+          "name": "Saved Objects",
+          "type": "tree"
+        }
+      ],
+      "debug": [
+        {
+          "id": "gemdbSavedObjectsDebug",
+          "name": "Saved Objects",
+          "type": "tree",
+          "when": "debugType == gemdb",
+          "visibility": "visible"
         }
       ]
     },
@@ -229,6 +244,41 @@
         "command": "gemdb.configureRemoveIpc",
         "title": "Keep the Database Running After Logout",
         "category": "GemDB"
+      },
+      {
+        "command": "gemdb.saveVariable",
+        "title": "Save to gemdb.root…",
+        "category": "GemDB"
+      },
+      {
+        "command": "gemdb.savedObjects.refresh",
+        "title": "Refresh Saved Objects",
+        "category": "GemDB",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "gemdb.savedObjects.commit",
+        "title": "Commit This Notebook",
+        "category": "GemDB",
+        "icon": "$(check)"
+      },
+      {
+        "command": "gemdb.savedObjects.abort",
+        "title": "Abort This Notebook's Changes",
+        "category": "GemDB",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "gemdb.savedObjects.copyAccess",
+        "title": "Copy Python to Read It",
+        "category": "GemDB",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "gemdb.savedObjects.remove",
+        "title": "Remove from gemdb.root",
+        "category": "GemDB",
+        "icon": "$(trash)"
       }
     ],
     "menus": {
@@ -287,6 +337,11 @@
           "command": "gemdb.restartMcpServer",
           "when": "view == gemdbStatus && gemdb.running",
           "group": "1_gemdb@3"
+        },
+        {
+          "command": "gemdb.savedObjects.refresh",
+          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug)",
+          "group": "navigation@1"
         }
       ],
       "editor/title/run": [
@@ -304,6 +359,55 @@
         {
           "command": "gemdb.configureRemoveIpc",
           "when": "isLinux"
+        },
+        {
+          "command": "gemdb.saveVariable",
+          "when": "false"
+        },
+        {
+          "command": "gemdb.savedObjects.commit",
+          "when": "false"
+        },
+        {
+          "command": "gemdb.savedObjects.abort",
+          "when": "false"
+        },
+        {
+          "command": "gemdb.savedObjects.copyAccess",
+          "when": "false"
+        },
+        {
+          "command": "gemdb.savedObjects.remove",
+          "when": "false"
+        }
+      ],
+      "debug/variables/context": [
+        {
+          "command": "gemdb.saveVariable",
+          "when": "debugType == gemdb",
+          "group": "z_gemdb@1"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "gemdb.savedObjects.commit",
+          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /^(gemdbNotebookDirty|gemdbSavedPending)$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "gemdb.savedObjects.abort",
+          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /^(gemdbNotebookDirty|gemdbSavedPending)$/",
+          "group": "inline@2"
+        },
+        {
+          "command": "gemdb.savedObjects.copyAccess",
+          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /^(gemdbSavedObject|gemdbSavedPending)$/",
+          "group": "inline@3"
+        },
+        {
+          "command": "gemdb.savedObjects.remove",
+          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /^(gemdbSavedObject|gemdbSavedPending)$/",
+          "group": "9_remove@1"
         }
       ]
     },

@@ -384,7 +384,10 @@ database)**.
   and the notebook's globals, expandable into attributes, items and entries, with classes and
   functions folded into their own rows. **Continue** resumes the cell where it paused; **Stop**
   ends it, along with any cells queued after it. Stepping and red-dot breakpoints are not supported
-  yet.
+  yet. Right-click a Variables row and choose **Save to gemdb.root…** to keep that object: it
+  goes in `gemdb.root` under the key you give (one is suggested) and is written at the notebook's
+  next commit. The **Saved Objects** view, under GemDB and in Run and Debug, lists what `gemdb.root`
+  holds and gives each notebook a **Commit** and an **Abort** button.
   In the GemDB Shell and in **Run Python File in GemDB**, `breakpoint()` prints where it was and
   the code carries on.
 - Each notebook has its own session and its own transaction, so a commit in one notebook never

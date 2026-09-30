@@ -147,6 +147,13 @@ export const window = {
   registerTreeDataProvider(_viewId: string, _provider: unknown): Disposable {
     return new Disposable(() => {});
   },
+  createTreeView(_viewId: string, _options: unknown) {
+    return {
+      onDidChangeVisibility: (_listener: (event: { visible: boolean }) => void) =>
+        new Disposable(() => {}),
+      dispose: () => {},
+    };
+  },
   onDidChangeWindowState(_listener: (state: { focused: boolean }) => void): Disposable {
     return new Disposable(() => {});
   },
@@ -209,6 +216,26 @@ export class EventEmitter<T> {
   dispose(): void {
     this.listeners = [];
   }
+}
+
+export const TreeItemCollapsibleState = { None: 0, Collapsed: 1, Expanded: 2 } as const;
+
+export const InputBoxValidationSeverity = { Info: 1, Warning: 2, Error: 3 } as const;
+
+export class MarkdownString {
+  constructor(readonly value: string = '') {}
+}
+
+export class TreeItem {
+  description?: string;
+  tooltip?: string;
+  iconPath?: unknown;
+  contextValue?: string;
+  command?: unknown;
+  constructor(
+    readonly label: string,
+    readonly collapsibleState: number = 0,
+  ) {}
 }
 
 export class ThemeColor {
