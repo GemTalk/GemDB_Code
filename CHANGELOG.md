@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **VS Code installed as a Snap now says why it cannot run GemDB.** On Linux,
+  the Snap build of VS Code (what Ubuntu's App Center installs) runs on older
+  system libraries than the database engine needs. The database still set up
+  and started, but every notebook cell and the GemDB Shell failed with a
+  linker error such as ``version `GLIBCXX_3.4.29' not found``. GemDB now says
+  that the Snap is the cause and to install VS Code from code.visualstudio.com
+  instead. The database it has already set up carries over. The GemDB Shell
+  shows the message and closes, instead of offering a prompt where every line
+  repeats it.
+
 ## [1.5.3] - 2026-09-28
 
 The engine moves to GemStone 4.0.0.a4, so an existing database has to be

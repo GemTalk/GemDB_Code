@@ -105,7 +105,11 @@ for VSCodium and other compatible editors, from
 
 **You need:**
 
-- VS Code 1.101 or later. On a Mac, use the Apple Silicon build.
+- VS Code 1.101 or later. On a Mac, use the Apple Silicon build. On Linux, install VS Code from
+  [code.visualstudio.com](https://code.visualstudio.com/download) (the `.deb` or `.rpm` package),
+  not as a Snap, which is what Ubuntu's App Center installs. A Snap runs VS Code on an older copy of
+  the system libraries than the database engine needs, so notebooks and the GemDB Shell cannot
+  connect.
 - A supported platform (see [Platform support](#platform-support)). On Linux, a glibc-based
   distribution; musl-based distributions such as Alpine are not supported.
 - Permission to use `sudo` once if the operating system allows less than 1 GB of shared memory. This

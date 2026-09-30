@@ -67,7 +67,7 @@ async function main(): Promise<void> {
 
   const repl = new PyRepl({
     write: (text) => process.stdout.write(text),
-    close: () => shutdown(0),
+    close: (code = 0) => shutdown(code),
     ensureRunning: ensureDatabase,
     login,
   });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PyRepl, ReplSession, ReplWorld } from '../pyRepl';
 import { PyResult } from '../pythonQueries';
-import { SessionError } from '../session';
+import { LibraryLoadError, SessionError } from '../session';
 
 /**
  * The REPL loop, driven the way a terminal drives it: bytes into
@@ -23,13 +23,15 @@ interface HarnessOptions {
   ensure?: boolean;
   /** When set, every login throws a SessionError with this message. */
   loginFails?: string;
+  /** When set, every login throws this instead. */
+  loginThrows?: Error;
 }
 
 function makeHarness(opts: HarnessOptions = {}) {
   const out: string[] = [];
   const runs: string[] = [];
   const counters = { interrupts: 0, logouts: 0, ensured: 0 };
-  const state = { closed: false };
+  const state: { closed: boolean; code?: number } = { closed: false };
 
   const session: ReplSession = {
     connected: opts.connected ?? true,
@@ -47,14 +49,16 @@ function makeHarness(opts: HarnessOptions = {}) {
 
   const world: ReplWorld = {
     write: (text) => out.push(text),
-    close: () => {
+    close: (code) => {
       state.closed = true;
+      state.code = code;
     },
     ensureRunning: () => {
       counters.ensured += 1;
       return Promise.resolve(opts.ensure ?? true);
     },
     login: () => {
+      if (opts.loginThrows) throw opts.loginThrows;
       if (opts.loginFails) throw new SessionError(opts.loginFails);
       return session;
     },
@@ -220,6 +224,17 @@ describe('PyRepl', () => {
     h.repl.open();
     expect(h.text()).toContain('GemDB is not running');
     expect(h.text().endsWith('>>> ')).toBe(true);
+  });
+
+  it('leaves, failing, when the client library cannot load — no retry can fix that', () => {
+    const h = makeHarness({ loginThrows: new LibraryLoadError('VS Code installed as a Snap…') });
+
+    h.repl.open();
+
+    expect(h.text()).toContain('VS Code installed as a Snap…');
+    expect(h.state).toEqual({ closed: true, code: 1 });
+    // No prompt to type into: every line would only repeat the message.
+    expect(h.text()).not.toContain('>>> ');
   });
 
   it('logs out when disposed', () => {
