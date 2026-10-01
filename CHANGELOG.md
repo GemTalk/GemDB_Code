@@ -9,27 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`breakpoint()` in a notebook cell opens the debugger.** The cell pauses, VS Code's Run and
-  Debug view shows the Python call stack — methods named with their class, frames from other cells
-  and imported files in place — and the paused line is highlighted. Variables shows each frame's
-  locals and the notebook's globals, and expands objects into their attributes, lists and sets into
-  their items and dicts into their entries, a page at a time for big ones. Classes, functions and
-  modules are folded into their own rows, as in VS Code's Python debugger, so the data stands out.
-  A `__repr__` that takes more than a couple of seconds is cut short and its row says so, rather
-  than freezing VS Code. Right-click a row and **Save to gemdb.root…** puts that object in the
-  database under a key it suggests (`employee_barbara`, from the object's type and name). The
-  notebook's next commit writes it, so a half-finished cell is never committed behind your back. **Continue** resumes the cell; **Stop** ends it, and the cells queued
-  after it (as does the cell's interrupt button) do not start. There is nothing to launch or
-  configure. Stepping and red-dot breakpoints are not supported yet, and the debugger says so
-  when asked.
+- **`breakpoint()` in a notebook cell opens the debugger.** The cell pauses, VS Code's Run and Debug
+  view shows the Python call stack — methods named with their class, frames from other cells and
+  imported files in place — and the paused line is highlighted. Variables shows each frame's locals
+  and the notebook's globals, and expands objects into their attributes, lists and sets into their
+  items and dicts into their entries, a page at a time for big ones. Classes, functions and modules
+  are folded into their own rows, as in VS Code's Python debugger, so the data stands out. A
+  `__repr__` that takes more than a couple of seconds is cut short and its row says so, rather than
+  freezing VS Code. Right-click a row and **Add to Persisted Objects…** puts that object under
+  `gemdb.root` with a key it suggests (`employee_barbara`, from the object's type and name). The
+  notebook's next commit writes it, so a half-finished cell is never committed behind your back.
+  **Continue** resumes the cell; **Stop** ends it, and the cells queued after it (as does the cell's
+  interrupt button) do not start. There is nothing to launch or configure. Stepping and red-dot
+  breakpoints are not supported yet, and the debugger says so when asked.
 
-- **A Saved Objects view** under GemDB, and in Run and Debug while a cell is paused, lists what
-  `gemdb.root` has committed, with a check mark, and under each notebook the objects saved from the
-  debugger that it has not committed yet. Each notebook has its own **Commit** and **Abort** buttons, also on each saved object's
-  row, which act on that notebook's whole session and work while it is paused at `breakpoint()`.
-  Saving opens the view on the new row, and resting the pointer on a saved object shows its type,
-  its value and its first attributes or items. **Remove from gemdb.root** takes back a save not yet committed,
-  or deletes a committed entry and commits just that removal.
+- **A Persisted Objects view** under GemDB, and in Run and Debug while a cell is paused, lists what
+  `gemdb.root` has committed, with a check mark, and under each notebook the objects added from the
+  debugger that it has not committed yet. Its title bar always has **Commit** and **Abort**, for the
+  paused notebook (or the active one), and each added object's row has them too. They act on that
+  notebook's whole session and work while it is paused at `breakpoint()`. Adding opens the view on
+  the new row, and resting the pointer on an object shows its type, its value and its first
+  attributes or items. **Remove from Persisted Objects** takes back an addition not yet committed,
+  or deletes a committed entry and commits just that removal. Its **?** button explains, for someone
+  new, that persisting is adding under `gemdb.root` and then committing.
 
 ### Fixed
 

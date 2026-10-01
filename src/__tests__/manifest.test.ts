@@ -21,6 +21,9 @@ interface Manifest {
   contributes: {
     configuration: { properties: Record<string, { scope?: string }> };
     debuggers?: Array<{ type: string; hiddenWhen?: string }>;
+    commands: Array<{ command: string; title: string }>;
+    views: Record<string, Array<{ id: string; name: string; when?: string; visibility?: string }>>;
+    menus: Record<string, Array<{ command: string; when?: string; group?: string }>>;
   };
 }
 
@@ -49,5 +52,69 @@ describe('the manifest', () => {
       .filter(([, setting]) => setting.scope !== 'machine')
       .map(([id]) => id);
     expect(unscoped).toEqual([]);
+  });
+});
+
+describe('the Persisted Objects contributions', () => {
+  const { commands, views, menus } = manifest.contributes;
+  const declared = new Set(commands.map((c) => c.command));
+  const title = (command: string) => commands.find((c) => c.command === command)?.title;
+
+  it('names only commands it declares in every menu', () => {
+    const used = Object.values(menus).flatMap((entries) => entries.map((e) => e.command));
+
+    expect(used.filter((command) => !declared.has(command))).toEqual([]);
+  });
+
+  it('shows the view under GemDB, and in Run and Debug during a GemDB debug session, open', () => {
+    const debugView = views.debug?.find((v) => v.id === 'gemdbSavedObjectsDebug');
+
+    expect(views.gemdb.find((v) => v.id === 'gemdbSavedObjects')?.name).toBe('Persisted Objects');
+    expect(debugView).toMatchObject({
+      name: 'Persisted Objects',
+      when: 'debugType == gemdb',
+      visibility: 'visible',
+    });
+  });
+
+  it('puts Commit, Abort, Refresh and help in the title bar of both copies, always', () => {
+    const forBoth = '(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug)';
+    const titleBar = menus['view/title'].filter((e) => e.when === forBoth).map((e) => e.command);
+
+    expect(titleBar).toEqual(
+      expect.arrayContaining([
+        'gemdb.savedObjects.commitNotebook',
+        'gemdb.savedObjects.abortNotebook',
+        'gemdb.savedObjects.refresh',
+        'gemdb.savedObjects.help',
+      ]),
+    );
+  });
+
+  it('offers Add to Persisted Objects on Variables rows of a GemDB debug session only', () => {
+    const entry = menus['debug/variables/context']?.find((e) => e.command === 'gemdb.saveVariable');
+
+    expect(entry?.when).toBe('debugType == gemdb');
+    expect(title('gemdb.saveVariable')).toBe('Add to Persisted Objects…');
+  });
+
+  it('keeps commands that need a row or a paused variable out of the Command Palette', () => {
+    const hidden = menus.commandPalette.filter((e) => e.when === 'false').map((e) => e.command);
+
+    expect(hidden).toEqual(
+      expect.arrayContaining([
+        'gemdb.saveVariable',
+        'gemdb.savedObjects.commit',
+        'gemdb.savedObjects.abort',
+        'gemdb.savedObjects.copyAccess',
+        'gemdb.savedObjects.remove',
+      ]),
+    );
+  });
+
+  it('says in the title bar buttons’ tooltips what they do to the notebook', () => {
+    expect(title('gemdb.savedObjects.commitNotebook')).toMatch(/^Commit: Persist/);
+    expect(title('gemdb.savedObjects.abortNotebook')).toMatch(/^Abort: Discard/);
+    expect(title('gemdb.savedObjects.help')).toMatch(/Add Under gemdb\.root, Then Commit/);
   });
 });

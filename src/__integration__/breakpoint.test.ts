@@ -5,11 +5,13 @@ import { stageGrail } from '../grail';
 import { PythonFrame, parsePythonStack, pythonStackQuery } from '../haltStack';
 import {
   PauseVariable,
+  abortQuery,
   childrenQuery,
   commitQuery,
   freeKeyQuery,
   inspectQuery,
   keyTakenQuery,
+  needsCommitQuery,
   parseChildren,
   parsePausedStack,
   parseSaveSuggestion,
@@ -394,7 +396,7 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
       seen.inspected = await request.query(inspectQuery(seen.free, false));
       // Taking back a save not yet committed leaves nothing behind.
       await request.query(saveToRootQuery(row('count').handle, 'bp_taken_back'));
-      seen.takenBack = unquote(await request.query(removeSavedQuery('bp_taken_back')));
+      seen.takenBack = unquote(await request.query(removeSavedQuery(['bp_taken_back'])));
       seen.stillThere = await request.query(keyTakenQuery('bp_taken_back'));
       return 'continue';
     });
@@ -417,7 +419,9 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
       `import gemdb\n${JSON.stringify(seen.free)} in gemdb.root`,
       other,
     );
+    const dirtyBeforeCommit = await sessionForIfOpen(nb.key)!.executeAsync(needsCommitQuery());
     const committed = await sessionForIfOpen(nb.key)!.executeAsync(commitQuery());
+    const dirtyAfterCommit = await sessionForIfOpen(nb.key)!.executeAsync(needsCommitQuery());
     const afterCommit = await runPython(
       `gemdb.abort()\nx = gemdb.root[${JSON.stringify(seen.free)}]\n(x.name, type(x).__name__, gemdb.root["bp_count"])`,
       other,
@@ -427,8 +431,11 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
       await executeAsync(inspectQuery(seen.free, true)),
     );
     const missing = await executeAsync(inspectQuery('no_such_key', true));
-    const removed = unquote(await executeAsync(removeCommittedQuery('bp_count')));
-    const afterRemove = await runPython('gemdb.abort()\n"bp_count" in gemdb.root', other);
+    const removed = unquote(await executeAsync(removeCommittedQuery(['bp_count', seen.free])));
+    const afterRemove = await runPython(
+      `gemdb.abort()\n("bp_count" in gemdb.root, ${JSON.stringify(seen.free)} in gemdb.root)`,
+      other,
+    );
 
     expect(seen).toMatchObject({ type: 'E', label: 'Barbara', saved: 'saved', leaf: 'saved' });
     // The suggested key steps past one already in use.
@@ -438,7 +445,9 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
     expect(seen.stillThere).toBe('false');
     expect(sameNotebook.value).toBe("'Barbara'");
     expect(beforeCommit.value).toBe('False');
+    expect(dirtyBeforeCommit).toBe('true');
     expect(unquote(committed)).toBe('committed');
+    expect(dirtyAfterCommit).toBe('false');
     expect(afterCommit.value).toBe("('Barbara', 'E', 42)");
     expect(listing.find((v) => v.name === 'employee_barbara_2')).toMatchObject({ type: 'E' });
     expect(listing.find((v) => v.name === 'bp_count')).toMatchObject({ value: '42', type: 'int' });
@@ -448,9 +457,35 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
     expect(committedSelf).toMatchObject({ type: 'E' });
     expect(committedChildren.map((c) => c.name)).toEqual(['name']);
     expect(missing).toMatch(/^Error: KeyError/);
-    // Removing a committed entry commits the removal alone, for every session.
+    // Removing committed entries commits that removal alone, all of them at once, for every session.
     expect(removed).toBe('removed');
-    expect(afterRemove.value).toBe('False');
+    expect(afterRemove.value).toBe('(False, False)');
+  });
+
+  it('aborts an addition from the paused notebook, so no session ever sees it', async () => {
+    const nb = notebook('bp-abort');
+    const other = notebook('bp-abort-other');
+    const seen: Record<string, string> = {};
+    setHaltHandler(async (request) => {
+      const { globals } = parsePausedStack(
+        await request.query(pausedStackQuery(request.process, nb.key)),
+      );
+      const rows = parseChildren(await request.query(childrenQuery(globals, 0, 500)));
+      await request.query(
+        saveToRootQuery(rows.find((v) => v.name === 'draft')!.handle, 'bp_draft'),
+      );
+      seen.dirty = await request.query(needsCommitQuery());
+      seen.aborted = unquote(await request.query(abortQuery()));
+      seen.clean = await request.query(needsCommitQuery());
+      seen.there = await request.query(keyTakenQuery('bp_draft'));
+      return 'continue';
+    });
+
+    await runPython('draft = [1, 2, 3]\nbreakpoint()', nb);
+    const elsewhere = await runPython('import gemdb\n"bp_draft" in gemdb.root', other);
+
+    expect(seen).toEqual({ dirty: 'true', aborted: 'aborted', clean: 'false', there: 'false' });
+    expect(elsewhere.value).toBe('False');
   });
 
   it('ends the cell on Stop, and the session is still usable', async () => {

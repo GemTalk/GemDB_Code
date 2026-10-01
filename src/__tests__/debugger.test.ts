@@ -24,8 +24,15 @@ vi.mock('../session', () => ({
 
 const { locateCell, parsePythonStack } = await import('../haltStack');
 const { clearRegistryQuery, parseChildren, parsePausedStack } = await import('../pauseVariables');
-const { PauseDebugAdapter, registerBreakpointDebugger, scopesFor, toDapFrames, toDapVariable } =
-  await import('../debugger');
+const {
+  PauseDebugAdapter,
+  pauseForDebugSession,
+  pauseForOwner,
+  registerBreakpointDebugger,
+  scopesFor,
+  toDapFrames,
+  toDapVariable,
+} = await import('../debugger');
 
 const F = '\u001f';
 const R = '\u001e';
@@ -627,6 +634,56 @@ describe('opening the debugger at a breakpoint()', () => {
     // the clear being queued before the answer is what keeps the registry
     // from outliving the pause.
     expect(queriesWhenAnswered[queriesWhenAnswered.length - 1]).toBe(clearRegistryQuery());
+    registration.dispose();
+  });
+
+  it('finds the pause behind a debug session or a notebook, until it is answered', async () => {
+    const registration = registerBreakpointDebugger();
+    const answered = installed!(haltRequest());
+    await settle();
+    const factory = __debugFactories.get('gemdb') as {
+      createDebugAdapterDescriptor: (s: unknown) => DebugAdapterInlineImplementation;
+    };
+    const adapter = factory.createDebugAdapterDescriptor({
+      id: 'debug-7',
+      configuration: __debugStarts[0],
+    }).implementation as InstanceType<typeof PauseDebugAdapter>;
+    ask(adapter, 'launch', { gemdbPause: pauseIdOf(0) });
+
+    const bySession = pauseForDebugSession('debug-7');
+    const byOwner = pauseForOwner('file:///a.ipynb');
+    ask(adapter, 'continue');
+    await answered;
+
+    expect(bySession?.label).toBe('a.ipynb');
+    expect(byOwner).toBe(bySession);
+    expect(pauseForDebugSession('debug-7')).toBeUndefined();
+    expect(pauseForOwner('file:///a.ipynb')).toBeUndefined();
+    registration.dispose();
+  });
+
+  it('remembers each listed row’s handle by its container and name, plain values included', async () => {
+    const registration = registerBreakpointDebugger();
+    const request = haltRequest();
+    request.query = (code) => {
+      request.queries.push(code);
+      if (code.includes('Suspended')) return Promise.resolve(PAUSED);
+      return Promise.resolve(
+        row('depth', '3', 'int', 0, 0, 0, 12) + row('self', '<E>', 'E', 13, 0, 1, 13),
+      );
+    };
+    void installed!(request);
+    await settle();
+    const adapter = adapterForLastStart();
+    ask(adapter, 'launch', { gemdbPause: pauseIdOf(0) });
+
+    ask(adapter, 'variables', { variablesReference: 3 });
+    await settle();
+
+    const pause = pauseForOwner('file:///a.ipynb')!;
+    expect(pause.handleFor?.(3, 'depth')).toBe(12);
+    expect(pause.handleFor?.(3, 'self')).toBe(13);
+    expect(pause.handleFor?.(4, 'depth')).toBeUndefined();
     registration.dispose();
   });
 

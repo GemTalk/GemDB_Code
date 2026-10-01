@@ -120,14 +120,14 @@
         {
           "id": "gemdbSavedObjects",
           "icon": "resources/gemdb-sidebar.svg",
-          "name": "Saved Objects",
+          "name": "Persisted Objects",
           "type": "tree"
         }
       ],
       "debug": [
         {
           "id": "gemdbSavedObjectsDebug",
-          "name": "Saved Objects",
+          "name": "Persisted Objects",
           "type": "tree",
           "when": "debugType == gemdb",
           "visibility": "visible"
@@ -247,38 +247,56 @@
       },
       {
         "command": "gemdb.saveVariable",
-        "title": "Save to gemdb.root…",
+        "title": "Add to Persisted Objects…",
         "category": "GemDB"
       },
       {
         "command": "gemdb.savedObjects.refresh",
-        "title": "Refresh Saved Objects",
+        "title": "Refresh Persisted Objects",
         "category": "GemDB",
         "icon": "$(refresh)"
       },
       {
         "command": "gemdb.savedObjects.commit",
-        "title": "Commit This Notebook",
+        "title": "Commit: Persist This Notebook's Changes",
         "category": "GemDB",
         "icon": "$(check)"
       },
       {
         "command": "gemdb.savedObjects.abort",
-        "title": "Abort This Notebook's Changes",
+        "title": "Abort: Discard This Notebook's Uncommitted Changes",
         "category": "GemDB",
         "icon": "$(discard)"
       },
       {
         "command": "gemdb.savedObjects.copyAccess",
-        "title": "Copy Python to Read It",
+        "title": "Copy the Python That Reads It",
         "category": "GemDB",
         "icon": "$(copy)"
       },
       {
         "command": "gemdb.savedObjects.remove",
-        "title": "Remove from gemdb.root",
+        "title": "Remove from Persisted Objects",
         "category": "GemDB",
         "icon": "$(trash)"
+      },
+      {
+        "command": "gemdb.savedObjects.commitNotebook",
+        "title": "Commit: Persist the Notebook's Changes",
+        "category": "GemDB",
+        "icon": "$(check)"
+      },
+      {
+        "command": "gemdb.savedObjects.abortNotebook",
+        "title": "Abort: Discard the Notebook's Uncommitted Changes",
+        "category": "GemDB",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "gemdb.savedObjects.help",
+        "title": "How Persisting Works: Add Under gemdb.root, Then Commit",
+        "category": "GemDB",
+        "icon": "$(question)"
       }
     ],
     "menus": {
@@ -341,7 +359,22 @@
         {
           "command": "gemdb.savedObjects.refresh",
           "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug)",
+          "group": "navigation@3"
+        },
+        {
+          "command": "gemdb.savedObjects.commitNotebook",
+          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug)",
           "group": "navigation@1"
+        },
+        {
+          "command": "gemdb.savedObjects.abortNotebook",
+          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug)",
+          "group": "navigation@2"
+        },
+        {
+          "command": "gemdb.savedObjects.help",
+          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug)",
+          "group": "navigation@4"
         }
       ],
       "editor/title/run": [

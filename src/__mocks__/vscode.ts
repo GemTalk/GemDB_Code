@@ -92,6 +92,12 @@ const FAKE_COMMON_PROPERTIES: Record<string, string> = { 'common.fake': 'yes' };
 /** Two-line insurance: nothing here reads `env` today, but `activate()` does. */
 export const env = {
   remoteName: undefined as string | undefined,
+  clipboard: {
+    writeText: (text: string): Promise<void> => {
+      __clipboard.text = text;
+      return Promise.resolve();
+    },
+  },
   uiKind: UIKind.Desktop,
   createTelemetryLogger(
     _sender: unknown,
@@ -125,6 +131,24 @@ export const env = {
   },
 };
 
+/** A tree view as created, recording what it was asked to reveal. */
+export interface FakeTreeView {
+  id: string;
+  options: unknown;
+  message: string | undefined;
+  description: string | undefined;
+  reveals: Array<{ element: unknown; options: unknown }>;
+  reveal(element: unknown, options?: unknown): Promise<void>;
+  onDidChangeVisibility(listener: (event: { visible: boolean }) => void): Disposable;
+  dispose(): void;
+}
+
+/** Tree views created so far, by view id. */
+export const __treeViews = new Map<string, FakeTreeView>();
+
+/** What was last written to the clipboard. */
+export const __clipboard = { text: '' };
+
 export const window = {
   createOutputChannel(_name: string) {
     return {
@@ -147,12 +171,32 @@ export const window = {
   registerTreeDataProvider(_viewId: string, _provider: unknown): Disposable {
     return new Disposable(() => {});
   },
-  createTreeView(_viewId: string, _options: unknown) {
-    return {
+  createTreeView(viewId: string, options: unknown): FakeTreeView {
+    const view: FakeTreeView = {
+      id: viewId,
+      options,
+      message: undefined,
+      description: undefined,
+      reveals: [],
+      reveal: async (element: unknown, revealOptions?: unknown) => {
+        view.reveals.push({ element, options: revealOptions });
+      },
       onDidChangeVisibility: (_listener: (event: { visible: boolean }) => void) =>
         new Disposable(() => {}),
       dispose: () => {},
     };
+    __treeViews.set(viewId, view);
+    return view;
+  },
+  /** What the active notebook editor shows, if a test sets one. */
+  activeNotebookEditor: undefined as { notebook: { uri: { toString(): string } } } | undefined,
+  /** Answers undefined (Escape) unless a test spies on it. */
+  showInputBox(_options?: unknown): Promise<string | undefined> {
+    return Promise.resolve(undefined);
+  },
+  /** Answers undefined (Escape) unless a test spies on it. */
+  showQuickPick<T>(_items: T[], _options?: unknown): Promise<T | undefined> {
+    return Promise.resolve(undefined);
   },
   onDidChangeWindowState(_listener: (state: { focused: boolean }) => void): Disposable {
     return new Disposable(() => {});
@@ -228,7 +272,7 @@ export class MarkdownString {
 
 export class TreeItem {
   description?: string;
-  tooltip?: string;
+  tooltip?: string | MarkdownString;
   iconPath?: unknown;
   contextValue?: string;
   command?: unknown;
@@ -336,6 +380,7 @@ export const debug = {
     return result instanceof Error ? Promise.reject(result) : Promise.resolve(result);
   },
   stopDebugging: (): Promise<void> => Promise.resolve(),
+  activeDebugSession: undefined as { id: string; type: string } | undefined,
 };
 
 export class DebugAdapterInlineImplementation {

@@ -344,6 +344,19 @@ describe('the notebook kernel', () => {
     expect(runPython).toHaveBeenCalledTimes(2);
   });
 
+  it('tells its listener after every cell, so views that show commits can re-read', async () => {
+    const finished = vi.fn();
+    new GemDbNotebookController('/ext', finished);
+    const controller = __controllers[__controllers.length - 1];
+    runPython.mockRejectedValueOnce(new Error('dropped'));
+
+    await run(controller, [cell('1')]);
+    await run(controller, [cell('2'), cell('3')]);
+
+    // Once per cell that ran, whether it succeeded or not.
+    expect(finished).toHaveBeenCalledTimes(3);
+  });
+
   it('clears the previous run’s output as soon as a cell starts', async () => {
     const controller = newController();
     let atStart: unknown;

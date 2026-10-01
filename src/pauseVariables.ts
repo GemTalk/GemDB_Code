@@ -464,26 +464,39 @@ export function unquote(printed: string): string {
 }
 
 /**
- * Smalltalk that takes back a save not yet committed: deletes `key` from
+ * Smalltalk that takes back saves not yet committed: deletes `keys` from
  * gemdb.root in the notebook's own session, where the save is. Nothing is
  * committed; a notebook with nothing else changed is left with nothing to do.
  */
-export function removeSavedQuery(key: string): string {
+export function removeSavedQuery(keys: string[]): string {
   return pythonInFreshScope(
-    `import gemdb\nif ${pythonString(key)} in gemdb.root:\n    del gemdb.root[${pythonString(key)}]\n"removed"`,
+    [
+      'import gemdb',
+      `for _key in [${keys.map(pythonString).join(', ')}]:`,
+      '    if _key in gemdb.root:',
+      '        del gemdb.root[_key]',
+      '"removed"',
+    ].join('\n'),
   );
 }
 
 /**
  * Smalltalk, for a session with no work of its own (the extension's), that
- * deletes a committed `key` from gemdb.root and commits that alone: a fresh
- * view first, so the commit carries nothing but the removal. Answers
+ * deletes committed `keys` from gemdb.root and commits that alone, all in one
+ * commit: a fresh view first, so the commit carries nothing but the removal,
+ * and a conflict leaves every key in place rather than some. Answers
  * `'removed'`, or an `Error: …` line — a conflict when another session
  * changed gemdb.root since.
  */
-export function removeCommittedQuery(key: string): string {
+export function removeCommittedQuery(keys: string[]): string {
   return pythonInFreshScope(
-    `import gemdb\ndel gemdb.root[${pythonString(key)}]\ngemdb.commit()\n"removed"`,
+    [
+      'import gemdb',
+      `for _key in [${keys.map(pythonString).join(', ')}]:`,
+      '    del gemdb.root[_key]',
+      'gemdb.commit()',
+      '"removed"',
+    ].join('\n'),
     undefined,
     'System abortTransaction.',
   );
@@ -504,7 +517,7 @@ export function needsCommitQuery(): string {
   return `System needsCommit printString encodeAsUTF8`;
 }
 
-/** The most gemdb.root entries the Saved Objects view lists. */
+/** The most gemdb.root entries the Persisted Objects view lists. */
 export const ROOT_LISTING_LIMIT = 200;
 
 /**

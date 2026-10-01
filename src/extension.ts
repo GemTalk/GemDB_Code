@@ -82,7 +82,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // The notebook kernel is registered even on an unsupported platform so the
   // kernel picker explains itself, rather than silently offering nothing.
-  // Saved Objects shows what gemdb.root holds and each notebook's pending
+  // Persisted Objects shows what gemdb.root holds and each notebook's pending
   // changes, so it re-reads after every cell: a cell is where commits happen.
   const savedObjects = registerSavedObjects(context);
   const notebooks = new GemDbNotebookController(extensionPath, () => savedObjects.refresh());
