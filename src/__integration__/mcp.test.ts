@@ -1,4 +1,5 @@
 import * as http from 'http';
+import * as net from 'net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { __setSetting } from '../__mocks__/vscode';
 import { mcpPort } from '../config';
@@ -46,10 +47,27 @@ const haveExtent = haveTestExtent();
 
 let fixture: Fixture | undefined;
 
+/** A port nothing on this machine is listening on, as of the moment it is asked. */
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address() as net.AddressInfo;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
 beforeAll(async () => {
   if (!havePayload || !haveExtent) return;
   fixture = makeFixture();
   if (!fixture) return;
+  // The root path and lock directory already keep this database apart from a
+  // developer's real one; the port is the last thing they would share. On the
+  // default, a GemDB with MCP on holds it, this router cannot bind, and every
+  // request reaches theirs instead.
+  __setSetting('gemdb.mcp.port', await freePort());
   createDatabaseWithPython(fixture);
   // Grail's files on disk, because the router's worker gems inherit the
   // NetLDI's environment and resolve Python modules through GRAIL_DIR.
