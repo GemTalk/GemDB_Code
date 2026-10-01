@@ -17,6 +17,7 @@ import {
 import { libraryPathVariable, sharedLibraryExtension } from './platform';
 import { log, logStep } from './log';
 import { withStoneLock } from './lock';
+import { databaseOnNfsError } from './database';
 import { EngineProcess, parseGslist } from './gslist';
 import { databaseConfPath, databaseLogPath, databasePath, enginePath, grailPath } from './paths';
 
@@ -203,13 +204,51 @@ export async function startStone(): Promise<void> {
     }
     logStep(`Starting the database`);
     const env = engineEnvironment();
-    await runEngineCommand(
-      path.join(env.GEMSTONE, 'bin', 'startstone'),
-      ['-l', path.join(databaseLogPath(), `${STONE_NAME}.log`), STONE_NAME],
-      env,
-      'Start database',
-    );
+    const stoneLog = path.join(databaseLogPath(), `${STONE_NAME}.log`);
+    const logSizeBefore = fileSize(stoneLog);
+    try {
+      await runEngineCommand(
+        path.join(env.GEMSTONE, 'bin', 'startstone'),
+        ['-l', stoneLog, STONE_NAME],
+        env,
+        'Start database',
+      );
+    } catch (e) {
+      if (refusedNfs(e, stoneLog, logSizeBefore)) throw databaseOnNfsError();
+      throw e;
+    }
   });
+}
+
+/**
+ * Whether the stone refused to start because its files are on NFS.
+ *
+ * The backstop for `assertDatabaseIsLocal`, which errs towards local when it
+ * cannot tell (#69). The phrase is the 4.0.0.a4 stone's — "Extents may not be
+ * on file systems that are NFS-mounted on stone's machine" — and it lands in
+ * the stone's log, which is read as well as `startstone`'s own output in case
+ * it is not repeated there. Only what this attempt added to the log counts, so
+ * a refusal from before the root path moved cannot be blamed for a new failure.
+ */
+export function refusedNfs(e: unknown, stoneLog: string, logSizeBefore: number): boolean {
+  const said = (text: string): boolean => /NFS-mounted/.test(text);
+  if (e instanceof Error && said(e.message)) return true;
+  try {
+    const bytes = fs.readFileSync(stoneLog);
+    // A log shorter than before was started afresh, and all of it is new.
+    const fresh = bytes.length >= logSizeBefore ? bytes.subarray(logSizeBefore) : bytes;
+    return said(fresh.toString('utf8'));
+  } catch {
+    return false;
+  }
+}
+
+function fileSize(file: string): number {
+  try {
+    return fs.statSync(file).size;
+  } catch {
+    return 0;
+  }
 }
 
 export async function startNetldi(): Promise<void> {

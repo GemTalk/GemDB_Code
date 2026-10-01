@@ -40,6 +40,7 @@ import {
   isSharedMemoryConfigured,
   osConfigAllowsStart,
 } from './osConfig';
+import { databaseOnNfs } from './database';
 import { diskSnapshot } from './paths';
 import { isSupportedPlatform, setContext, setupFootprint } from './platform';
 import { isRunning, isRunningAsync } from './processes';
@@ -458,10 +459,18 @@ async function prepareOnFirstRun(extensionPath: string, refresh: () => void): Pr
     });
     //
     // An external database's machine is configured by whoever runs it, so, as
-    // in `ensureRunning`, GemDB neither checks shared memory nor asks.
+    // in `ensureRunning`, GemDB neither checks shared memory nor asks. Nor on
+    // NFS: setup refuses there before downloading anything (#69), and a sudo
+    // prompt beside that refusal asks for a change nothing can use until the
+    // user has picked another root path.
     const os = isExternalDatabase()
       ? Promise.resolve(true)
-      : ensureOsConfigured(extensionPath, TRIGGER.firstRun).then(osConfigAllowsStart, () => false);
+      : databaseOnNfs()
+        ? Promise.resolve(false)
+        : ensureOsConfigured(extensionPath, TRIGGER.firstRun).then(
+            osConfigAllowsStart,
+            () => false,
+          );
     const [filesOutcome, configured] = await Promise.all([files, os]);
     return { files: filesOutcome, configured, ranSetup: true };
   });

@@ -104,6 +104,19 @@ alone, which on stock Linux (where shared memory is already far above 1 GB)
 meant every Linux user was asked for `sudo` over a setting that blocks
 nothing (issue #45).
 
+**Choosing another root path when the default is on NFS — asked, once setup
+has refused.** The stone will not open a repository on an NFS mount, and on
+many shared Linux machines `~` is one (#69). Setup checks before downloading
+anything (`assertDatabaseIsLocal`, checked again before the stone starts) and
+stops with **Choose a Local Folder…**. GemDB never picks the directory itself:
+the root path is a user-level setting that decides where uninstall deletes,
+and nothing GemDB could pick unasked is known to be local, backed up and big
+enough. The folder dialog is the consent, to the setting and to setting up
+there; the setup that follows is the ordinary automated one. Nothing is moved
+or deleted from the old directory. The first run skips the shared-memory
+prompt in this case, since nothing can use the change until the root path
+moves.
+
 **Configuring Claude Desktop and Cursor for the MCP server.** Their config
 files belong to the user, and neither has a CLI that would do the edit for us,
 so `gemdb.registerMcpClient` copies the snippet to the clipboard and stops.

@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   engineVersion,
@@ -10,8 +11,10 @@ import {
 } from './config';
 import { writeCliScripts } from './cli';
 import {
+  assertDatabaseIsLocal,
   assertDatabaseMatchesEngine,
   createDatabase,
+  DatabaseOnNfsError,
   DatabaseVersionError,
   removeDatabase,
 } from './database';
@@ -53,6 +56,7 @@ import {
 } from './processes';
 import { isSupportedPlatform, setContext } from './platform';
 import { withSetupLockWhenFree } from './lock';
+import { isOnNfs } from './networkFileSystem';
 import { logoutAll } from './session';
 import { allowAutoStart } from './autoStart';
 import { readUnattendedSetupMarker, writeUnattendedSetupMarker } from './unattendedSetupMarker';
@@ -134,6 +138,10 @@ async function prepareFiles(
     stageGrail(extensionPath);
     return true;
   }
+
+  // Before the download: the stone will not open a database on NFS, and
+  // finding that out at the first start costs the whole setup.
+  assertDatabaseIsLocal();
 
   const engine = await installEngine(progress, token);
   if (token.isCancellationRequested) return false;
@@ -366,12 +374,92 @@ function reportFailure(what: string, e: unknown): void {
     return;
   }
 
+  // Not a step that failed either: nothing will work until the root path
+  // moves, so the message offers the move rather than the log.
+  if (e instanceof DatabaseOnNfsError) {
+    void vscode.window
+      .showErrorMessage(e.message, CHOOSE_LOCAL_FOLDER, 'Show Log')
+      .then((choice) => {
+        if (choice === CHOOSE_LOCAL_FOLDER) void chooseLocalRootPath();
+        else if (choice === 'Show Log') showLog();
+      });
+    return;
+  }
+
   void vscode.window
     .showErrorMessage(`${what} failed: ${errorMessage(e)}`, 'Show Log')
     .then((choice) => {
       if (choice === 'Show Log') showLog();
     });
 }
+
+const CHOOSE_LOCAL_FOLDER = 'Choose a Local Folder…';
+
+/**
+ * Ask for a folder on a local disk, make it the root path, and set GemDB up
+ * there (#69).
+ *
+ * Asked rather than chosen: the root path is a persistent, user-level setting,
+ * and the only directory GemDB could pick unasked is one it cannot know is
+ * local, backed up, or large enough. Setting up afterwards is not a second
+ * question — getting a working GemDB is why the folder was asked for.
+ *
+ * GemDB goes in a `GemDB` folder inside the one picked, unless the pick is
+ * already called that, so choosing `/scratch/me` does not scatter the engine,
+ * the database and Python support across a directory that holds other things.
+ */
+export async function chooseLocalRootPath(world: RootPathWorld = realRootPathWorld): Promise<void> {
+  const picked = await world.pickFolder();
+  if (!picked) return;
+  const root = path.basename(picked) === 'GemDB' ? picked : path.join(picked, 'GemDB');
+
+  if (world.isOnNfs(root)) {
+    void vscode.window
+      .showErrorMessage(`${root} is on an NFS mount too.`, CHOOSE_LOCAL_FOLDER)
+      .then((choice) => {
+        if (choice === CHOOSE_LOCAL_FOLDER) void chooseLocalRootPath(world);
+      });
+    return;
+  }
+
+  const previous = rootPath();
+  await world.setRootPath(root);
+  log(
+    `GemDB now keeps its files in ${root}. Nothing was moved from ${previous}; ` +
+      'delete it once you no longer need it.',
+  );
+  await world.setUp();
+}
+
+/** What `chooseLocalRootPath` does to the editor, so a test can stand in. */
+export interface RootPathWorld {
+  pickFolder(): Promise<string | undefined>;
+  isOnNfs(dir: string): boolean;
+  setRootPath(root: string): Promise<void>;
+  setUp(): Promise<void>;
+}
+
+const realRootPathWorld: RootPathWorld = {
+  pickFolder: async () =>
+    (
+      await vscode.window.showOpenDialog({
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: false,
+        openLabel: 'Keep GemDB Here',
+        title: 'Choose a folder on a local disk for GemDB',
+      })
+    )?.[0]?.fsPath,
+  isOnNfs: (dir) => isOnNfs(dir),
+  // Global, because the setting is machine-scoped: a workspace cannot hold it.
+  setRootPath: async (root) =>
+    vscode.workspace
+      .getConfiguration('gemdb')
+      .update('rootPath', root, vscode.ConfigurationTarget.Global),
+  setUp: async () => {
+    await vscode.commands.executeCommand('gemdb.install');
+  },
+};
 
 /** The explicit "Start GemDB" command. */
 export async function start(extensionPath: string): Promise<void> {
@@ -611,6 +699,8 @@ async function startProcesses(
     // is downloaded, the database exists, Grail is staged, so `isInstalled()`
     // is true and the first thing that happens is a stone starting on a
     // repository the new engine cannot read.
+    // NFS likewise: a database set up there before setup checked for it.
+    assertDatabaseIsLocal();
     const engine = enginePath();
     if (engine) assertDatabaseMatchesEngine(engine, engineVersion());
     progress?.report({ message: 'Starting the database…' });
