@@ -26,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Setup says what it will cost on this machine.** The sidebar and the log give this computer's
   figures rather than both platforms', and the space on disk is per platform too: about 145 MB to
   download and 700 MB on disk on macOS, and about 450 MB and 1.4 GB on Linux.
+- **A home directory on NFS no longer costs a whole setup.** The database engine will not open its
+  files on an NFS mount, and on many shared Linux machines `~/GemDB` is one. GemDB Code downloaded
+  the engine and created the database there anyway, then failed to start it (#69). Setup now checks
+  first: if the root path is on NFS, it downloads nothing and offers **Choose a Local Folder…**,
+  which sets `gemdb.rootPath` and sets GemDB Code up there. A database already set up on NFS gets
+  the same offer when it fails to start. The sidebar, the walkthrough and the setting's description
+  now say where GemDB Code keeps its files and how to change it, and the description no longer
+  assumes a Mac.
 - **The MCP server comes back when the database is already running.** Opening a window started
   it only along with the database, so a router that a reboot or a restarted stone took away stayed
   down until the first line of Python — and Claude Code, which connects to the address directly,

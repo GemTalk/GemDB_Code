@@ -51,7 +51,7 @@
           "scope": "machine",
           "type": "string",
           "default": "~/GemDB",
-          "markdownDescription": "Directory that holds the GemDB database engine and your database. Deliberately **not** under `~/Documents`, which is often synced to iCloud — syncing a live database extent will corrupt it."
+          "markdownDescription": "Directory that holds the GemDB database engine and your database. It must be on a local disk: the database engine will not open its files on an NFS mount, and a folder that iCloud Drive, OneDrive, Dropbox or a similar service syncs will corrupt a live database. GemDB does not move anything when this changes; run **Set Up GemDB** afterwards to set up the new location."
         },
         "gemdb.engineVersion": {
           "scope": "machine",
@@ -151,12 +151,12 @@
     "viewsWelcome": [
       {
         "view": "gemdbStatus",
-        "contents": "GemDB isn't set up yet.\n\nSetup downloads the database engine and creates your database. It picks up where it left off, so a cancelled download costs you nothing.\n[Set Up GemDB](command:gemdb.install)\n\nAbout 145 MB to download, 700 MB on disk.",
+        "contents": "GemDB isn't set up yet.\n\nSetup downloads the database engine and creates your database. It picks up where it left off, so a cancelled download costs you nothing.\n[Set Up GemDB](command:gemdb.install)\n\nEverything goes in one folder: `~/GemDB`, unless you [choose another](command:workbench.action.openSettings?%22gemdb.rootPath%22). It has to be on a local disk.\n\nAbout 145 MB to download, 700 MB on disk.",
         "when": "gemdb.state == notInstalled && !gemdb.externalDatabase && !gemdb.settingUp && isMac"
       },
       {
         "view": "gemdbStatus",
-        "contents": "GemDB isn't set up yet.\n\nSetup downloads the database engine and creates your database. It picks up where it left off, so a cancelled download costs you nothing.\n[Set Up GemDB](command:gemdb.install)\n\nAbout 450 MB to download, 1.4 GB on disk.",
+        "contents": "GemDB isn't set up yet.\n\nSetup downloads the database engine and creates your database. It picks up where it left off, so a cancelled download costs you nothing.\n[Set Up GemDB](command:gemdb.install)\n\nEverything goes in one folder: `~/GemDB`, unless you [choose another](command:workbench.action.openSettings?%22gemdb.rootPath%22). It has to be on a local disk.\n\nAbout 450 MB to download, 1.4 GB on disk.",
         "when": "gemdb.state == notInstalled && !gemdb.externalDatabase && !gemdb.settingUp && isLinux"
       },
       {
