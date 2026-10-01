@@ -69,10 +69,10 @@ window. Sent at most once per window, and only while GemDB is not installed.
 
 | `skipReason`             | Meaning                                                                   |
 | ------------------------ | ------------------------------------------------------------------------- |
-| `cancelledBefore`        | Setup was already offered once and the user cancelled it. They have to resume it themselves. |
-| `failedBefore`           | Setup was already offered once and it failed, for example on a network error. It is not retried unasked. |
-| `installedBefore`        | GemDB was installed on this machine and no longer is, without an uninstall — most often a changed root path or engine version. |
-| `uninstalled`            | The user ran **GemDB: Uninstall**. Setup stays off until they install again. |
+| `cancelledBefore`        | The unattended first run was cancelled, and no setup has completed since. The user has to resume it themselves. |
+| `failedBefore`           | The unattended first run failed, for example on a network error, and no setup has completed since. It is not retried unasked. |
+| `installedBefore`        | A setup completed on this machine and GemDB is no longer installed, without an uninstall — most often a changed root path or engine version. |
+| `uninstalled`            | The user ran **GemDB: Uninstall**, and no setup has completed since. Unattended setup stays off. |
 | `attemptedBefore`        | Setup was already offered once, by version 1.5.1 or earlier, which did not record how it ended. |
 | `remoteWindow`           | A remote or browser window, which is not the machine GemDB would set up.  |
 | `lockHeld`               | Another VS Code window is running setup.                                  |
@@ -80,6 +80,36 @@ window. Sent at most once per window, and only while GemDB is not installed.
 
 The first five repeat each time the user opens VS Code until they install, so
 they show how long users stay in each state.
+
+They come from the unattended setup marker, which records the unattended first
+run, an Uninstall, and a later completed setup replacing either. A setup the
+user starts themselves that fails or is cancelled is not recorded there; see
+`setupFinished`. Machines whose marker was written by 1.5.2 or earlier may still
+carry a stale `cancelledBefore`, `failedBefore` or `attemptedBefore`, because
+those releases never updated it after a later setup completed.
+
+The five marker reasons also carry what is on disk at that moment. These
+describe the files, not why they are there.
+
+| Property         | Values                        | Meaning                                                  |
+| ---------------- | ----------------------------- | -------------------------------------------------------- |
+| `databaseOnDisk` | `true`, `false`               | The database's extent file exists.                       |
+| `engineOnDisk`   | `none`, `current`, `other`    | `current` is the engine this version of GemDB installs; `other` is only an engine for this platform that it does not. |
+| `grailOnDisk`    | `true`, `false`               | Python support has been copied into place.               |
+
+`skipReason` says why the unattended setup is off; these say what is left. Together
+they separate cases that look alike:
+
+- A marker reason with the database and an `other` engine, and no `current`
+  one, is a database stranded by an engine version change.
+- `failedBefore` with the database and a `current` engine but no Grail is an
+  unattended first run that failed partway.
+- `uninstalled` with only the database is an uninstall that kept the data.
+- Nothing on disk with `installedBefore` is a changed root path, or files that
+  were deleted.
+
+Leftovers are not causes. Uninstall removes only the current engine, so older
+engine directories survive it.
 
 ### `setupStarted` and `setupFinished`
 
