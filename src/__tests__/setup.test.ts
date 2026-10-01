@@ -43,10 +43,12 @@ vi.mock('../database', async (importOriginal) => {
 
 const stageGrail = vi.fn((_extensionPath: string) => {});
 vi.mock('../grail', () => ({
+  // For `ensureRunning`'s payload check, ahead of the setup it joins.
+  bundledGrailStamp: () => 'grail=test\n',
   stageGrail: (extensionPath: string) => stageGrail(extensionPath),
 }));
 
-const { runSetup } = await import('../lifecycle');
+const { ensureRunning, runSetup } = await import('../lifecycle');
 const { engineDirName } = await import('../paths');
 const { DatabaseOnNfsError, DatabaseVersionError } = await import('../database');
 // Constants on the act side, literals on the assert side: the expectations pin
@@ -214,6 +216,37 @@ describe('runSetup', () => {
       expect(await first).toBe(expected);
     },
   );
+
+  // #70: a cell run during the first-run download joins it, so the user's
+  // cancel of that download is the cell's answer too — one download, one
+  // setup reported, and the marker saying the first run was cancelled.
+  it('reports setupCancelled for a cell that joined a first run the user cancelled', async () => {
+    let cancelDownload: () => void = () => {};
+    installEngine.mockImplementation(
+      () =>
+        new Promise<string>((_resolve, reject) => {
+          cancelDownload = () => reject(new Error('Download cancelled'));
+        }),
+    );
+
+    const first = runSetup('/ext', TRIGGER.firstRun);
+    const cell = ensureRunning('/ext', TRIGGER.notebook);
+    cancelDownload();
+
+    expect(await cell).toBe(false);
+    expect(await first).toBe('cancelled');
+    const started = eventsNamed('databaseStarted');
+    expect(started).toHaveLength(1);
+    expect(started[0].properties).toMatchObject({
+      trigger: 'notebook',
+      outcome: 'setupCancelled',
+    });
+    const setups = eventsNamed('setupStarted');
+    expect(setups).toHaveLength(1);
+    expect(setups[0].properties).toMatchObject({ trigger: 'firstRun' });
+    expect(installEngine).toHaveBeenCalledTimes(1);
+    expect(readUnattendedSetupMarker()).toBe('cancelled');
+  });
 
   it('runs again once the setup under way has finished', async () => {
     installEngine.mockRejectedValueOnce(new Error('ECONNRESET'));
