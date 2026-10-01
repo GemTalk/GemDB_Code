@@ -21,20 +21,17 @@ describe('arming a run', () => {
     const query = armQuery(new Map([["/w/it's.py", [3, 7]]]));
 
     expect(query).toContain("dots at: '/w/it''s.py' put: #(3 7).");
-    expect(query).toContain(
-      "#'___pushInitializingModule___:' environmentId: 0) setBreakAtStepPoint: 1",
-    );
-    expect(query).toContain(
-      "#'___resetClassAttrOverlay___:' environmentId: 0) setBreakAtStepPoint: 1",
-    );
+    expect(query).toContain("#(#'___pushInitializingModule___:' #'___resetClassAttrOverlay___:')");
+    expect(query).toContain('compiledMethodAt: hook environmentId: 0) setBreakAtStepPoint: 1]');
   });
 
   it('converts a paused process only after its new breaks are set', () => {
     const query = armQuery(new Map([['/w/m.py', [3]]]), 77n);
-    const convert = query.indexOf('(Object _objectForOop: 77) convertToPortableStack.');
+    const convert = query.indexOf('(Object _objectForOop: 77) convertToPortableStack]');
 
     // Converting first leaves the new breaks silently ignored (measured).
-    expect(convert).toBeGreaterThan(query.lastIndexOf('setBreakAtStepPoint: 1'));
+    expect(convert).toBeGreaterThan(query.lastIndexOf('setBreakAtStepPoint: 1]'));
+    expect(query.lastIndexOf('setBreakAtStepPoint: 1]')).toBeGreaterThan(0);
     expect(armQuery(new Map([['/w/m.py', [3]]]))).not.toContain('convertToPortableStack');
   });
 
@@ -50,7 +47,9 @@ describe('a breakpoint stop', () => {
   it('answers dot before arming anything when the stop is not an import hook', () => {
     const query = hookStopQuery(5n, new Map([['/w/m.py', [3]]]));
 
-    expect(query.indexOf("^ 'dot'")).toBeLessThan(query.indexOf('dots := Dictionary new.'));
+    const early = query.indexOf('ifFalse: [^ ([');
+    expect(early).toBeGreaterThan(0);
+    expect(early).toBeLessThan(query.indexOf('dots := Dictionary new.'));
   });
 });
 

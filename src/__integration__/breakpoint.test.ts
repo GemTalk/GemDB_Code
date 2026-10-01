@@ -706,7 +706,7 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
 
     const result = await runPython(CELL, NB, (chunk) => printed.push(chunk));
 
-    expect(result.value).toBe('Error: Stopped at breakpoint() in the debugger.');
+    expect(result.value).toBe('Error: Stopped in the debugger.');
     expect(printed.join('')).toBe('before\n');
     setHaltHandler(undefined);
     expect((await runPython('6 * 7', NB)).value).toBe('42');

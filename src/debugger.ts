@@ -112,6 +112,10 @@ export interface Pause {
   saved?: boolean;
   /** Replace the run's red dots while paused (see `HaltRequest.rearm`); absent on a saved stack. */
   rearm?(dots: DotsByFile): Promise<Map<string, number[]>>;
+  /** The red dots the run was armed with when it paused (see `HaltRequest.armedDots`). */
+  armedDots?: DotsByFile;
+  /** What stopped the run; absent on a saved stack. */
+  reason?: HaltRequest['reason'];
 }
 
 /**
@@ -401,7 +405,9 @@ interface WantedDot {
 /**
  * `dots` with one file's entry replaced by what a `setBreakpoints` request
  * asks for — the request is the newest word on that file — under every
- * spelling `dots` already had for it, or `file` alone.
+ * spelling of it: those `dots` already had, found by shared spellings, and
+ * those `spellings` gives for `file`. A request made under one spelling must
+ * not leave the old lines standing under another.
  */
 export function withFileDots(
   dots: DotsByFile,
@@ -411,7 +417,11 @@ export function withFileDots(
 ): DotsByFile {
   const next = new Map(dots);
   const lines = file.endsWith('.py') ? [...new Set(wanted.filter(isPlain).map((w) => w.line))] : [];
-  for (const spelling of spellings(file)) {
+  const mine = new Set(spellings(file));
+  for (const key of dots.keys()) {
+    if (!mine.has(key) && spellings(key).some((s) => mine.has(s))) mine.add(key);
+  }
+  for (const spelling of mine) {
     if (lines.length > 0) next.set(spelling, lines);
     else next.delete(spelling);
   }
@@ -479,15 +489,25 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
   private stoppedSent = false;
   private settled = false;
   private ended = false;
-  /** The run's red dots as this session last set them; read from the gutter at launch. */
+  /**
+   * The red dots the run is armed with: what the session armed it from, taken
+   * at launch, then each re-arm's. Not the gutter's — a dot added while the
+   * run was still running is in the gutter but holds no break.
+   */
   private dots: DotsByFile = new Map();
+  /** False after a re-arm failed: the run's breaks are unknown until the next succeeds. */
+  private dotsKnown = true;
   /** setBreakpoints requests answered one at a time, so each builds on the last. */
-  private dotWork: Promise<void> = Promise.resolve();
+  private dotWork: Promise<void>;
+  /** Resolves at launch: VS Code may send setBreakpoints before it, and they wait. */
+  private markLaunched: () => void = () => {};
 
   constructor(
     private readonly lookup: (id: string) => Pause | undefined,
-    private readonly currentDots: () => DotsByFile = () => new Map(),
-  ) {}
+    private readonly spellings: PathSpellings = spellingsOnDisk,
+  ) {
+    this.dotWork = new Promise((resolve) => (this.markLaunched = resolve));
+  }
 
   handleMessage(message: vscode.DebugProtocolMessage): void {
     const request = message as DapRequest;
@@ -512,14 +532,14 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
           // The pause ended — interrupted, its session closed — before VS Code
           // got here. There is nothing to show and nothing gone wrong, so the
           // session just ends, with no error for the user to dismiss.
+          this.markLaunched();
           this.respond(request);
           this.end();
           return;
         }
         this.attached = true;
-        // What the run was armed from: the gutter as it is now, which is what
-        // the session armed from when the run (or its last import) began.
-        this.dots = this.currentDots();
+        this.dots = this.pause.armedDots ?? new Map();
+        this.markLaunched();
         this.respond(request);
         this.maybeStopped();
         return;
@@ -630,25 +650,28 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
    * Answer one setBreakpoints request. A change to a `.py` file's dots re-arms
    * the paused run, so a dot added now stops it later in this run; an
    * unchanged set — VS Code re-sends every file's dots as the session starts —
-   * leaves the run alone, since re-arming converts its stack to slower code.
+   * leaves the run alone, since re-arming converts its stack to slower code,
+   * and only asks what holds a break. After a failed re-arm nothing is known,
+   * so the next request re-arms whatever it says.
    */
   private async setDots(request: DapRequest, file: string | undefined, wanted: WantedDot[]) {
     const pause = this.pause;
-    const live = !!pause?.rearm && !pause.saved;
+    const live = !!pause?.rearm;
     let armed: readonly number[] | undefined;
-    if (live && file?.endsWith('.py')) {
-      const next = withFileDots(this.dots, file, wanted);
+    if (pause?.rearm && file?.endsWith('.py')) {
+      const next = withFileDots(this.dots, file, wanted, this.spellings);
       try {
-        const lines = sameDots(next, this.dots)
-          ? pause.query
+        const lines =
+          this.dotsKnown && sameDots(next, this.dots) && pause.query
             ? parseArmed(await pause.query(armedLinesQuery(next)))
-            : new Map<string, number[]>()
-          : await pause.rearm!(next);
+            : await pause.rearm(next);
         this.dots = next;
-        armed = spellingsOnDisk(file)
+        this.dotsKnown = true;
+        armed = this.spellings(file)
           .map((spelling) => lines.get(spelling))
           .find((found) => found !== undefined);
       } catch (e) {
+        this.dotsKnown = false;
         log(`Could not set red dots in ${path.basename(file)}: ${errorMessage(e)}`);
       }
     }
@@ -841,10 +864,7 @@ export function registerBreakpointDebugger(): vscode.Disposable {
         pausesByDebugSession.set(session.id, id);
       }
       return new vscode.DebugAdapterInlineImplementation(
-        new PauseDebugAdapter(
-          (wanted) => pauses.get(wanted),
-          () => redDotsOf(gutterDots()),
-        ),
+        new PauseDebugAdapter((wanted) => pauses.get(wanted)),
       );
     },
   });
@@ -906,6 +926,8 @@ export function registerBreakpointDebugger(): vscode.Disposable {
             handleFor: (containerRef, name) => handles.get(handleKey(containerRef, name)),
             query: (code) => request.query(code),
             rearm: (dots) => request.rearm(dots),
+            armedDots: request.armedDots,
+            reason: request.reason,
             texts,
             ...(request.reason === 'red dot' ? { description: 'Paused on breakpoint' } : {}),
           });

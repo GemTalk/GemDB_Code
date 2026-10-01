@@ -20,6 +20,7 @@ import {
   SessionOwner,
   closeSessionFor,
   logoutAll,
+  sessionFor,
   setHaltHandler,
   setRedDotSource,
 } from '../session';
@@ -87,6 +88,17 @@ const SHOWN = [
   '        return text',
 ].join('\n');
 
+/** A recursive call on a dotted line, and two files whose dotted lines share a number. */
+const RECURSIVE = [
+  'def depth(n):',
+  '    if n == 0:',
+  '        return 0',
+  '    return depth(n - 1) + 1',
+].join('\n');
+const CALLER = ['import callee', 'def f():', '    return callee.g()'].join('\n');
+// Line 3 does work: a bare `return x` has no step point to break on.
+const CALLEE = ['def g():', '    x = 1', '    return x + 0'].join('\n');
+
 /** A module committed in one session and warm-bound, its body not re-run, in another. */
 const WARM = ['def twice(x):', '    y = x * 2', '    return y'].join('\n');
 
@@ -102,6 +114,9 @@ beforeAll(async () => {
   fs.writeFileSync(path.join(dir, 'later.py'), LATER);
   fs.writeFileSync(path.join(dir, 'shown.py'), SHOWN);
   fs.writeFileSync(path.join(dir, 'warm.py'), WARM);
+  fs.writeFileSync(path.join(dir, 'recursive.py'), RECURSIVE);
+  fs.writeFileSync(path.join(dir, 'caller.py'), CALLER);
+  fs.writeFileSync(path.join(dir, 'callee.py'), CALLEE);
   if (!haveExtent) return;
   fixture = makeFixture();
   if (!fixture) return;
@@ -345,7 +360,8 @@ describe.skipIf(!haveExtent || !canMakeFixture())('red dots', () => {
 
   it('stops at a dot added while paused in a module the run imports afterwards', async () => {
     const owner: SessionOwner = fileOwner(file('pause_first.py'));
-    // A dot somewhere arms nothing here, so the pause comes from breakpoint().
+    // The run starts with no dots, so it is unarmed and the pause comes from
+    // breakpoint(); the hooks that catch later.py come from the re-arm.
     dotting({});
     const stops = recording(async (request, index): Promise<HaltAnswer> => {
       if (index === 0) await request.rearm(new Map([[file('later.py'), [2]]]));
@@ -394,6 +410,70 @@ describe.skipIf(!haveExtent || !canMakeFixture())('red dots', () => {
     expect(reasons).toEqual(['breakpoint()']);
     expect(rows).toContain('s=Shown()');
     expect(result.value).toBe('42');
+  });
+
+  it('stops at each level of a recursive call on a dotted line', async () => {
+    const owner: SessionOwner = { key: 'file:///rec.ipynb', kind: 'notebook', label: 'rec.ipynb' };
+    await runPython(
+      `import sys\nsys.path.insert(0, ${JSON.stringify(dir)})\nimport recursive`,
+      owner,
+    );
+    dotting({ 'recursive.py': [4] });
+    const stops = recording();
+
+    const result = await runPython('recursive.depth(3)', owner);
+    closeSessionFor(owner.key);
+
+    // Like breakpoint() on that line: every call that reaches it stops.
+    expect(stops.map((s) => s.top)).toEqual([
+      'depth@4 recursive.py',
+      'depth@4 recursive.py',
+      'depth@4 recursive.py',
+    ]);
+    expect(stops.map((s) => s.stack.length)).toEqual(
+      [...stops.map((s) => s.stack.length)].sort((a, b) => a - b),
+    );
+    expect(result.value).toBe('3');
+  });
+
+  it('stops at a dotted line called from the same line number of another file', async () => {
+    const owner: SessionOwner = {
+      key: 'file:///cross.ipynb',
+      kind: 'notebook',
+      label: 'cross.ipynb',
+    };
+    await runPython(`import sys\nsys.path.insert(0, ${JSON.stringify(dir)})\nimport caller`, owner);
+    dotting({ 'caller.py': [3], 'callee.py': [3] });
+    const stops = recording();
+
+    const result = await runPython('caller.f()', owner);
+    closeSessionFor(owner.key);
+
+    expect(stops.map((s) => s.top)).toEqual(['f@3 caller.py', 'g@3 callee.py']);
+    expect(result.value).toBe('1');
+  });
+
+  it('never stops a view’s own read at a dot in the __repr__ it runs', async () => {
+    const owner: SessionOwner = {
+      key: 'file:///view.ipynb',
+      kind: 'notebook',
+      label: 'view.ipynb',
+    };
+    await runPython(`import sys\nsys.path.insert(0, ${JSON.stringify(dir)})\nimport shown`, owner);
+    dotting({ 'shown.py': [3] });
+    const stops = recording();
+
+    // What Persisted Objects does: Smalltalk through executeAsync, not a Python run.
+    const shownRepr = await sessionFor(owner).executeAsync(`| d |
+d := System myUserProfile symbolList objectNamed: #'ModuleAst'.
+(d evaluateSource: 'import shown
+repr(shown.Shown())' usingModuleScope: SymbolDictionary new) asString encodeAsUTF8`);
+    // A run in the same session still stops there.
+    await runPython('repr(shown.Shown())', owner);
+    closeSessionFor(owner.key);
+
+    expect(shownRepr).toBe('Shown()');
+    expect(stops.map((s) => s.top)).toEqual(['Shown.__repr__@3 shown.py']);
   });
 
   it('arms a module another session committed, which an import binds without running its body', async () => {

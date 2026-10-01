@@ -186,8 +186,10 @@ transaction, and file mode's first statement already cannot open
 in a `.py` file becomes `setBreakAtStepPoint:` on the method holding that
 line, and fires as GCI error 6005 only in a run started with
 `GCI_PERFORM_FLAG_ENABLE_DEBUG`. With flags 0 it never fires. The flag cost
-nothing measurable, so every Python evaluation and resume in `session.ts`
-passes it, and queries stay at 0. Breakpoints belong to the session, not the
+nothing measurable, so every Python run and its resumes pass it
+(`executeAsync` with `redDots`). Everything else stays at 0, including queries
+made while paused and the Persisted Objects reads, which run the user's
+`__repr__`. Breakpoints belong to the session, not the
 repository. A step point's line comes from the method's source: an IR
 method's `sourceString` is the Python itself, with a trailing `# line N`
 header. Grail's `___pythonLineForMethod___:ip:` reads the line already

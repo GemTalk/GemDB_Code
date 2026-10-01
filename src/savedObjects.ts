@@ -701,7 +701,7 @@ async function saveVariable(
   if (!pause?.query || !pause.ownerKey || !variable) {
     void vscode.window.showErrorMessage(
       'Add to Persisted Objects works on a variable in Run and Debug, while a GemDB notebook ' +
-        'cell or Debug Python File run is paused at breakpoint().',
+        'cell or Debug Python File run is paused in the debugger.',
     );
     return;
   }
@@ -944,7 +944,7 @@ async function saveStack(
   if (!pause?.query || !pause.ownerKey) {
     void vscode.window.showErrorMessage(
       'Add Stack to Persisted Objects works while a GemDB notebook cell or Debug Python File ' +
-        'run is paused at breakpoint().',
+        'run is paused in the debugger.',
     );
     return;
   }
@@ -985,7 +985,8 @@ async function saveStack(
             label: pause.label,
             notebook: pause.ownerKey,
             saved_at: localStamp(now),
-            description: 'Saved at breakpoint()',
+            description:
+              pause.reason === 'red dot' ? 'Saved at a red dot' : 'Saved at breakpoint()',
           },
           frames,
           localsRefs,
@@ -1000,9 +1001,7 @@ async function saveStack(
       notebook: pause.label,
       at: now.toISOString(),
     });
-    log(
-      `Saved the stack at breakpoint() as ${accessCode(key)} (${pause.label}), not yet committed`,
-    );
+    log(`Saved the stack as ${accessCode(key)} (${pause.label}), not yet committed`);
     const shown = treeViews.get(DEBUG_VIEW_ID);
     if (shown) {
       view

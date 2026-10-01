@@ -424,6 +424,20 @@ describe('red dots from the gutter', () => {
       ['/w/m.py', [5]],
     ]);
     expect([...emptied]).toEqual([['/w/a.py', [1]]]);
+    // A request under the resolved spelling replaces the lines under the link's spelling too.
+    const linked = withFileDots(
+      new Map([
+        ['/link/m.py', [3]],
+        ['/real/m.py', [3]],
+      ]),
+      '/real/m.py',
+      [{ line: 4 }],
+      (f) => (f === '/link/m.py' ? [f, '/real/m.py'] : [f]),
+    );
+    expect([...linked]).toEqual([
+      ['/link/m.py', [4]],
+      ['/real/m.py', [4]],
+    ]);
     expect(
       sameDots(
         before,
@@ -570,6 +584,7 @@ describe('the debug adapter', () => {
   it('says red dots belong in .py files when asked for some in a notebook cell', async () => {
     const { request, response } = adapterFor({ answer: () => {} });
     request('initialize');
+    request('launch', { gemdbPause: '1' });
 
     request('setBreakpoints', {
       source: { path: 'vscode-notebook-cell:/w/a.ipynb#W0sZmlsZQ' },
@@ -618,51 +633,70 @@ describe('the debug adapter', () => {
   });
 
   it('leaves a paused run alone when VS Code re-sends the dots it was armed with', async () => {
+    const rearm = vi.fn(() => Promise.resolve(new Map<string, number[]>()));
+    const queries: string[] = [];
+    const { request, response } = adapterFor({
+      answer: () => {},
+      rearm,
+      armedDots: new Map([['/w/m.py', [4]]]),
+      query: (code: string) => {
+        queries.push(code);
+        return Promise.resolve(`/w/m.py${F}4${R}`);
+      },
+    });
+    request('launch', { gemdbPause: '1' });
+
+    request('setBreakpoints', { source: { path: '/w/m.py' }, breakpoints: [{ line: 4 }] });
+    await settle();
+
+    // Re-arming converts the paused stack to slower code, so an unchanged set only asks.
+    expect(rearm).not.toHaveBeenCalled();
+    expect(queries).toEqual([armedLinesQuery(new Map([['/w/m.py', [4]]]))]);
+    expect(response('setBreakpoints')?.body).toEqual({
+      breakpoints: [{ verified: true, line: 4 }],
+    });
+  });
+
+  it('re-arms a dot the gutter gained while the run was still running, before it paused', async () => {
+    // The run was armed with no dots; the user added line 4 before breakpoint() paused it.
     debug.breakpoints = [
       new SourceBreakpoint({
         uri: { scheme: 'file', fsPath: '/w/m.py' },
         range: { start: { line: 3 } },
       }),
     ];
-    const rearm = vi.fn(() => Promise.resolve(new Map<string, number[]>()));
-    const queries: string[] = [];
-    const sent: Array<Record<string, unknown>> = [];
-    const adapter = new PauseDebugAdapter(
-      () => ({
-        label: 'm.py',
-        frames: [],
-        scopes: () => [],
-        variables: () => Promise.resolve([]),
-        answer: () => {},
-        rearm,
-        query: (code: string) => {
-          queries.push(code);
-          return Promise.resolve(`/w/m.py${F}4${R}`);
-        },
-      }),
-      () => redDotsOf([{ file: '/w/m.py', line: 4, enabled: true }], (f) => [f]),
-    );
-    adapter.onDidSendMessage((m) => sent.push(m as Record<string, unknown>));
-    adapter.handleMessage({
-      seq: 1,
-      type: 'request',
-      command: 'launch',
-      arguments: { gemdbPause: '1' },
+    const rearm = vi.fn(() => Promise.resolve(new Map([['/w/m.py', [4]]])));
+    const { request } = adapterFor({
+      answer: () => {},
+      rearm,
+      armedDots: new Map(),
+      query: vi.fn(),
     });
-    adapter.handleMessage({
-      seq: 2,
-      type: 'request',
-      command: 'setBreakpoints',
-      arguments: { source: { path: '/w/m.py' }, breakpoints: [{ line: 4 }] },
-    });
+    request('launch', { gemdbPause: '1' });
+
+    request('setBreakpoints', { source: { path: '/w/m.py' }, breakpoints: [{ line: 4 }] });
     await settle();
     debug.breakpoints = [];
 
-    // Re-arming converts the paused stack to slower code, so an unchanged set only asks.
-    expect(rearm).not.toHaveBeenCalled();
-    expect(queries).toEqual([armedLinesQuery(new Map([['/w/m.py', [4]]]))]);
-    const reply = sent.find((m) => m.command === 'setBreakpoints');
-    expect(reply?.body).toEqual({ breakpoints: [{ verified: true, line: 4 }] });
+    expect(rearm).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds a setBreakpoints that arrives before launch until the pause is known', async () => {
+    const rearm = vi.fn(() => Promise.resolve(new Map([['/w/m.py', [4]]])));
+    const { request, response } = adapterFor({ answer: () => {}, rearm });
+    request('initialize');
+
+    // VS Code sends breakpoints on `initialized`, in parallel with launch.
+    request('setBreakpoints', { source: { path: '/w/m.py' }, breakpoints: [{ line: 4 }] });
+    await settle();
+    const beforeLaunch = response('setBreakpoints');
+    request('launch', { gemdbPause: '1' });
+    await settle();
+
+    expect(beforeLaunch).toBeUndefined();
+    expect(response('setBreakpoints')?.body).toEqual({
+      breakpoints: [{ verified: true, line: 4 }],
+    });
   });
 
   it('answers back-to-back setBreakpoints in order, each building on the last', async () => {
@@ -704,16 +738,19 @@ describe('the debug adapter', () => {
     request('initialize');
     request('launch', { gemdbPause: '1' });
 
-    request('setBreakpoints', { source: { path: '/w/m.py' }, breakpoints: [{ line: 2 }] });
+    // The same request twice: after a failure the run's breaks are unknown,
+    // so the second must re-arm rather than take the dots as already set.
+    request('setBreakpoints', { source: { path: '/w/m.py' }, breakpoints: [{ line: 3 }] });
     request('setBreakpoints', { source: { path: '/w/m.py' }, breakpoints: [{ line: 3 }] });
     await settle();
     await settle();
 
+    expect(rearm).toHaveBeenCalledTimes(2);
     const replies = sent.filter((m) => m.command === 'setBreakpoints').map((m) => m.body);
     expect(replies).toEqual([
       {
         breakpoints: [
-          { verified: false, line: 2, message: expect.stringMatching(/no code for this line yet/) },
+          { verified: false, line: 3, message: expect.stringMatching(/no code for this line yet/) },
         ],
       },
       { breakpoints: [{ verified: true, line: 3 }] },
@@ -839,6 +876,7 @@ describe('opening the debugger at a breakpoint()', () => {
       } as unknown as HaltRequest['session'],
       process: 42n,
       reason: 'breakpoint()',
+      armedDots: new Map(),
       rearm: () => Promise.resolve(new Map()),
       query: (code) => {
         queries.push(code);

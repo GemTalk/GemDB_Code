@@ -35,9 +35,9 @@ export const FIELD = '\u001f';
 export const RECORD = '\u001e';
 
 /**
- * Smalltalk declaring `lineAt`, a block answering the Python line of step
- * point `sp` of method `home`, or nil for its prologue (offset 1) or a step
- * point it cannot place. `own` is the method the step point is in — `home`,
+ * Smalltalk declaring `lineAt` (needs the temps `STEP_POINT_TEMPS`), a block
+ * answering the Python line of step point `sp` of method `home`, or nil for
+ * its prologue (offset 1) or a step point it cannot place. `own` is the method the step point is in — `home`,
  * or one of its blocks (a loop body, a nested def, a comprehension): only that
  * method knows the step point's source offset, and `home` answers 1 for a
  * block's (measured), which would read as prologue and drop the dot.
@@ -49,20 +49,31 @@ export const RECORD = '\u001e';
  * `___curPos___ := line` before each statement, which is what Grail's own
  * ip-to-line lookup reads. That lookup answers the line already *reached*,
  * so on an IR method, at a step point not yet run, it is a line early
- * (measured), and it is not used for them.
+ * (measured), and it is not used for them. Each method's header and line
+ * starts are read once and kept in `lineCache`, since arming asks for every
+ * step point of the method.
  */
-export const STEP_POINT_LINE = `lineAt := [:home :own :sp | | src base at next off |
+export const STEP_POINT_TEMPS = 'lineAt lineCache';
+export const STEP_POINT_LINE = `lineCache := IdentityDictionary new.
+lineAt := [:home :own :sp | | entry off |
   (BaseException ___isIRPythonMethod___: home)
     ifTrue: [
-      src := home sourceString.
-      at := 0.
-      [(next := src indexOfSubCollection: '# line ' startingAt: at + 1) > 0] whileTrue: [at := next].
+      entry := lineCache at: home ifAbsent: [| src at next lfs n |
+        src := home sourceString.
+        at := 0.
+        [(next := src indexOfSubCollection: '# line ' startingAt: at + 1) > 0] whileTrue: [at := next].
+        at = 0
+          ifTrue: [lineCache at: home put: nil]
+          ifFalse: [
+            "lfs at: k is how many line breaks come before position k."
+            lfs := Array new: src size.
+            n := 0.
+            1 to: src size do: [:k | lfs at: k put: n. (src at: k) == Character lf ifTrue: [n := n + 1]].
+            lineCache at: home put: {((src copyFrom: at + 7 to: src size) readStream upTo: $ ) asNumber. lfs}]].
       off := own _sourceOffsetsAt: sp.
-      (at = 0 or: [off <= 1])
+      (entry isNil or: [off <= 1 or: [off > (entry at: 2) size]])
         ifTrue: [nil]
-        ifFalse: [
-          base := ((src copyFrom: at + 7 to: src size) readStream upTo: $ ) asNumber.
-          base + ((src copyFrom: 1 to: off - 1) occurrencesOf: Character lf)]]
+        ifFalse: [(entry at: 1) + ((entry at: 2) at: off)]]
     ifFalse: [| info |
       info := home _meth_ip_ForStepPoint: sp.
       (info isNil or: [(own _sourceOffsetsAt: sp) <= 1])
@@ -127,7 +138,7 @@ export function pythonStackQuery(
   extras?: StackQueryExtras,
   atStepPoint = false,
 ): string {
-  return `| proc both pairs out modCls field record placeholder lineAt dotLineOf dotLine ${extras?.temps ?? ''} |
+  return `| proc both pairs out modCls field record placeholder ${STEP_POINT_TEMPS} dotLineOf dotLine thisDot ${extras?.temps ?? ''} |
 ${STEP_POINT_LINE}
 ${DOT_LINE}
 proc := Object _objectForOop: ${processOop}.
@@ -147,6 +158,9 @@ both isNil ifFalse: [
   pairs := BaseException ___liveFramePairsFrom___: (both at: 1)
     generatorBody: false levels: (both at: 2) offset: 0 running: false.
   pairs do: [:p |
+    "Only the innermost frame takes the red dot's line, even if describing it fails."
+    thisDot := dotLine.
+    dotLine := nil.
     out nextPutAll: ([| meth home cls name span line file text rec |
     rec := WriteStream on: Unicode7 new.
     meth := p at: 1.
@@ -160,7 +174,7 @@ both isNil ifFalse: [
       on: Error do: [:e | nil].
     (span notNil and: [span size >= 1 and: [line notNil and: [(span at: 1) ~= line]]])
       ifTrue: [span := nil].
-    dotLine notNil ifTrue: [line := dotLine. span := nil. dotLine := nil].
+    thisDot notNil ifTrue: [line := thisDot. span := nil].
     file := [BaseException ___liveFrameFilenameFor___: home] on: Error do: [:e | '<grail>'].
     rec nextPutAll: name; nextPut: field;
       print: (line ifNil: [0]); nextPut: field.

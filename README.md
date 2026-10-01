@@ -395,8 +395,9 @@ there and opens Run and Debug, the same as `breakpoint()`. That holds for Debug 
 notebook cell that calls into a `.py` module. A dot also works in a module the run imports, and one
 added while paused stops the run later on. Not supported yet: dots with a condition, hit count or
 log message (they never stop the run, and the debugger says so), dots in notebook cells, and dots
-in a class defined inside a function. A dot on the first line of a `for` loop's body also stops once
-just before the loop's first pass. Run Python File in GemDB has no debugger, so it runs straight
+in a class defined inside a function. A line that only returns a name, like `return x`, has no
+code to stop at, so its dot stays hollow. A dot on the first line of a `for` loop's body also stops
+once just before the loop's first pass. Run Python File in GemDB has no debugger, so it runs straight
 past them.
 
 ### Notebooks

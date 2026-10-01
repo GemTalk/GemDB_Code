@@ -240,7 +240,7 @@ describe('the notebook kernel', () => {
     isErrorResult.mockImplementation((result) => result.startsWith('Error: '));
     runPython.mockResolvedValueOnce({
       output: '',
-      value: 'Error: Stopped at breakpoint() in the debugger.',
+      value: 'Error: Stopped in the debugger.',
       stopped: true,
     });
     const controller = newController();
@@ -269,7 +269,7 @@ describe('the notebook kernel', () => {
 
   it('stops the queued cells when a cell could not run at all', async () => {
     runPython.mockRejectedValueOnce(
-      new Error('The session was closed while paused at breakpoint().'),
+      new Error('The session was closed while paused in the debugger.'),
     );
     const controller = newController();
 
