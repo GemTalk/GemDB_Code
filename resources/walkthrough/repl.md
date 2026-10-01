@@ -25,7 +25,7 @@ your computer.
 
 The database starts again when you need it, when you:
 
-- Click **Start GemDB** (▶) in the GemDB Code sidebar
+- Click **Start GemDB** (▷) in the GemDB Code sidebar
 - Run Python in a notebook
 - Open a GemDB Shell
 - Run a script with the `gemdb` command
