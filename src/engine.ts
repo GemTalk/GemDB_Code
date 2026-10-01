@@ -83,7 +83,9 @@ export async function installEngine(
   // finishes. Killing it mid-way would leave a half-populated engine directory,
   // and `enginePath` treats any such directory as an installed engine — the
   // next run would skip the download and fail somewhere far less obvious. A few
-  // seconds of finishing work is the cheaper end of that trade.
+  // seconds of finishing work is the cheaper end of that trade. The held cancel
+  // is obeyed as soon as this returns, before the database is created (see
+  // prepareFiles).
   progress.report({ message: 'Extracting the database engine…' });
   if (process.platform === 'darwin') {
     await extractDmg(archivePath, rootPath(), progress);

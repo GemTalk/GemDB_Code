@@ -74,6 +74,7 @@ const { ensureRunning } = await import('../lifecycle');
 // the wire value, so renaming one must fail here rather than silently split a
 // series in App Insights.
 const { TRIGGER, initTelemetry } = await import('../telemetry');
+const { initUnattendedSetupMarker } = await import('../unattendedSetupMarker');
 
 describe('databaseStarted', () => {
   beforeEach(() => {
@@ -86,7 +87,11 @@ describe('databaseStarted', () => {
     findStone.mockReturnValue(true);
     findNetldi.mockReturnValue(true);
 
-    initTelemetry(fakeExtensionContext(), false);
+    const context = fakeExtensionContext();
+    initTelemetry(context, false);
+    // `ensureRunning` reaches `runSetup` when isInstalled() is false (see the
+    // isInstalled(false) case below), and a completed run looks at the marker.
+    initUnattendedSetupMarker(context.globalStorageUri.fsPath);
   });
 
   it('sends nothing on a no-op call — everything already up, nothing prompted', async () => {

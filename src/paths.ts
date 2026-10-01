@@ -24,8 +24,11 @@ import { platformKey } from './platform';
  * leave the database pointing at a version of Grail that no longer exists.
  */
 
+/** What every engine directory's name starts with, before the version. */
+const ENGINE_DIR_PREFIX = 'GemStone64Bit';
+
 export function engineDirName(version = engineVersion()): string {
-  return `GemStone64Bit${version}-${platformKey() ?? 'unknown'}`;
+  return `${ENGINE_DIR_PREFIX}${version}-${platformKey() ?? 'unknown'}`;
 }
 
 /**
@@ -121,6 +124,62 @@ export function databaseExists(): boolean {
 /** True when the Grail payload has been copied out of the extension. */
 export function grailStagedOnDisk(): boolean {
   return fs.existsSync(path.join(grailPath(), 'GRAIL_VERSION'));
+}
+
+/** Which engine directories the root path holds, as `diskSnapshot` reports it. */
+export const ENGINE_ON_DISK = {
+  none: 'none',
+  current: 'current', // the engine this build pins
+  other: 'other', // only an engine for this platform that this build does not pin
+} as const;
+export type EngineOnDisk = (typeof ENGINE_ON_DISK)[keyof typeof ENGINE_ON_DISK];
+
+export interface DiskSnapshot {
+  databaseOnDisk: boolean;
+  engineOnDisk: EngineOnDisk;
+  grailOnDisk: boolean;
+}
+
+/**
+ * What GemDB's files look like on disk right now, as facts.
+ *
+ * Telemetry's marker-based skip reasons record why the unattended setup is off
+ * (its history); this records what is *there*, and the two together tell an engine pin move (a
+ * database and an older engine, no current one) from a wiped root path (nothing
+ * at all). It deliberately does not say why. Existence checks and one directory
+ * listing only, never a `copydbf`: it runs during activation, which is
+ * measured, and it must not throw, so an unreadable root path reads as no
+ * engine.
+ */
+export function diskSnapshot(): DiskSnapshot {
+  return {
+    databaseOnDisk: databaseExists(),
+    engineOnDisk: engineOnDisk(),
+    grailOnDisk: grailStagedOnDisk(),
+  };
+}
+
+function engineOnDisk(): EngineOnDisk {
+  if (enginePath() !== undefined) return ENGINE_ON_DISK.current;
+  // The name is `GemStone64Bit<version>-<platformKey>`; an engine for another
+  // platform (a shared or copied root path) is not one this machine could run,
+  // and with no platform key there is no engine this machine could run at all.
+  const key = platformKey();
+  if (key === undefined) return ENGINE_ON_DISK.none;
+  const suffix = `-${key}`;
+  const current = engineDirName();
+  try {
+    const other = fs.readdirSync(rootPath()).some(
+      (name) =>
+        name.length > ENGINE_DIR_PREFIX.length + suffix.length && // has a version
+        name.startsWith(ENGINE_DIR_PREFIX) &&
+        name.endsWith(suffix) &&
+        name !== current,
+    );
+    return other ? ENGINE_ON_DISK.other : ENGINE_ON_DISK.none;
+  } catch {
+    return ENGINE_ON_DISK.none;
+  }
 }
 
 /**
