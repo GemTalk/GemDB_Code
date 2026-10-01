@@ -131,8 +131,8 @@ through Grail's private walk.** Grail's breakpoint() goes through its own
 `pdb.set_trace` to `sys breakpoint`, which sends `pause`: a Halt signalled
 with `_signalToDebugger`, so no handler on the stack runs — not even the
 `on: AbstractException do:` around every evaluation — and it arrives as GCI
-error 2709 with the suspended GsProcess in `err.context`, under the execute
-flags `session.ts` already passes (0). Measured on 4.0.0.a4: that process can
+error 2709 with the suspended GsProcess in `err.context`, with execute flags
+0 or with the `ENABLE_DEBUG` that `session.ts` now passes. Measured on 4.0.0.a4: that process can
 be read while suspended, `GciTsContinueWith(context, OOP_ILLEGAL)` resumes
 it to the evaluation's real result, and `GciTsClearStack` ends it and leaves
 the session usable. When a halt handler is installed (the extension's, in
@@ -181,6 +181,29 @@ with `do:`. A direct `pdb.set_trace()` in file mode still strands the user at
 `topaz 1>`: patching it needs `import pdb`, which was measured to dirty the
 transaction, and file mode's first statement already cannot open
 `gemdb.transaction()` for that reason.
+
+**Red dots are method breakpoints, set where Grail compiles code.** A red dot
+in a `.py` file becomes `setBreakAtStepPoint:` on the method holding that
+line, and fires as GCI error 6005 only in a run started with
+`GCI_PERFORM_FLAG_ENABLE_DEBUG`. With flags 0 it never fires. The flag cost
+nothing measurable, so every Python evaluation and resume in `session.ts`
+passes it, and queries stay at 0. Breakpoints belong to the session, not the
+repository. A step point's line comes from the method's source: an IR
+method's `sourceString` is the Python itself, with a trailing `# line N`
+header. Grail's `___pythonLineForMethod___:ip:` reads the line already
+*reached*, which is one early at a step point that hasn't run yet. That's
+measured, and it's also why a red-dot stop places its innermost frame from
+the step point. A cold import compiles its methods mid-run, so `redDots.ts`
+also breaks on two of Grail's import methods. `importlib class >>
+___pushInitializingModule___:` comes after the module's functions are
+compiled and before its body runs. `___resetClassAttrOverlay___:` comes after
+each module-level class is built, with its methods installed. Each stop arms
+what was just built and resumes. Three measured traps. Looking the module up
+by name at the first hook waits forever for its own body, so its class is
+read from the caller's frame. `sys modules` is an env-1 send. A dot added
+while paused fires only if the paused process gets `convertToPortableStack`
+*after* its new breaks are set. All of these selectors are private to Grail,
+and `src/__integration__/redDots.test.ts` is what notices if one moves.
 
 **The console box says what the sink takes, because the sink cannot be
 asked.** `SessionTemps #GrailConsole` holds an Array; slot 1 is the sink, and

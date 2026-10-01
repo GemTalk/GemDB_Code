@@ -402,7 +402,23 @@ export const debug = {
   },
   stopDebugging: (): Promise<void> => Promise.resolve(),
   activeDebugSession: undefined as { id: string; type: string } | undefined,
+  /** The gutter's breakpoints; a test fills it with `SourceBreakpoint`s. */
+  breakpoints: [] as unknown[],
 };
+
+/** A gutter breakpoint, with just the location shape red dots read. */
+export class SourceBreakpoint {
+  constructor(
+    readonly location: {
+      uri: { scheme: string; fsPath: string };
+      range: { start: { line: number } };
+    },
+    readonly enabled = true,
+    readonly condition?: string,
+    readonly hitCondition?: string,
+    readonly logMessage?: string,
+  ) {}
+}
 
 export class DebugAdapterInlineImplementation {
   constructor(readonly implementation: unknown) {}

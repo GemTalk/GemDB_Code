@@ -35,6 +35,38 @@ export const FIELD = '\u001f';
 export const RECORD = '\u001e';
 
 /**
+ * Smalltalk declaring `lineAt`, a block answering the Python line of a
+ * method's step point, or nil for its prologue (offset 1) or a step point it
+ * cannot place.
+ *
+ * Grail's IR methods carry the Python source itself, followed by a
+ * `# line N file …` header — the last one in the source, since the code above
+ * it may hold that text too — so the line is N plus the newlines before the
+ * step point's offset. Text-compiled methods are Smalltalk with a
+ * `___curPos___ := line` before each statement, which is what Grail's own
+ * ip-to-line lookup reads. That lookup answers the line already *reached*,
+ * so on an IR method, at a step point not yet run, it is a line early
+ * (measured), and it is not used for them.
+ */
+export const STEP_POINT_LINE = `lineAt := [:meth :sp | | src base at next off |
+  (BaseException ___isIRPythonMethod___: meth)
+    ifTrue: [
+      src := meth sourceString.
+      at := 0.
+      [(next := src indexOfSubCollection: '# line ' startingAt: at + 1) > 0] whileTrue: [at := next].
+      off := meth _sourceOffsetsAt: sp.
+      (at = 0 or: [off <= 1])
+        ifTrue: [nil]
+        ifFalse: [
+          base := ((src copyFrom: at + 7 to: src size) readStream upTo: $ ) asNumber.
+          base + ((src copyFrom: 1 to: off - 1) occurrencesOf: Character lf)]]
+    ifFalse: [| info |
+      info := meth _meth_ip_ForStepPoint: sp.
+      (info isNil or: [(meth _sourceOffsetsAt: sp) <= 1])
+        ifTrue: [nil]
+        ifFalse: [BaseException ___pythonLineForMethod___: (info at: 1) ip: (info at: 2)]]].`;
+
+/**
  * Smalltalk spliced into the stack query by a caller that wants more from the
  * same walk: `temps` are declared, `setup` runs first, `perFrame` runs for
  * each frame with the pair in `p` (appending its own fields to `out`), and
@@ -65,9 +97,21 @@ export interface StackQueryExtras {
  * Each frame is described inside its own error guard: a frame Grail cannot
  * place becomes a `?` row with no line, rather than failing the query and
  * costing every other frame.
+ *
+ * `atStepPoint` is for a process stopped at a red dot: its innermost frame
+ * sits exactly on the step point's ip (measured), before the statement runs,
+ * where Grail's lookup reads the line before. That frame's line comes from
+ * the step point instead (`STEP_POINT_LINE`), without a span, so the
+ * highlight takes the whole line.
  */
-export function pythonStackQuery(processOop: bigint, extras?: StackQueryExtras): string {
-  return `| proc both pairs out modCls field record placeholder ${extras?.temps ?? ''} |
+export function pythonStackQuery(
+  processOop: bigint,
+  extras?: StackQueryExtras,
+  atStepPoint = false,
+): string {
+  return `| proc both pairs out modCls field record placeholder lineAt first ${extras?.temps ?? ''} |
+${STEP_POINT_LINE}
+first := ${atStepPoint}.
 proc := Object _objectForOop: ${processOop}.
 modCls := System myUserProfile symbolList objectNamed: #'module'.
 field := Character codePoint: 31.
@@ -97,6 +141,13 @@ both isNil ifFalse: [
       on: Error do: [:e | nil].
     (span notNil and: [span size >= 1 and: [line notNil and: [(span at: 1) ~= line]]])
       ifTrue: [span := nil].
+    first ifTrue: [| sp at |
+      first := false.
+      sp := 0.
+      (home _allDebugInfoWithMeths: 2) doWithIndex: [:info :i |
+        ((info at: 1) == meth and: [(info at: 2) = (p at: 2)]) ifTrue: [sp := i]].
+      at := sp = 0 ifTrue: [nil] ifFalse: [lineAt value: home value: sp].
+      at notNil ifTrue: [line := at. span := nil]].
     file := [BaseException ___liveFrameFilenameFor___: home] on: Error do: [:e | '<grail>'].
     rec nextPutAll: name; nextPut: field;
       print: (line ifNil: [0]); nextPut: field.

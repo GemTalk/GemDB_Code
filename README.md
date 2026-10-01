@@ -390,6 +390,14 @@ session lasts as long as the terminal, so **Commit** and **Abort** in Persisted 
 the run ends; closing the terminal ends the session and discards what it did not commit. Ctrl+C in
 the terminal stops the run.
 
+Red dots work in `.py` files: click in the gutter beside a line, and a run that reaches it pauses
+there and opens Run and Debug, the same as `breakpoint()`. That holds for Debug Python File and for a
+notebook cell that calls into a `.py` module. A dot also works in a module the run imports, and one
+added while paused stops the run later on. Not supported yet: dots with a condition, hit count or
+log message (they never stop the run, and the debugger says so), dots in notebook cells, and dots
+in a class defined inside a function. Run Python File in GemDB has no debugger, so it runs straight
+past them.
+
 ### Notebooks
 
 GemDB Notebooks are ordinary `.ipynb` files. A notebook you create with **New GemDB Notebook** uses
@@ -405,8 +413,8 @@ database, select that kernel from the kernel picker at the top right.
   shows the Python frames, the paused line is highlighted, and Variables shows each frame's locals
   and the notebook's globals, expandable into attributes, items and entries, with classes and
   functions folded into their own rows. **Continue** resumes the cell where it paused; **Stop**
-  ends it, along with any cells queued after it. Stepping and red-dot breakpoints are not supported
-  yet. Right-click a Variables row and choose **Add to Persisted Objects…** to keep that object: it
+  ends it, along with any cells queued after it. Stepping is not supported yet, and neither are red
+  dots in a cell (they work in `.py` files; see above). Right-click a Variables row and choose **Add to Persisted Objects…** to keep that object: it
   goes in `gemdb.root` under the key you give (one is suggested) and is written at the notebook's
   next commit. The **Persisted Objects** view, under GemDB and in Run and Debug, lists what `gemdb.root`
   holds; its title bar always has **Commit** and **Abort** for the notebook you are working in. **Add Stack to Persisted Objects…** on the Call Stack saves the whole paused stack the same

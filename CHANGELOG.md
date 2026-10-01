@@ -28,8 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gemdb.root` with a key it suggests (`employee_barbara`, from the object's type and name). The
   notebook's next commit writes it, so a half-finished cell is never committed behind your back.
   **Continue** resumes the cell; **Stop** ends it, and the cells queued after it (as does the cell's
-  interrupt button) do not start. There is nothing to launch or configure. Stepping and red-dot
-  breakpoints are not supported yet, and the debugger says so when asked.
+  interrupt button) do not start. There is nothing to launch or configure. Stepping is not
+  supported yet, and the debugger says so when asked.
+
+- **Red dots in `.py` files.** Click in the gutter beside a line, and a run that reaches it pauses
+  there with the debugger open, the same as `breakpoint()`. That holds in Debug Python File and in a
+  notebook cell that calls into the file. Dots in a module the run imports work, and a dot added
+  while paused stops the run later on. Dots with a condition, hit count or log message, and dots in
+  notebook cells, are not supported yet, and the debugger marks them so.
 
 - **Debug Python File in GemDB**, beside Run Python File in a `.py` file's run menu, runs the file
   so that `breakpoint()` opens the debugger on it, the way it does on a notebook cell: its frames,

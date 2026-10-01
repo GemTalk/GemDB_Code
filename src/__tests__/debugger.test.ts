@@ -5,9 +5,12 @@ import {
   __debugStartResult,
   __debugStarts,
   DebugAdapterInlineImplementation,
+  SourceBreakpoint,
+  debug,
   window,
 } from '../__mocks__/vscode';
-import type { HaltAnswer, HaltHandler, HaltRequest } from '../session';
+import type { DotsByFile } from '../redDots';
+import type { HaltAnswer, HaltHandler, HaltRequest, RedDotSource } from '../session';
 
 /**
  * The breakpoint() debugger, without a database: the stack Grail answers is a
@@ -16,22 +19,31 @@ import type { HaltAnswer, HaltHandler, HaltRequest } from '../session';
  */
 
 let installed: HaltHandler | undefined;
+let dotSource: RedDotSource | undefined;
 vi.mock('../session', () => ({
   setHaltHandler: (handler: HaltHandler | undefined) => {
     installed = handler;
+  },
+  setRedDotSource: (source: RedDotSource | undefined) => {
+    dotSource = source;
   },
 }));
 
 const { locateCell, parsePythonStack } = await import('../haltStack');
 const { clearRegistryQuery, parseChildren, parsePausedStack } = await import('../pauseVariables');
+const { armedLinesQuery } = await import('../redDots');
 const {
   PauseDebugAdapter,
   pauseForDebugSession,
   pauseForOwner,
+  redDotsOf,
   registerBreakpointDebugger,
+  sameDots,
   scopesFor,
   toDapFrames,
   toDapVariable,
+  verifiedDots,
+  withFileDots,
 } = await import('../debugger');
 
 const F = '\u001f';
@@ -333,7 +345,9 @@ describe('scopes and variable rows', () => {
 });
 
 /** Drive an adapter and collect what it sends. */
-function adapterFor(pause: { answer: (c: HaltAnswer) => void } | undefined) {
+function adapterFor(
+  pause: ({ answer: (c: HaltAnswer) => void } & Record<string, unknown>) | undefined,
+) {
   const sent: Array<Record<string, unknown>> = [];
   const adapter = new PauseDebugAdapter(() =>
     pause
@@ -360,6 +374,79 @@ function adapterFor(pause: { answer: (c: HaltAnswer) => void } | undefined) {
     sent.filter((m) => m.type === 'response' && m.command === command).pop();
   return { adapter, sent, request, events, response };
 }
+
+describe('red dots from the gutter', () => {
+  const dot = (file: string | undefined, line: number, more: Record<string, unknown> = {}) => ({
+    file,
+    line,
+    enabled: true,
+    ...more,
+  });
+
+  it('keeps enabled, plain dots in .py files, once per line, under every spelling of the path', () => {
+    const dots = redDotsOf(
+      [
+        dot('/export/w/m.py', 3),
+        dot('/export/w/m.py', 3),
+        dot('/export/w/m.py', 7),
+        dot('/export/w/m.py', 8, { enabled: false }),
+        dot('/export/w/m.py', 9, { condition: 'x' }),
+        dot('/export/w/m.py', 10, { logMessage: 'hi' }),
+        dot('/export/w/m.py', 11, { hitCondition: '3' }),
+        dot('/export/w/notes.txt', 1),
+        dot(undefined, 2),
+      ],
+      (f) => [f, f.replace('/export', '')],
+    );
+
+    expect([...dots]).toEqual([
+      ['/export/w/m.py', [3, 7]],
+      ['/w/m.py', [3, 7]],
+    ]);
+  });
+
+  it('takes a setBreakpoints request as the newest word on its file, and drops a file it empties', () => {
+    const before: DotsByFile = new Map([
+      ['/w/a.py', [1]],
+      ['/w/m.py', [3]],
+    ]);
+
+    const changed = withFileDots(
+      before,
+      '/w/m.py',
+      [{ line: 5 }, { line: 5 }, { line: 6, condition: 'x' }],
+      (f) => [f],
+    );
+    const emptied = withFileDots(before, '/w/m.py', [], (f) => [f]);
+
+    expect([...changed]).toEqual([
+      ['/w/a.py', [1]],
+      ['/w/m.py', [5]],
+    ]);
+    expect([...emptied]).toEqual([['/w/a.py', [1]]]);
+    expect(
+      sameDots(
+        before,
+        new Map([
+          ['/w/m.py', [3]],
+          ['/w/a.py', [1]],
+        ]),
+      ),
+    ).toBe(true);
+    expect(sameDots(before, changed)).toBe(false);
+  });
+
+  it('verifies only the dots that hold a break in a live run', () => {
+    const wanted = [{ line: 2 }, { line: 4 }];
+
+    expect(verifiedDots('/w/m.py', wanted, [2], true)).toEqual([
+      { verified: true, line: 2 },
+      { verified: false, line: 4, message: expect.stringMatching(/no code for this line yet/) },
+    ]);
+    expect(verifiedDots('/w/m.py', wanted, [2], false).every((d) => !d.verified)).toBe(true);
+    expect(verifiedDots(undefined, wanted, undefined, true).every((d) => !d.verified)).toBe(true);
+  });
+});
 
 describe('the debug adapter', () => {
   it('reports stopped once attach and configurationDone have both arrived', () => {
@@ -480,16 +567,114 @@ describe('the debug adapter', () => {
     expect(answer).not.toHaveBeenCalled();
   });
 
-  it('reports red-dot breakpoints as unverified rather than pretending', () => {
+  it('says red dots belong in .py files when asked for some in a notebook cell', async () => {
     const { request, response } = adapterFor({ answer: () => {} });
     request('initialize');
 
-    request('setBreakpoints', { breakpoints: [{ line: 3 }] });
+    request('setBreakpoints', {
+      source: { path: 'vscode-notebook-cell:/w/a.ipynb#W0sZmlsZQ' },
+      breakpoints: [{ line: 3 }],
+    });
+    await settle();
 
     expect(response('setBreakpoints')?.body).toEqual({
       breakpoints: [
-        { verified: false, line: 3, message: 'GemDB stops only at breakpoint() for now.' },
+        {
+          verified: false,
+          line: 3,
+          message:
+            'Red dots work in .py files. In a notebook cell, put breakpoint() on the line instead.',
+        },
       ],
+    });
+  });
+
+  it('re-arms a paused run when a .py file’s dots change, and verifies the dots that took', async () => {
+    const rearm = vi.fn((dots: DotsByFile) =>
+      Promise.resolve(
+        new Map([['/w/m.py', [...(dots.get('/w/m.py') ?? [])].filter((l) => l !== 9)]]),
+      ),
+    );
+    const { request, response } = adapterFor({ answer: () => {}, rearm });
+    request('initialize');
+    request('launch', { gemdbPause: '1' });
+
+    request('setBreakpoints', {
+      source: { path: '/w/m.py' },
+      breakpoints: [{ line: 4 }, { line: 9 }, { line: 6, condition: 'x > 1' }],
+    });
+    await settle();
+
+    expect(rearm).toHaveBeenCalledTimes(1);
+    // A conditional dot is not set at all, rather than set as a plain one.
+    expect([...rearm.mock.calls[0][0]]).toEqual([['/w/m.py', [4, 9]]]);
+    expect(response('setBreakpoints')?.body).toEqual({
+      breakpoints: [
+        { verified: true, line: 4 },
+        { verified: false, line: 9, message: expect.stringMatching(/no code for this line yet/) },
+        { verified: false, line: 6, message: expect.stringMatching(/Conditions/) },
+      ],
+    });
+  });
+
+  it('leaves a paused run alone when VS Code re-sends the dots it was armed with', async () => {
+    debug.breakpoints = [
+      new SourceBreakpoint({
+        uri: { scheme: 'file', fsPath: '/w/m.py' },
+        range: { start: { line: 3 } },
+      }),
+    ];
+    const rearm = vi.fn(() => Promise.resolve(new Map<string, number[]>()));
+    const queries: string[] = [];
+    const sent: Array<Record<string, unknown>> = [];
+    const adapter = new PauseDebugAdapter(
+      () => ({
+        label: 'm.py',
+        frames: [],
+        scopes: () => [],
+        variables: () => Promise.resolve([]),
+        answer: () => {},
+        rearm,
+        query: (code: string) => {
+          queries.push(code);
+          return Promise.resolve(`/w/m.py${F}4${R}`);
+        },
+      }),
+      () => redDotsOf([{ file: '/w/m.py', line: 4, enabled: true }], (f) => [f]),
+    );
+    adapter.onDidSendMessage((m) => sent.push(m as Record<string, unknown>));
+    adapter.handleMessage({
+      seq: 1,
+      type: 'request',
+      command: 'launch',
+      arguments: { gemdbPause: '1' },
+    });
+    adapter.handleMessage({
+      seq: 2,
+      type: 'request',
+      command: 'setBreakpoints',
+      arguments: { source: { path: '/w/m.py' }, breakpoints: [{ line: 4 }] },
+    });
+    await settle();
+    debug.breakpoints = [];
+
+    // Re-arming converts the paused stack to slower code, so an unchanged set only asks.
+    expect(rearm).not.toHaveBeenCalled();
+    expect(queries).toEqual([armedLinesQuery(new Map([['/w/m.py', [4]]]))]);
+    const reply = sent.find((m) => m.command === 'setBreakpoints');
+    expect(reply?.body).toEqual({ breakpoints: [{ verified: true, line: 4 }] });
+  });
+
+  it('sets no red dot on a saved stack, which has no run to stop', async () => {
+    const { request, response } = adapterFor({ answer: () => {}, saved: true });
+    request('initialize');
+    request('launch', { gemdbPause: '1' });
+
+    request('setBreakpoints', { source: { path: '/w/m.py' }, breakpoints: [{ line: 2 }] });
+    await settle();
+
+    expect(response('setBreakpoints')?.body).toEqual({
+      breakpoints: [{ verified: false, line: 2, message: expect.stringMatching(/saved stack/) }],
     });
   });
 
@@ -598,6 +783,8 @@ describe('opening the debugger at a breakpoint()', () => {
         connected: true,
       } as unknown as HaltRequest['session'],
       process: 42n,
+      reason: 'breakpoint()',
+      rearm: () => Promise.resolve(new Map()),
       query: (code) => {
         queries.push(code);
         return Promise.resolve(code.includes('Suspended') ? PAUSED : '');
@@ -656,6 +843,48 @@ describe('opening the debugger at a breakpoint()', () => {
     expect(stackFrames.map((f) => f.name)).toEqual(['go', 'helper']);
     await expect(answered).resolves.toBe('continue');
     registration.dispose();
+  });
+
+  it('opens a red dot’s pause as a breakpoint, reading the stack at the step point', async () => {
+    const registration = registerBreakpointDebugger();
+    const request = { ...haltRequest(), reason: 'red dot' as const };
+    const answered = installed!(request);
+    await settle();
+    const adapter = adapterForLastStart();
+
+    ask(adapter, 'initialize');
+    ask(adapter, 'launch', { gemdbPause: pauseIdOf(0) });
+    const stopped = ask(adapter, 'configurationDone').find((m) => m.event === 'stopped');
+    ask(adapter, 'continue');
+
+    expect(stopped?.body).toMatchObject({
+      reason: 'breakpoint',
+      description: 'Paused on breakpoint',
+    });
+    // The innermost frame's line comes from its step point, not Grail's ip lookup.
+    expect(request.queries[0]).toContain('first := true.');
+    await expect(answered).resolves.toBe('continue');
+    registration.dispose();
+  });
+
+  it('serves the gutter’s dots to the session while registered', () => {
+    debug.breakpoints = [
+      new SourceBreakpoint({
+        uri: { scheme: 'file', fsPath: '/nowhere/m.py' },
+        range: { start: { line: 4 } },
+      }),
+      new SourceBreakpoint({
+        uri: { scheme: 'vscode-notebook-cell', fsPath: '/nowhere/a.ipynb' },
+        range: { start: { line: 0 } },
+      }),
+    ];
+    const registration = registerBreakpointDebugger();
+    const served = dotSource?.();
+    registration.dispose();
+    debug.breakpoints = [];
+
+    expect(served && [...served]).toEqual([['/nowhere/m.py', [5]]]);
+    expect(dotSource).toBeUndefined();
   });
 
   it('offers the notebook’s globals under a cell’s frame, not under an imported module’s', async () => {

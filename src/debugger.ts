@@ -14,14 +14,16 @@ import {
   parsePausedStack,
   pausedStackQuery,
 } from './pauseVariables';
-import { HaltAnswer, HaltRequest, setHaltHandler } from './session';
+import { DotsByFile, armedLinesQuery, parseArmed } from './redDots';
+import { HaltAnswer, HaltRequest, setHaltHandler, setRedDotSource } from './session';
 
 /**
- * A debugger for Python paused at `breakpoint()`.
+ * A debugger for Python paused at `breakpoint()` or at a red dot in a `.py` file.
  *
  * Nobody launches it. GemDB's selling point is that you just run the code, so
  * there is no Debug command and no launch configuration: when a notebook cell
- * reaches breakpoint(), the session's halt handler starts a debug session
+ * reaches breakpoint(), or any run reaches a red dot (`redDots.ts`), the
+ * session's halt handler starts a debug session
  * aimed at that paused evaluation, and VS Code's own Run and Debug view,
  * toolbar and stopped-line highlight appear mid-run. Continue resumes the
  * cell where it paused; Stop ends it.
@@ -34,11 +36,11 @@ import { HaltAnswer, HaltRequest, setHaltHandler } from './session';
  * breakpoint() must not write the notebook to disk.
  *
  * Deliberately small for now: the call stack, the highlight, each frame's
- * Locals and the notebook's Globals, Continue and Stop, and saving a row's
- * object under gemdb.root (`savedObjects.ts`). Stepping, evaluation
- * and Restart answer "not yet" rather than pretending, and red-dot breakpoints
- * report themselves unverified, because Grail has no step or breakpoint
- * support to build them on.
+ * Locals and the notebook's Globals, Continue and Stop, red dots in `.py`
+ * files, and saving a row's object under gemdb.root (`savedObjects.ts`).
+ * Stepping, evaluation and Restart answer "not yet" rather than pretending,
+ * and so do red dots in notebook cells and dots with a condition, hit count
+ * or log message.
  *
  * The adapter is inline (`DebugAdapterInlineImplementation`) and speaks the
  * Debug Adapter Protocol directly rather than through `@vscode/debugadapter`:
@@ -108,6 +110,8 @@ export interface Pause {
   description?: string;
   /** A saved stack opened again: nothing to resume, and nothing more to save. */
   saved?: boolean;
+  /** Replace the run's red dots while paused (see `HaltRequest.rearm`); absent on a saved stack. */
+  rearm?(dots: DotsByFile): Promise<Map<string, number[]>>;
 }
 
 /**
@@ -309,6 +313,139 @@ export function toDapFrames(
 }
 
 // ---------------------------------------------------------------------------
+// Red dots.
+// ---------------------------------------------------------------------------
+
+/** One gutter breakpoint, as much of it as red dots read. */
+export interface GutterDot {
+  /** The file's path, or undefined for something that is not a file on disk (a notebook cell). */
+  file: string | undefined;
+  /** 1-based. */
+  line: number;
+  enabled: boolean;
+  condition?: string;
+  hitCondition?: string;
+  logMessage?: string;
+}
+
+/** Whether a dot asks for more than "stop here", which red dots cannot do yet. */
+function isPlain(dot: Pick<GutterDot, 'condition' | 'hitCondition' | 'logMessage'>): boolean {
+  return !dot.condition && !dot.hitCondition && !dot.logMessage;
+}
+
+/** Every spelling of a path the database might know a file by: as given, and with links resolved. */
+export type PathSpellings = (file: string) => string[];
+
+function spellingsOnDisk(file: string): string[] {
+  try {
+    const real = fs.realpathSync(file);
+    return real === file ? [file] : [file, real];
+  } catch {
+    return [file];
+  }
+}
+
+/**
+ * The red dots GemDB can set: enabled, plain, in a `.py` file. Each file is
+ * listed under every spelling of its path, because Grail names a module's
+ * file by the path it found it at — one spelling through a link, another
+ * without (`/uffda1` and `/export/uffda1` on this kind of host).
+ */
+export function redDotsOf(
+  dots: GutterDot[],
+  spellings: PathSpellings = spellingsOnDisk,
+): DotsByFile {
+  const byFile = new Map<string, number[]>();
+  for (const dot of dots) {
+    if (!dot.enabled || !dot.file?.endsWith('.py') || !isPlain(dot)) continue;
+    const lines = byFile.get(dot.file) ?? [];
+    if (!lines.includes(dot.line)) lines.push(dot.line);
+    byFile.set(dot.file, lines);
+  }
+  const all = new Map<string, number[]>();
+  for (const [file, lines] of byFile) {
+    for (const spelling of spellings(file)) all.set(spelling, lines);
+  }
+  return all;
+}
+
+/** The gutter's breakpoints, as red dots read them. */
+function gutterDots(): GutterDot[] {
+  return vscode.debug.breakpoints
+    .filter((b): b is vscode.SourceBreakpoint => b instanceof vscode.SourceBreakpoint)
+    .map((b) => ({
+      file: b.location.uri.scheme === 'file' ? b.location.uri.fsPath : undefined,
+      line: b.location.range.start.line + 1,
+      enabled: b.enabled,
+      condition: b.condition,
+      hitCondition: b.hitCondition,
+      logMessage: b.logMessage,
+    }));
+}
+
+const NOT_IN_CELLS =
+  'Red dots work in .py files. In a notebook cell, put breakpoint() on the line instead.';
+const NOT_PLAIN = "Conditions, hit counts and log messages on red dots aren't supported yet.";
+const NOT_ARMED =
+  "GemDB has no code for this line yet: it is blank, or its file hasn't been imported in this run.";
+const NOT_LIVE = 'This is a saved stack: there is no run for a red dot to stop.';
+
+/** A DAP `setBreakpoints` request's own breakpoints. */
+interface WantedDot {
+  line: number;
+  condition?: string;
+  hitCondition?: string;
+  logMessage?: string;
+}
+
+/**
+ * `dots` with one file's entry replaced by what a `setBreakpoints` request
+ * asks for — the request is the newest word on that file — under every
+ * spelling `dots` already had for it, or `file` alone.
+ */
+export function withFileDots(
+  dots: DotsByFile,
+  file: string,
+  wanted: WantedDot[],
+  spellings: PathSpellings = spellingsOnDisk,
+): DotsByFile {
+  const next = new Map(dots);
+  const lines = file.endsWith('.py') ? [...new Set(wanted.filter(isPlain).map((w) => w.line))] : [];
+  for (const spelling of spellings(file)) {
+    if (lines.length > 0) next.set(spelling, lines);
+    else next.delete(spelling);
+  }
+  return next;
+}
+
+/** Whether two sets of red dots would set the same breaks. */
+export function sameDots(a: DotsByFile, b: DotsByFile): boolean {
+  if (a.size !== b.size) return false;
+  for (const [file, lines] of a) {
+    const other = b.get(file);
+    if (!other || other.length !== lines.length) return false;
+    if (lines.some((line) => !other.includes(line))) return false;
+  }
+  return true;
+}
+
+/** The DAP answer to a `setBreakpoints` request, given what is now armed in `file`. */
+export function verifiedDots(
+  file: string | undefined,
+  wanted: WantedDot[],
+  armed: readonly number[] | undefined,
+  live: boolean,
+): Array<{ verified: boolean; line: number; message?: string }> {
+  return wanted.map((w) => {
+    if (!file?.endsWith('.py')) return { verified: false, line: w.line, message: NOT_IN_CELLS };
+    if (!isPlain(w)) return { verified: false, line: w.line, message: NOT_PLAIN };
+    if (!live) return { verified: false, line: w.line, message: NOT_LIVE };
+    if (armed?.includes(w.line)) return { verified: true, line: w.line };
+    return { verified: false, line: w.line, message: NOT_ARMED };
+  });
+}
+
+// ---------------------------------------------------------------------------
 // The adapter.
 // ---------------------------------------------------------------------------
 
@@ -342,8 +479,15 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
   private stoppedSent = false;
   private settled = false;
   private ended = false;
+  /** The run's red dots as this session last set them; read from the gutter at launch. */
+  private dots: DotsByFile = new Map();
+  /** setBreakpoints requests answered one at a time, so each builds on the last. */
+  private dotWork: Promise<void> = Promise.resolve();
 
-  constructor(private readonly lookup: (id: string) => Pause | undefined) {}
+  constructor(
+    private readonly lookup: (id: string) => Pause | undefined,
+    private readonly currentDots: () => DotsByFile = () => new Map(),
+  ) {}
 
   handleMessage(message: vscode.DebugProtocolMessage): void {
     const request = message as DapRequest;
@@ -373,6 +517,9 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
           return;
         }
         this.attached = true;
+        // What the run was armed from: the gutter as it is now, which is what
+        // the session armed from when the run (or its last import) began.
+        this.dots = this.currentDots();
         this.respond(request);
         this.maybeStopped();
         return;
@@ -383,16 +530,9 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
         this.maybeStopped();
         return;
       case 'setBreakpoints': {
-        // Honest about red dots: they are not wired to anything yet.
-        const wanted =
-          (request.arguments?.breakpoints as Array<{ line: number }> | undefined) ?? [];
-        this.respond(request, {
-          breakpoints: wanted.map((b) => ({
-            verified: false,
-            line: b.line,
-            message: 'GemDB stops only at breakpoint() for now.',
-          })),
-        });
+        const wanted = (request.arguments?.breakpoints as WantedDot[] | undefined) ?? [];
+        const file = (request.arguments?.source as { path?: string } | undefined)?.path;
+        this.dotWork = this.dotWork.then(() => this.setDots(request, file, wanted));
         return;
       }
       case 'setExceptionBreakpoints':
@@ -484,6 +624,35 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
       default:
         this.fail(request, `GemDB's debugger does not support '${request.command}' yet.`, false);
     }
+  }
+
+  /**
+   * Answer one setBreakpoints request. A change to a `.py` file's dots re-arms
+   * the paused run, so a dot added now stops it later in this run; an
+   * unchanged set — VS Code re-sends every file's dots as the session starts —
+   * leaves the run alone, since re-arming converts its stack to slower code.
+   */
+  private async setDots(request: DapRequest, file: string | undefined, wanted: WantedDot[]) {
+    const pause = this.pause;
+    const live = !!pause?.rearm && !pause.saved;
+    let armed: readonly number[] | undefined;
+    if (live && file?.endsWith('.py')) {
+      const next = withFileDots(this.dots, file, wanted);
+      try {
+        const lines = sameDots(next, this.dots)
+          ? pause.query
+            ? parseArmed(await pause.query(armedLinesQuery(next)))
+            : new Map<string, number[]>()
+          : await pause.rearm!(next);
+        this.dots = next;
+        armed = spellingsOnDisk(file)
+          .map((spelling) => lines.get(spelling))
+          .find((found) => found !== undefined);
+      } catch (e) {
+        log(`Could not set red dots in ${path.basename(file)}: ${errorMessage(e)}`);
+      }
+    }
+    this.respond(request, { breakpoints: verifiedDots(file, wanted, armed, live) });
   }
 
   dispose(): void {
@@ -606,7 +775,9 @@ async function readPause(request: HaltRequest): Promise<PauseView> {
     const scopeKey =
       owner.kind === 'notebook' ? owner.key : owner.kind === 'file' ? MAIN_MODULE : undefined;
     const { frames, globals } = parsePausedStack(
-      await request.query(pausedStackQuery(request.process, scopeKey)),
+      await request.query(
+        pausedStackQuery(request.process, scopeKey, request.reason === 'red dot'),
+      ),
     );
     const ownFile = owner.kind === 'file' ? runFileOf(owner.key) : '<grail>';
     const scopes = new Map<number, DapScope[]>();
@@ -617,7 +788,7 @@ async function readPause(request: HaltRequest): Promise<PauseView> {
     const texts: Array<string[] | undefined> = [];
     return { frames: toDapFrames(frames, running, cells, readFileLines, texts), scopes, texts };
   } catch (e) {
-    log(`Could not read the stack at breakpoint(): ${errorMessage(e)}`);
+    log(`Could not read the stack at a pause: ${errorMessage(e)}`);
     return { frames: [], scopes: new Map(), texts: [] };
   }
 }
@@ -651,7 +822,7 @@ function handleKey(containerRef: number, name: string): string {
 }
 
 /**
- * Answer every breakpoint() in this window with a debug session.
+ * Answer every breakpoint() and red dot in this window with a debug session.
  *
  * The halt handler registers the pause, starts a debug session aimed at it,
  * and waits for the adapter to settle it. If the session cannot start, the
@@ -670,11 +841,15 @@ export function registerBreakpointDebugger(): vscode.Disposable {
         pausesByDebugSession.set(session.id, id);
       }
       return new vscode.DebugAdapterInlineImplementation(
-        new PauseDebugAdapter((wanted) => pauses.get(wanted)),
+        new PauseDebugAdapter(
+          (wanted) => pauses.get(wanted),
+          () => redDotsOf(gutterDots()),
+        ),
       );
     },
   });
 
+  setRedDotSource(() => redDotsOf(gutterDots()));
   setHaltHandler(
     (request) =>
       new Promise<HaltAnswer>((resolve) => {
@@ -716,7 +891,8 @@ export function registerBreakpointDebugger(): vscode.Disposable {
           if (session) void vscode.debug.stopDebugging(session);
         });
 
-        log(`breakpoint() in ${label}: paused`);
+        const where = request.reason === 'red dot' ? 'a red dot' : 'breakpoint()';
+        log(`${where} in ${label}: paused`);
         void readPause(request).then(({ frames, scopes, texts }) => {
           if (settled) return;
           const handles = new Map<string, number>();
@@ -729,7 +905,9 @@ export function registerBreakpointDebugger(): vscode.Disposable {
             answer,
             handleFor: (containerRef, name) => handles.get(handleKey(containerRef, name)),
             query: (code) => request.query(code),
+            rearm: (dots) => request.rearm(dots),
             texts,
+            ...(request.reason === 'red dot' ? { description: 'Paused on breakpoint' } : {}),
           });
           vscode.debug
             .startDebugging(
@@ -790,6 +968,7 @@ export function registerBreakpointDebugger(): vscode.Disposable {
   return new vscode.Disposable(() => {
     opener = undefined;
     setHaltHandler(undefined);
+    setRedDotSource(undefined);
     factory.dispose();
     for (const [id, pause] of [...pauses.entries()]) {
       const session = sessionsByPause.get(id);

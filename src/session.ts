@@ -1,9 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { dbPassword, dbUser, engineVersion, stoneName } from './config';
-import { OOP_ILLEGAL, OOP_NIL } from './gci/gciConstants';
+import { GCI_PERFORM_FLAG_ENABLE_DEBUG, OOP_ILLEGAL, OOP_NIL } from './gci/gciConstants';
 import { GciError, GciLibrary } from './gci/gciLibrary';
 import { parsePythonStack, pythonStackQuery } from './haltStack';
+import { DotsByFile, armQuery, hookStopQuery, parseArmed } from './redDots';
 import { errorMessage, log } from './log';
 import { enginePath } from './paths';
 import { explainLibraryLoadFailure, sharedLibraryExtension } from './platform';
@@ -250,11 +251,29 @@ let inputHandler: InputHandler | undefined;
 // surfaces here as GCI error 2709 with the suspended GsProcess in
 // `err.context`. That process can be read (its frames, via Grail) and then
 // resumed with GciTsContinueWith or discarded with GciTsClearStack; both
-// measured on 4.0.0.a4 with the execute flags this file already passes.
+// measured on 4.0.0.a4 with flags 0 and again with `RUN_FLAGS`. A red dot
+// arrives the same way, as error 6005 (`BREAKPOINT`), and takes the same path.
 // ---------------------------------------------------------------------------
 
 /** GCI error for a Halt — what Grail's breakpoint() signals. */
 const HALT = 2709;
+
+/** GCI error for a method breakpoint — a red dot, set with `setBreakAtStepPoint:`. */
+const BREAKPOINT = 6005;
+
+/**
+ * Flags for a Python evaluation and every resume of it. With flags 0 the
+ * gem's debugger is off and a red dot never fires; `ENABLE_DEBUG` turns it on
+ * in a native run at no measured cost. Queries stay at 0, so a `__repr__` the
+ * Variables view runs cannot stop at a red dot.
+ */
+const RUN_FLAGS = GCI_PERFORM_FLAG_ENABLE_DEBUG;
+
+/** What a log line says was armed: each file's name and lines. */
+function describeArmed(armed: Map<string, number[]>): string {
+  if (armed.size === 0) return 'nothing loaded yet';
+  return [...armed].map(([file, lines]) => `${path.basename(file)} ${lines.join(',')}`).join('; ');
+}
 
 /** Whether an error's `context` names a suspended process, which can be cleared. */
 function isProcess(context: bigint): boolean {
@@ -269,6 +288,13 @@ export interface HaltRequest {
   session: GciSession;
   /** The suspended GsProcess — what a stack query reads. */
   process: bigint;
+  /** What stopped it: a `breakpoint()` call, or a red dot (`redDots.ts`). */
+  reason: 'breakpoint()' | 'red dot';
+  /**
+   * Replace the run's red dots while it is paused, so a dot added now stops
+   * it later in this run. Answers the lines that now hold a break, by file.
+   */
+  rearm(dots: DotsByFile): Promise<Map<string, number[]>>;
   /**
    * Run Smalltalk while the evaluation stays paused — what the debugger reads
    * the stack and the Variables with. Nonblocking, one query at a time, and
@@ -284,6 +310,19 @@ export interface HaltRequest {
 export type HaltHandler = (request: HaltRequest) => Promise<HaltAnswer>;
 
 let haltHandler: HaltHandler | undefined;
+
+/** The red dots of the moment, read at the start of each run. */
+export type RedDotSource = () => DotsByFile;
+
+let redDotSource: RedDotSource | undefined;
+
+/**
+ * Install where red dots come from — the editor's gutter. One per process,
+ * like `setHaltHandler`; with none installed, no run is armed.
+ */
+export function setRedDotSource(source: RedDotSource | undefined): void {
+  redDotSource = source;
+}
 
 /**
  * Install this process's answer to breakpoint(). One per process, like
@@ -424,6 +463,8 @@ export class GciSession {
   private pausedQueries: Promise<void> = Promise.resolve();
   /** Whether a query run while paused is executing now, so a cancel can break it. */
   private pausedQueryRunning = false;
+  /** The red dots this session's breaks were last set from; empty when none are set. */
+  private redDots: DotsByFile = new Map();
 
   /** When this session last ran something, for "which is idlest". */
   private lastUsedAt = Date.now();
@@ -601,9 +642,28 @@ export class GciSession {
       // error) comes back. GciTsContinueWith runs on a koffi worker thread,
       // so the event loop — and with it GciTsBreak — stays available while
       // the rest of the Python runs.
-      let { result: oop, err } = await this.submitAndWait(handle, code);
-      while (oop === OOP_ILLEGAL && (err.number === CLIENT_FORWARDER_SEND || err.number === HALT)) {
-        if (err.number === HALT) {
+      this.armRedDots(handle);
+      let { result: oop, err } = await this.submitAndWait(handle, code, undefined, RUN_FLAGS);
+      while (
+        oop === OOP_ILLEGAL &&
+        (err.number === CLIENT_FORWARDER_SEND || err.number === HALT || err.number === BREAKPOINT)
+      ) {
+        // One of the import hooks red dots set: arm what the import built, and go on.
+        if (
+          err.number === BREAKPOINT &&
+          !this.breakPending &&
+          (await this.answerHookStop(err.context))
+        ) {
+          ({ result: oop, err } = await this.gci.GciTsContinueWithAsync(
+            handle,
+            err.context,
+            OOP_ILLEGAL,
+            null,
+            RUN_FLAGS,
+          ));
+          continue;
+        }
+        if (err.number === HALT || err.number === BREAKPOINT) {
           // An interrupt sent while the gem was still running can land after
           // it reached breakpoint(): the user already asked to stop, so do
           // not open a debugger for them to dismiss.
@@ -618,11 +678,15 @@ export class GciSession {
               err.context,
               OOP_ILLEGAL,
               null,
-              0,
+              RUN_FLAGS,
             ));
             continue;
           }
-          const answer = await this.awaitHalt(haltHandler, err.context);
+          const answer = await this.awaitHalt(
+            haltHandler,
+            err.context,
+            err.number === BREAKPOINT ? 'red dot' : 'breakpoint()',
+          );
           // A query the debugger still has in flight goes first: GCI takes
           // one call at a time, and the last one queued drops the registry.
           await this.pausedQueries;
@@ -641,7 +705,7 @@ export class GciSession {
             err.context,
             OOP_ILLEGAL, // resume the halt as if it returned; no replacement value
             null,
-            0,
+            RUN_FLAGS,
           ));
           continue;
         }
@@ -663,7 +727,7 @@ export class GciSession {
           err.context,
           reply,
           null,
-          0,
+          RUN_FLAGS,
         ));
       }
       if (oop === OOP_ILLEGAL) {
@@ -687,6 +751,7 @@ export class GciSession {
     handle: unknown,
     code: string,
     whileWaiting?: () => void,
+    flags = 0,
   ): Promise<{ result: bigint; err: GciError }> {
     const started = this.gci.GciTsNbExecute(
       handle,
@@ -696,7 +761,7 @@ export class GciSession {
       this.gci.utf8ClassOop(handle),
       OOP_ILLEGAL, // no context receiver
       this.gci.nilOop(),
-      0,
+      flags,
       0,
     );
     if (!started.success) {
@@ -873,6 +938,41 @@ export class GciSession {
   }
 
   /**
+   * Set this session's breaks from the red dots of the moment, before a run.
+   * Skipped when there are none now and none were set before. A failure is
+   * logged: the run goes ahead, and only its red dots are lost.
+   */
+  private armRedDots(handle: unknown): void {
+    const dots = redDotSource?.() ?? new Map<string, number[]>();
+    if (dots.size === 0 && this.redDots.size === 0) return;
+    try {
+      const armed = parseArmed(this.gci.executeAndFetchString(handle, armQuery(dots)));
+      this.redDots = dots;
+      if (dots.size > 0) log(`Red dots armed (${this.label}): ${describeArmed(armed)}`);
+    } catch (e) {
+      log(`Could not set the red dots (${this.label}): ${errorMessage(e)}`);
+    }
+  }
+
+  /**
+   * Whether a breakpoint stop is one of the import hooks (`redDots.ts`), arming
+   * what that import built if so. A query that fails counts as a red dot, so
+   * the user sees the stop rather than the run silently going on.
+   */
+  private async answerHookStop(process: bigint): Promise<boolean> {
+    try {
+      const raw = await this.runPausedQuery(hookStopQuery(process, this.redDots));
+      if (!raw.startsWith('hook')) return false;
+      const armed = parseArmed(raw);
+      if (armed.size > 0) log(`Red dots armed on import (${this.label}): ${describeArmed(armed)}`);
+      return true;
+    } catch (e) {
+      log(`Could not read a breakpoint stop (${this.label}): ${errorMessage(e)}`);
+      return false;
+    }
+  }
+
+  /**
    * The line a debugger-less host prints at a breakpoint(): where it was, and
    * that the run goes on. The same words `gemdb-run.tpz` prints in file mode.
    * Naming the place is best-effort — a stack Grail cannot read still gets the
@@ -898,7 +998,11 @@ export class GciSession {
    * resolves it as a stop and tells the handler to take its debugger down.
    * A handler that throws stops the evaluation rather than leaving it paused.
    */
-  private awaitHalt(handler: HaltHandler, process: bigint): Promise<HaltAnswer> {
+  private awaitHalt(
+    handler: HaltHandler,
+    process: bigint,
+    reason: HaltRequest['reason'],
+  ): Promise<HaltAnswer> {
     return new Promise((resolve) => {
       const cancels: Array<() => void> = [];
       let settled = false;
@@ -924,7 +1028,13 @@ export class GciSession {
       handler({
         session: this,
         process,
+        reason,
         query,
+        rearm: async (dots) => {
+          const armed = parseArmed(await query(armQuery(dots, process)));
+          this.redDots = dots;
+          return armed;
+        },
         onCancel: (callback) => cancels.push(callback),
       }).then(
         (answer) => finish(answer),
