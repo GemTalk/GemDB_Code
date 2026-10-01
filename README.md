@@ -221,8 +221,8 @@ to merge into that client's configuration file. See
 GemDB Code installs the Brain Freeze demo and its other folders under `~/GemDB`, and VS Code opens
 any folder you have not trusted in Restricted Mode. So by default, GemDB Code's folders open in
 Restricted Mode. There, you can use the GemDB Code sidebar and start or stop the database, but you
-cannot run Python: notebook cells, **Run Python File in GemDB**, **Debug Python File in GemDB** and
-the GemDB Shell all wait until
+cannot run Python: notebook cells, **Run Python File in GemDB**, **Debug Python File in GemDB**,
+and the GemDB Shell all wait until
 you trust the folder, and connecting Claude Code needs a trusted folder too.
 
 To work with GemDB Code, trust `~/GemDB` once: run **Workspaces: Manage Workspace Trust** from the

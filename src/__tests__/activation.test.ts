@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { __commands, __resetSettings, __setSetting, env } from '../__mocks__/vscode';
+import {
+  __changeSetting,
+  __commands,
+  __resetSettings,
+  __setSetting,
+  env,
+} from '../__mocks__/vscode';
 import { engineDirName, extentPath } from '../paths';
 import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 
@@ -333,6 +339,44 @@ describe('activate()', () => {
     await expect.poll(() => existsSync(lock)).toBe(false);
 
     expect(ensureOsConfigured).not.toHaveBeenCalled();
+  });
+
+  // The walkthrough picks its setup and stopping steps on this key, and can
+  // open before the sidebar — the other place it is set — has ever rendered.
+  describe('telling the walkthrough whose database it is', () => {
+    let published: unknown[];
+
+    beforeEach(() => {
+      published = [];
+      __commands.set('setContext', (key, value) => {
+        if (key === 'gemdb.externalDatabase') published.push(value);
+      });
+    });
+
+    it('says an administrator runs it before the sidebar has rendered', () => {
+      __setSetting('gemdb.externalDatabase.gemstone', '/opt/gemstone/product');
+
+      activate(fakeExtensionContext());
+
+      expect(published[0]).toBe(true);
+    });
+
+    it('says GemDB Code runs it when no external database is set', () => {
+      activate(fakeExtensionContext());
+
+      expect(published[0]).toBe(false);
+    });
+
+    it('follows the setting when it changes', () => {
+      activate(fakeExtensionContext());
+
+      __changeSetting('gemdb.externalDatabase.gemstone', '/opt/gemstone/product');
+      const afterSetting = published.at(-1);
+      __changeSetting('gemdb.externalDatabase.gemstone', '');
+      const afterClearing = published.at(-1);
+
+      expect([afterSetting, afterClearing]).toEqual([true, false]);
+    });
   });
 
   describe('gemdb.uninstall', () => {

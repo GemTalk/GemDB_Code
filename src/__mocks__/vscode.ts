@@ -36,8 +36,24 @@ export function __setSetting(key: string, value: unknown): void {
   settings.set(key, value);
 }
 
+type ConfigurationListener = (event: { affectsConfiguration(section: string): boolean }) => void;
+const __configurationListeners: ConfigurationListener[] = [];
+
+/**
+ * Change a setting and tell whoever is listening, as VS Code does: a section
+ * is affected when it is the key or any prefix of it.
+ */
+export function __changeSetting(key: string, value: unknown): void {
+  settings.set(key, value);
+  const event = {
+    affectsConfiguration: (section: string) => key === section || key.startsWith(`${section}.`),
+  };
+  for (const listener of [...__configurationListeners]) listener(event);
+}
+
 export function __resetSettings(): void {
   settings.clear();
+  __configurationListeners.length = 0;
   __log.length = 0;
   __controllers.length = 0;
   __commands.clear();
@@ -470,9 +486,10 @@ export const workspace = {
   ): Disposable {
     return new Disposable(() => {});
   },
-  onDidChangeConfiguration(
-    _listener: (event: { affectsConfiguration(section: string): boolean }) => void,
-  ): Disposable {
-    return new Disposable(() => {});
+  onDidChangeConfiguration(listener: ConfigurationListener): Disposable {
+    __configurationListeners.push(listener);
+    return new Disposable(() => {
+      __configurationListeners.splice(__configurationListeners.indexOf(listener), 1);
+    });
   },
 };

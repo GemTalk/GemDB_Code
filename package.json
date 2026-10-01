@@ -587,12 +587,25 @@
             },
             "completionEvents": [
               "onContext:gemdb.installed"
-            ]
+            ],
+            "when": "!gemdb.externalDatabase"
+          },
+          {
+            "id": "installExternal",
+            "title": "Setup for this machine's database",
+            "description": "GemDB Code is set to use this machine's database, which its administrator runs. Setup installs Python support into your account. It downloads nothing.\n[Set Up GemDB](command:gemdb.install)",
+            "media": {
+              "markdown": "resources/walkthrough/install-external.md"
+            },
+            "completionEvents": [
+              "onContext:gemdb.installed"
+            ],
+            "when": "gemdb.externalDatabase"
           },
           {
             "id": "repl",
             "title": "Run your first Python",
-            "description": "Open a Python prompt that runs inside the database. If the database is not running, GemDB Code starts it automatically when you open the shell.\n[Open GemDB Shell](command:gemdb.openRepl)",
+            "description": "Open a Python prompt that runs inside the database. If the database is stopped and GemDB Code runs it, opening the shell starts it.\n[Open GemDB Shell](command:gemdb.openRepl)",
             "media": {
               "markdown": "resources/walkthrough/repl.md"
             },
@@ -631,7 +644,8 @@
             },
             "completionEvents": [
               "onCommand:gemdb.stop"
-            ]
+            ],
+            "when": "!gemdb.externalDatabase"
           }
         ]
       }
