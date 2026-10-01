@@ -100,7 +100,8 @@ The engine is unchanged at GemStone 4.0.0.a4, so a database created by GemDB
   cell, while the first-run setup was still downloading started a second download into the same
   file, and both failed — one with "The download ended early (452662077 of 449106447 bytes)" (#68).
   A second request now waits for the setup already under way, in this window or another, and the
-  sidebar says setup is running instead of offering the button again. Another window then
+  sidebar says setup is running instead of offering the button again. Another window waits only
+  for the download and the files, never behind a password prompt for shared memory, and then
   records how its own setup went rather than assuming the first one succeeded (#70).
 - **Setup says what it will cost on this machine.** The sidebar and the log give this computer's
   figures rather than both platforms', and the space on disk is per platform too: about 145 MB to

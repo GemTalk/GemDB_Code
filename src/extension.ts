@@ -441,7 +441,8 @@ export function activate(context: vscode.ExtensionContext): void {
  *   download is kept, so choosing to continue later costs only what is left.
  *
  *   One window at a time, enforced by a lock file, since activation happens in
- *   every open window and two downloads would otherwise corrupt one file.
+ *   every open window and two downloads would otherwise corrupt one file. The
+ *   lock covers the download and the files, not the shared-memory prompt.
  */
 async function prepareOnFirstRun(extensionPath: string, refresh: () => void): Promise<void> {
   // No `unattendedSetupSkipped` event here, on purpose: every installed machine
@@ -462,17 +463,24 @@ async function prepareOnFirstRun(extensionPath: string, refresh: () => void): Pr
     return;
   }
 
-  const outcome = await withSetupLock(async () => {
+  // Started inside the lock, beside the download, but awaited outside it.
+  let osStep: Promise<boolean> | undefined;
+
+  // The lock covers the files step and nothing more (#70). It used to cover
+  // the shared-memory step too, which can wait on a sudo terminal
+  // indefinitely, and while it did, another window's Install, Start or
+  // notebook cell sat waiting behind a prompt in a window the user may not
+  // even be looking at. Once the files step has ended there is nothing left
+  // for the lock to keep apart: installed, every other window's first run
+  // returns early; cancelled or failed, the marker that `prepare` wrote
+  // before the lock was released makes it skip.
+  const files = await withSetupLock(async () => {
     // Re-check inside the lock: another window may have finished the whole
     // thing while this one was waiting to acquire it. Recorded like any first
     // run that completed.
     if (isInstalled()) {
       writeUnattendedSetupMarker(SETUP_OUTCOME.completed);
-      return {
-        files: SETUP_OUTCOME.completed,
-        configured: await isSharedMemoryConfigured(),
-        ranSetup: false,
-      };
+      return { outcome: SETUP_OUTCOME.completed, ranSetup: false };
     }
     const { download, disk } = setupFootprint();
     log(
@@ -496,17 +504,12 @@ async function prepareOnFirstRun(extensionPath: string, refresh: () => void): Pr
     // other runs a script under sudo — so there is no ordering between them to
     // get wrong. Neither rejects: both report failure by returning.
     //
-    // `prepare` records the files outcome in the marker however it ended,
-    // before returning it, and nothing here writes it afterwards; see
-    // `runSetupOnce`.
-    const files = prepare(extensionPath);
-    //
     // An external database's machine is configured by whoever runs it, so, as
     // in `ensureRunning`, GemDB neither checks shared memory nor asks. Nor on
     // NFS: setup refuses there before downloading anything (#69), and a sudo
     // prompt beside that refusal asks for a change nothing can use until the
     // user has picked another root path.
-    const os = isExternalDatabase()
+    osStep = isExternalDatabase()
       ? Promise.resolve(true)
       : databaseOnNfs()
         ? Promise.resolve(false)
@@ -514,14 +517,20 @@ async function prepareOnFirstRun(extensionPath: string, refresh: () => void): Pr
             osConfigAllowsStart,
             () => false,
           );
-    const [filesOutcome, configured] = await Promise.all([files, os]);
-    return { files: filesOutcome, configured, ranSetup: true };
+
+    // `prepare` records the outcome in the marker however it ended, before
+    // returning it and so before the lock is released; see `runSetupOnce`.
+    return { outcome: await prepare(extensionPath), ranSetup: true };
   });
-  if (outcome === undefined) {
+  if (files === undefined) {
     reportUnattendedSetupSkipped(SKIP_REASON.lockHeld);
     return; // another window is doing it
   }
-  if (!outcome.ranSetup) reportUnattendedSetupSkipped(SKIP_REASON.installedByOtherWindow);
+  if (!files.ranSetup) reportUnattendedSetupSkipped(SKIP_REASON.installedByOtherWindow);
+  const outcome = {
+    files: files.outcome,
+    configured: await (osStep ?? isSharedMemoryConfigured()),
+  };
 
   refresh();
   if (outcome.files !== SETUP_OUTCOME.completed) return;

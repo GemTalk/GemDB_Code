@@ -350,6 +350,22 @@ describe('activate()', () => {
     );
   });
 
+  // #70: the lock keeps two setups apart, and the shared-memory step is not
+  // one. Held across it, another window's Install, Start or notebook cell
+  // waited behind a sudo prompt nobody might be answering.
+  it('releases the setup lock when the files step ends, without waiting for the shared-memory prompt', async () => {
+    isInstalled.mockReturnValue(false);
+    prepare.mockResolvedValue('completed');
+    ensureOsConfigured.mockReturnValue(new Promise(() => {}));
+    const lock = join(rootPathValue, '.gemdb-setup.lock');
+
+    activate(fakeExtensionContext());
+    await expect.poll(() => prepare.mock.calls.length).toBe(1);
+
+    await expect.poll(() => existsSync(lock)).toBe(false);
+    expect(ensureOsConfigured).toHaveBeenCalledTimes(1);
+  });
+
   // Its machine is configured by whoever runs it. A sudo prompt for shared
   // memory on a machine GemDB does not run the database on is never right.
   it('never asks about shared memory on first run for an external database', async () => {
