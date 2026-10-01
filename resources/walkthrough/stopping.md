@@ -1,19 +1,28 @@
-## The database outlives the editor
+## Keeping the database running, and when to stop it
 
-Once started, the database keeps running after you close VS Code. That's
-deliberate — it's a server, and stopping it on editor close would mean
-recovering the extent every time you reopened.
+The database keeps running after you close VS Code, so your data stays available to scripts,
+terminals, and AI agents. GemDB Code starts it for you, so you never need to start it before running
+Python.
 
-So you always have two ways to see and stop it:
+### Why stop it
 
-- The **status bar** shows `$(database) GemDB` whenever it's running. Click to
-  stop.
-- The **GemDB panel** shows the same state with more detail.
+While it runs, the database uses some of your computer's memory, even with VS Code closed. Stop it
+when you are done working with GemDB for a while and want that memory back, or before you uninstall
+GemDB Code.
 
-Stopping is clean: the database commits what it has and shuts down. Starting
-again is fast.
+### How to stop it
 
-Stopping it yourself is also remembered. GemDB starts the database on its own,
-but not after you've stopped it — it waits until you start it again or run some
-Python. If something is still logged in, GemDB says so and asks before
-disconnecting it.
+- In the **status bar**, click **GemDB**. It appears whenever the database is running.
+- In the **GemDB Code sidebar**, click **Stop GemDB** (■).
+
+### What happens to your work
+
+When you stop the database, everything you have committed is saved. Uncommitted changes in open
+notebooks and GemDB Shells are discarded, so commit before you stop. If a GemDB Shell or a notebook
+in another window is still connected, GemDB Code prompts you before disconnecting it.
+
+### Starting it again
+
+After you stop it, GemDB Code no longer starts the database automatically, even after you restart VS
+Code or your computer. It starts again when you need it: you click **Start GemDB**, you run Python
+in VS Code or with the `gemdb` command, or an AI agent in VS Code uses the MCP server.

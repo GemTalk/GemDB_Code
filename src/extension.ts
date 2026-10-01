@@ -1,5 +1,3 @@
-import * as fs from 'fs';
-import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   ensureMcpRunning,
@@ -8,12 +6,19 @@ import {
   isInstalled,
   prepare,
   reinstallGrail,
+  resumeMcpServing,
   start,
   stop,
   uninstall,
 } from './lifecycle';
 import { autoStartSuppressed, initAutoStart, suppressAutoStart } from './autoStart';
-import { mcpEnabled, mcpReadOnly } from './config';
+import {
+  MARKER_REASON,
+  initUnattendedSetupMarker,
+  readUnattendedSetupMarker,
+  writeUnattendedSetupMarker,
+} from './unattendedSetupMarker';
+import { isExternalDatabase, mcpEnabled, mcpReadOnly } from './config';
 import { cliDirPath, putCliOnPath } from './cli';
 import { onDidAttemptGrailInstall } from './grail';
 import { withSetupLock } from './lock';
@@ -37,7 +42,9 @@ import {
   isSharedMemoryConfigured,
   osConfigAllowsStart,
 } from './osConfig';
-import { isSupportedPlatform, setContext } from './platform';
+import { databaseOnNfs } from './database';
+import { diskSnapshot } from './paths';
+import { isSupportedPlatform, setContext, setupFootprint } from './platform';
 import { isRunning, isRunningAsync } from './processes';
 import { renameOwner } from './pythonQueries';
 import { openRepl, runFile } from './repl';
@@ -47,8 +54,6 @@ import { StatusViewProvider } from './statusView';
 import {
   SETUP_OUTCOME,
   SKIP_REASON,
-  type SetupOutcome,
-  type SkipReason,
   Stopwatch,
   TRIGGER,
   initTelemetry,
@@ -64,6 +69,7 @@ export function activate(context: vscode.ExtensionContext): void {
   log(`GemDB ${context.extension.packageJSON.version as string} activated`);
 
   initAutoStart(context.globalStorageUri.fsPath);
+  initUnattendedSetupMarker(context.globalStorageUri.fsPath);
 
   // Installing the demo opens its folder, which is a restarted extension host
   // or a new window — either way this activation, not the one that ran the
@@ -212,7 +218,7 @@ export function activate(context: vscode.ExtensionContext): void {
         // Overwritten, never deleted: deleting it would restart the automatic
         // download on the next window, which is exactly what removing GemDB
         // asked not to happen.
-        if (await uninstall()) writeSetupMarker(context, 'uninstalled');
+        if (await uninstall()) writeUnattendedSetupMarker('uninstalled');
       }),
     ),
     vscode.commands.registerCommand('gemdb.openRepl', () => openRepl(extensionPath)),
@@ -364,51 +370,9 @@ export function activate(context: vscode.ExtensionContext): void {
     reportActivation(activationMs, state);
   })();
 
-  void prepareOnFirstRun(context, extensionPath, () => status.refresh()).then(() =>
+  void prepareOnFirstRun(extensionPath, () => status.refresh()).then(() =>
     autoStart(extensionPath, () => status.refresh()),
   );
-}
-
-/** What `setup-attempted` records: how the last unattended setup ended, or that GemDB was removed. */
-type SetupMarker = SetupOutcome | 'uninstalled' | 'attempted';
-
-const MARKER_REASON: Record<SetupMarker, SkipReason> = {
-  cancelled: SKIP_REASON.cancelledBefore,
-  failed: SKIP_REASON.failedBefore,
-  completed: SKIP_REASON.installedBefore,
-  uninstalled: SKIP_REASON.uninstalled,
-  // Releases through 1.5.1 wrote a timestamp however setup ended: it was
-  // offered, but the outcome was not recorded. Never written, only read.
-  attempted: SKIP_REASON.attemptedBefore,
-};
-
-function markerPath(context: vscode.ExtensionContext): string {
-  return path.join(context.globalStorageUri.fsPath, 'setup-attempted');
-}
-
-/**
- * What the marker records, or `'none'` when there is no marker. A marker that
- * does not say how setup ended still says it was offered, so it reads as
- * `'attempted'` and setup is not offered again: that covers every marker
- * written before outcomes were recorded, and a truncated write fails safe.
- */
-function readSetupMarker(context: vscode.ExtensionContext): SetupMarker | 'none' {
-  let value: string;
-  try {
-    value = fs.readFileSync(markerPath(context), 'utf8').trim();
-  } catch {
-    return 'none';
-  }
-  return Object.hasOwn(MARKER_REASON, value) ? (value as SetupMarker) : 'attempted';
-}
-
-function writeSetupMarker(context: vscode.ExtensionContext, value: SetupMarker): void {
-  try {
-    fs.mkdirSync(context.globalStorageUri.fsPath, { recursive: true });
-    fs.writeFileSync(markerPath(context), value);
-  } catch {
-    /* worst case it is offered once more */
-  }
 }
 
 /**
@@ -426,10 +390,9 @@ function writeSetupMarker(context: vscode.ExtensionContext, value: SetupMarker):
  *
  * Three guards keep the automatic part from being presumptuous:
  *
- *   Once per machine. `globalState` is synced across machines by Settings Sync,
- *   so the flag lives in `globalStorageUri` instead — otherwise signing in on a
- *   second machine would look like "already handled" and silently skip setup,
- *   or worse, one machine's decision would speak for another's.
+ *   Once per machine — the unattended setup marker says so; see its doc
+ *   comment in `unattendedSetupMarker.ts`, which also says why it lives
+ *   outside Settings Sync.
  *
  *   A cancel is final. Pressing Cancel records the decision and the welcome
  *   view takes over; nothing re-prompts on the next window. The partial
@@ -438,11 +401,7 @@ function writeSetupMarker(context: vscode.ExtensionContext, value: SetupMarker):
  *   One window at a time, enforced by a lock file, since activation happens in
  *   every open window and two downloads would otherwise corrupt one file.
  */
-async function prepareOnFirstRun(
-  context: vscode.ExtensionContext,
-  extensionPath: string,
-  refresh: () => void,
-): Promise<void> {
+async function prepareOnFirstRun(extensionPath: string, refresh: () => void): Promise<void> {
   // No `unattendedSetupSkipped` event here, on purpose: every installed machine
   // takes this return on every activation, so it would double event volume and
   // bury the rare skip reasons. `activated{state}` already records it.
@@ -455,23 +414,28 @@ async function prepareOnFirstRun(
     return;
   }
 
-  const marker = readSetupMarker(context);
+  const marker = readUnattendedSetupMarker();
   if (marker !== 'none') {
-    reportUnattendedSetupSkipped(MARKER_REASON[marker]);
+    reportUnattendedSetupSkipped(MARKER_REASON[marker], diskSnapshot());
     return;
   }
 
   const outcome = await withSetupLock(async () => {
     // Re-check inside the lock: another window may have finished the whole
-    // thing while this one was waiting to acquire it.
+    // thing while this one was waiting to acquire it. Recorded like any first
+    // run that completed.
     if (isInstalled()) {
+      writeUnattendedSetupMarker(SETUP_OUTCOME.completed);
       return {
         files: SETUP_OUTCOME.completed,
         configured: await isSharedMemoryConfigured(),
         ranSetup: false,
       };
     }
-    log('First run: preparing GemDB. This downloads about 210 MB and uses about 820 MB of disk.');
+    const { download, disk } = setupFootprint();
+    log(
+      `First run: preparing GemDB. This downloads about ${download} and uses about ${disk} of disk.`,
+    );
 
     // The download and the permission prompt run side by side, deliberately.
     //
@@ -489,11 +453,34 @@ async function prepareOnFirstRun(
     // The two touch nothing in common — one writes into the root path, the
     // other runs a script under sudo — so there is no ordering between them to
     // get wrong. Neither rejects: both report failure by returning.
-    const files = prepare(extensionPath);
-    const os = ensureOsConfigured(extensionPath, TRIGGER.firstRun).then(
-      osConfigAllowsStart,
-      () => false,
-    );
+    //
+    // The files outcome goes into the marker however it ended — either way
+    // this machine has been offered setup, and a cancel is a decision to be
+    // respected — so a later skip can say which it was. It is written the
+    // moment that step ends, not once both have: the permission step can wait
+    // on a sudo terminal indefinitely, and a cancelled or failed download has
+    // already offered Resume by then. An explicit setup the user completes
+    // meanwhile — Resume, Start, a cell — must find the marker, or `runSetup`
+    // skips its `completed` write and a write here afterwards would put
+    // `cancelled` or `failed` back over a finished install (#53).
+    const files = prepare(extensionPath).then((outcome) => {
+      writeUnattendedSetupMarker(outcome);
+      return outcome;
+    });
+    //
+    // An external database's machine is configured by whoever runs it, so, as
+    // in `ensureRunning`, GemDB neither checks shared memory nor asks. Nor on
+    // NFS: setup refuses there before downloading anything (#69), and a sudo
+    // prompt beside that refusal asks for a change nothing can use until the
+    // user has picked another root path.
+    const os = isExternalDatabase()
+      ? Promise.resolve(true)
+      : databaseOnNfs()
+        ? Promise.resolve(false)
+        : ensureOsConfigured(extensionPath, TRIGGER.firstRun).then(
+            osConfigAllowsStart,
+            () => false,
+          );
     const [filesOutcome, configured] = await Promise.all([files, os]);
     return { files: filesOutcome, configured, ranSetup: true };
   });
@@ -502,11 +489,6 @@ async function prepareOnFirstRun(
     return; // another window is doing it
   }
   if (!outcome.ranSetup) reportUnattendedSetupSkipped(SKIP_REASON.installedByOtherWindow);
-
-  // Recorded however it ended — either way this machine has been offered
-  // setup, and a cancel is a decision to be respected. The outcome is what
-  // the marker holds, so a later skip can say which of those it was.
-  writeSetupMarker(context, outcome.files);
 
   refresh();
   if (outcome.files !== SETUP_OUTCOME.completed) return;
@@ -559,7 +541,13 @@ export function deactivate(): void {
 async function autoStart(extensionPath: string, refresh: () => void): Promise<void> {
   if (!isSupportedPlatform() || !isInstalled()) return;
   if (autoStartSuppressed()) return;
-  if (isRunning()) return;
+  if (isRunning()) {
+    // Up already — an external database always is — but the MCP server it had
+    // may not be. Under the lock, so two windows do not both fork one.
+    await withSetupLock(() => resumeMcpServing(extensionPath));
+    refresh();
+    return;
+  }
   if (!(await isSharedMemoryConfigured())) return;
 
   await withSetupLock(async () => {

@@ -9,11 +9,15 @@ import {
   NETLDI_NAME,
   STONE_NAME,
   STOP_TIMEOUT_SECONDS,
+  externalDatabase,
+  netldiName,
   rootPath,
+  stoneName,
 } from './config';
 import { libraryPathVariable, sharedLibraryExtension } from './platform';
 import { log, logStep } from './log';
 import { withStoneLock } from './lock';
+import { databaseOnNfsError } from './database';
 import { EngineProcess, parseGslist } from './gslist';
 import { databaseConfPath, databaseLogPath, databasePath, enginePath, grailPath } from './paths';
 
@@ -29,8 +33,32 @@ export type { EngineProcess } from './gslist';
  */
 export function engineEnvironment(): Record<string, string> {
   const gs = enginePath();
-  if (!gs)
-    throw new Error('The database engine is not installed. Run "GemDB: Install GemDB" first.');
+  const external = externalDatabase();
+  if (!gs) {
+    throw new Error(
+      external
+        ? `The database engine is not at ${external.gemstone} (gemdb.externalDatabase.gemstone).`
+        : 'The database engine is not installed. Run "GemDB: Install GemDB" first.',
+    );
+  }
+
+  // An external database brings its own configuration, logs and lock
+  // directory, so GemDB sets only what finds the engine and what its own
+  // sessions need. The configuration variables in particular are left alone:
+  // pointed at GemDB's conf directory they would make a linked session read a
+  // config file that does not describe the administrator's stone.
+  if (external) {
+    return {
+      GEMSTONE: gs,
+      GEMSTONE_GLOBAL_DIR: external.globalDirectory,
+      PATH: `${path.join(gs, 'bin')}:/usr/local/bin:/usr/bin:/bin`,
+      [libraryPathVariable()]: path.join(gs, 'lib'),
+      MANPATH: path.join(gs, 'doc'),
+      GRAIL_DIR: grailPath(),
+      PYTHON_PACKAGE_PATH: path.join(grailPath(), 'src', 'python'),
+      SHIM_LIB_PATH: shimLibraryPath(),
+    };
+  }
 
   const dbPath = databasePath();
   const env: Record<string, string> = {
@@ -109,11 +137,13 @@ export async function listProcessesAsync(): Promise<EngineProcess[]> {
 }
 
 export function findStone(processes = listProcesses()): EngineProcess | undefined {
-  return processes.find((p) => p.type === 'stone' && p.name === STONE_NAME);
+  const name = stoneName();
+  return processes.find((p) => p.type === 'stone' && p.name === name);
 }
 
 export function findNetldi(processes = listProcesses()): EngineProcess | undefined {
-  return processes.find((p) => p.type === 'netldi' && p.name === NETLDI_NAME);
+  const name = netldiName();
+  return processes.find((p) => p.type === 'netldi' && p.name === name);
 }
 
 /**
@@ -140,7 +170,29 @@ export function isListening(processes = listProcesses()): boolean {
   return findNetldi(processes) !== undefined;
 }
 
+/**
+ * Raised when something asks GemDB to start or stop a database it does not
+ * run. See {@link externalDatabase} for why that is refused, not attempted.
+ */
+export class ExternalDatabaseError extends Error {}
+
+/**
+ * The start and stop commands below act on GemDB's own database only — its
+ * names, its account, its log directory — so each one checks it is not
+ * pointed at someone else's first.
+ */
+function requireOwnDatabase(action: string): void {
+  const external = externalDatabase();
+  if (!external) return;
+  throw new ExternalDatabaseError(
+    `GemDB does not ${action} this database: stone ${external.stone} and NetLDI ` +
+      `${external.netldi} are run by the machine's administrator ` +
+      '(gemdb.externalDatabase.gemstone is set).',
+  );
+}
+
 export async function startStone(): Promise<void> {
+  requireOwnDatabase('start');
   // Under the lock the generated `gemdb` wrapper also takes, because both
   // doors start the same stone and nothing downstream refuses a second one.
   // The re-check inside the lock is the point: whoever we queued behind was
@@ -152,16 +204,55 @@ export async function startStone(): Promise<void> {
     }
     logStep(`Starting the database`);
     const env = engineEnvironment();
-    await runEngineCommand(
-      path.join(env.GEMSTONE, 'bin', 'startstone'),
-      ['-l', path.join(databaseLogPath(), `${STONE_NAME}.log`), STONE_NAME],
-      env,
-      'Start database',
-    );
+    const stoneLog = path.join(databaseLogPath(), `${STONE_NAME}.log`);
+    const logSizeBefore = fileSize(stoneLog);
+    try {
+      await runEngineCommand(
+        path.join(env.GEMSTONE, 'bin', 'startstone'),
+        ['-l', stoneLog, STONE_NAME],
+        env,
+        'Start database',
+      );
+    } catch (e) {
+      if (refusedNfs(e, stoneLog, logSizeBefore)) throw databaseOnNfsError();
+      throw e;
+    }
   });
 }
 
+/**
+ * Whether the stone refused to start because its files are on NFS.
+ *
+ * The backstop for `assertDatabaseIsLocal`, which errs towards local when it
+ * cannot tell (#69). The phrase is the 4.0.0.a4 stone's — "Extents may not be
+ * on file systems that are NFS-mounted on stone's machine" — and it lands in
+ * the stone's log, which is read as well as `startstone`'s own output in case
+ * it is not repeated there. Only what this attempt added to the log counts, so
+ * a refusal from before the root path moved cannot be blamed for a new failure.
+ */
+export function refusedNfs(e: unknown, stoneLog: string, logSizeBefore: number): boolean {
+  const said = (text: string): boolean => /NFS-mounted/.test(text);
+  if (e instanceof Error && said(e.message)) return true;
+  try {
+    const bytes = fs.readFileSync(stoneLog);
+    // A log shorter than before was started afresh, and all of it is new.
+    const fresh = bytes.length >= logSizeBefore ? bytes.subarray(logSizeBefore) : bytes;
+    return said(fresh.toString('utf8'));
+  } catch {
+    return false;
+  }
+}
+
+function fileSize(file: string): number {
+  try {
+    return fs.statSync(file).size;
+  } catch {
+    return 0;
+  }
+}
+
 export async function startNetldi(): Promise<void> {
+  requireOwnDatabase('start');
   logStep('Starting the session listener');
   const env = engineEnvironment();
   await runEngineCommand(
@@ -199,6 +290,7 @@ export function stopStoneArgs(force: boolean): string[] {
 }
 
 export async function stopStone(force = false): Promise<void> {
+  requireOwnDatabase('stop');
   logStep(force ? 'Stopping the database, disconnecting other sessions' : 'Stopping the database');
   const env = engineEnvironment();
   await runEngineCommand(
@@ -210,6 +302,7 @@ export async function stopStone(force = false): Promise<void> {
 }
 
 export async function stopNetldi(): Promise<void> {
+  requireOwnDatabase('stop');
   const env = engineEnvironment();
   await runEngineCommand(
     path.join(env.GEMSTONE, 'bin', 'stopnetldi'),

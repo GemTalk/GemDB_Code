@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import * as vscode from 'vscode';
-import { DB_PASSWORD, DB_USER, STONE_NAME, rootPath } from './config';
+import { dbPassword, dbUser, rootPath, stoneName } from './config';
 import { platformKey, sharedLibraryExtension } from './platform';
 import { errorMessage, log, logStep } from './log';
 import { engineEnvironment, shimLibraryPath } from './processes';
@@ -176,6 +176,9 @@ function recordGrailFailed(extensionPath: string, e: unknown): void {
     message: errorMessage(e),
   };
   try {
+    // The database directory exists for GemDB's own database, but not for an
+    // external one, whose extent is elsewhere; the record still lives here.
+    fs.mkdirSync(path.dirname(grailFailurePath()), { recursive: true });
     fs.writeFileSync(grailFailurePath(), `${JSON.stringify(failure)}\n`);
   } catch (w) {
     // The failure itself is already on its way to a notification; losing the
@@ -236,9 +239,9 @@ export function installGrail(
   const env = {
     ...process.env,
     ...engineEnvironment(),
-    GEMDB_STONE: STONE_NAME,
-    GEMDB_USER: DB_USER,
-    GEMDB_PASSWORD: DB_PASSWORD,
+    GEMDB_STONE: stoneName(),
+    GEMDB_USER: dbUser(),
+    GEMDB_PASSWORD: dbPassword(),
   };
 
   return new Promise((resolve, reject) => {

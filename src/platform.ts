@@ -61,6 +61,21 @@ export function archiveExtension(): 'dmg' | 'zip' {
   return process.platform === 'darwin' ? 'dmg' : 'zip';
 }
 
+/**
+ * What setup costs on this platform, as told to the user before it starts.
+ *
+ * Measured for 4.0.0.a4: the macOS disk image is 143 MB and its engine 378 MB
+ * once copied out; the Linux zips are 424 MB (arm64) and 449 MB (x86-64) and
+ * unpack to about 1.07 GB. The database with Python filed in and the staged
+ * Python payload add about 330 MB either way. The figures move with the engine
+ * pin, and the welcome view in package.json and the walkthrough repeat them.
+ */
+export function setupFootprint(): { download: string; disk: string } {
+  return process.platform === 'darwin'
+    ? { download: '145 MB', disk: '700 MB' }
+    : { download: '450 MB', disk: '1.4 GB' };
+}
+
 /** Shared-library extension for this platform. */
 export function sharedLibraryExtension(): 'dylib' | 'so' {
   return process.platform === 'darwin' ? 'dylib' : 'so';
@@ -69,6 +84,59 @@ export function sharedLibraryExtension(): 'dylib' | 'so' {
 /** The dynamic-loader search-path variable this platform uses. */
 export function libraryPathVariable(): 'DYLD_LIBRARY_PATH' | 'LD_LIBRARY_PATH' {
   return process.platform === 'darwin' ? 'DYLD_LIBRARY_PATH' : 'LD_LIBRARY_PATH';
+}
+
+/**
+ * Is this process running from a Snap — the Snap Store build of VS Code, or
+ * the Shell wrapper running that build's Electron as Node?
+ *
+ * Read from the executable path rather than `$SNAP`, because the path is what
+ * decides the outcome and a terminal's environment need not carry the
+ * variable. `/var/lib/snapd/snap` is where distributions without `/snap`
+ * (Fedora) mount snaps.
+ */
+export function isSnapRuntime(execPath: string = process.execPath): boolean {
+  return /^\/(var\/lib\/snapd\/)?snap\//.test(execPath);
+}
+
+/**
+ * Turn a failure to load the database client library into a sentence, when it
+ * is the failure GemDB can name.
+ *
+ * The one it can name is a C runtime too old for the engine — the dynamic
+ * linker's ``version `GLIBC_2.33' not found`` or ``version `GLIBCXX_3.4.29'
+ * not found``. The case that meets users is the Snap Store build of VS Code:
+ * its Electron is patched to run on the Snap's `core20` base, so the extension
+ * host has Ubuntu 20.04's glibc 2.31 whatever the host has, and GemStone
+ * 4.0's `libgcits` needs 2.34 (and `libnetldi` GLIBCXX_3.4.29). Measured on
+ * 2026-09-30 with the `code` snap at revision 267 on Ubuntu 24.04: the
+ * database installs and starts, since those are host binaries in processes of
+ * their own, and then the first notebook cell fails at the load. Microsoft's
+ * .deb of the same commit runs the cell. Nothing in the extension host can
+ * bridge that — a process cannot load a library linked against a newer glibc
+ * than the one it is running on — so the useful thing is to say which editor
+ * to install instead.
+ *
+ * Anything else is passed through unchanged: a sentence that names the wrong
+ * cause is worse than the linker's own.
+ */
+export function explainLibraryLoadFailure(
+  message: string,
+  execPath: string = process.execPath,
+): string {
+  if (!/version [`'"]GLIBC(XX)?_[\d.]+['`"] not found/.test(message)) return message;
+  if (isSnapRuntime(execPath)) {
+    return (
+      'VS Code installed as a Snap cannot run GemDB: a Snap runs on its own, older copy of ' +
+      "the system libraries, and GemDB's database engine needs newer ones. Install VS Code " +
+      'from code.visualstudio.com (the .deb or .rpm package) instead; the database GemDB ' +
+      'has already set up carries over.'
+    );
+  }
+  return (
+    "This system's C runtime libraries are older than GemDB's database engine needs, so the " +
+    `database client library could not be loaded. (${message})`
+  );
 }
 
 /** Publish `gemdb.*` context keys the `when` clauses in package.json read. */

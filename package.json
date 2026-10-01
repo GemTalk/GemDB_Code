@@ -51,7 +51,7 @@
           "scope": "machine",
           "type": "string",
           "default": "~/GemDB",
-          "markdownDescription": "Directory that holds the GemDB database engine and your database. Deliberately **not** under `~/Documents`, which is often synced to iCloud — syncing a live database extent will corrupt it."
+          "markdownDescription": "Directory that holds the GemDB database engine and your database. It must be on a local disk: the database engine will not open its files on an NFS mount, and a folder that iCloud Drive, OneDrive, Dropbox or a similar service syncs will corrupt a live database. GemDB does not move anything when this changes; run **Set Up GemDB** afterwards to set up the new location."
         },
         "gemdb.engineVersion": {
           "scope": "machine",
@@ -84,6 +84,42 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "Run AI agents as a database user that cannot commit, so an agent can read and run code but nothing it does can be made permanent. Off by default: running Python in your database is most of why you would connect an agent to it. Enforced by GemStone rather than by hiding tools — the first time you turn this on, GemDB creates an `McpReadOnly` user in your database whose profile disables commits. It bounds what an agent can CHANGE, not what it can read or how much of the machine it can use. Changing this restarts the MCP server, which disconnects any connected agent."
+        },
+        "gemdb.externalDatabase.gemstone": {
+          "scope": "machine",
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Advanced: use a database that someone else installed and runs — a hosted or shared machine — instead of one GemDB Code installs. Set to that engine's product directory (its `GEMSTONE`). GemDB Code then downloads nothing, creates no database, and never starts, stops or removes the database: it only installs Python support into your account and connects. Leave empty for a database GemDB Code manages. The other `gemdb.externalDatabase.*` settings apply only when this is set."
+        },
+        "gemdb.externalDatabase.globalDirectory": {
+          "scope": "machine",
+          "type": "string",
+          "default": "/opt/gemstone",
+          "markdownDescription": "The external database's global directory (its `GEMSTONE_GLOBAL_DIR`), which holds the engine's `locks` directory. GemDB Code reads it to find the stone and NetLDI."
+        },
+        "gemdb.externalDatabase.stone": {
+          "scope": "machine",
+          "type": "string",
+          "default": "gs64stone",
+          "markdownDescription": "Name of the external database's stone."
+        },
+        "gemdb.externalDatabase.netldi": {
+          "scope": "machine",
+          "type": "string",
+          "default": "gs64ldi",
+          "markdownDescription": "Name of the external database's NetLDI. It must run in guest mode (`startnetldi -g`), as your operating-system account, so sessions need no host password — and with Python's variables (`GRAIL_DIR`, `PYTHON_PACKAGE_PATH`, `SHIM_LIB_PATH`) set to your GemDB Code root path's `grail` directory, because sessions inherit its environment."
+        },
+        "gemdb.externalDatabase.user": {
+          "scope": "machine",
+          "type": "string",
+          "default": "DataCurator",
+          "markdownDescription": "Database account GemDB Code logs in as on the external database. Python support is installed into this account."
+        },
+        "gemdb.externalDatabase.passwordFile": {
+          "scope": "machine",
+          "type": "string",
+          "default": "",
+          "markdownDescription": "File whose first line is the password for `gemdb.externalDatabase.user`, readable only by your operating-system account. A file rather than a setting, so the password never appears in `settings.json`. Leave empty for the stock password."
         }
       }
     },
@@ -137,8 +173,23 @@
     "viewsWelcome": [
       {
         "view": "gemdbStatus",
-        "contents": "GemDB isn't set up yet.\n\nSetup downloads the database engine and creates your database. It picks up where it left off, so a cancelled download costs you nothing.\n[Set Up GemDB](command:gemdb.install)\n\nAbout 210 MB to download, 820 MB on disk.",
-        "when": "gemdb.state == notInstalled"
+        "contents": "GemDB isn't set up yet.\n\nSetup downloads the database engine and creates your database. It picks up where it left off, so a cancelled download costs you nothing.\n[Set Up GemDB](command:gemdb.install)\n\nEverything goes in one folder: `~/GemDB`, unless you [choose another](command:workbench.action.openSettings?%22gemdb.rootPath%22). It has to be on a local disk.\n\nAbout 145 MB to download, 700 MB on disk.",
+        "when": "gemdb.state == notInstalled && !gemdb.externalDatabase && !gemdb.settingUp && isMac"
+      },
+      {
+        "view": "gemdbStatus",
+        "contents": "GemDB isn't set up yet.\n\nSetup downloads the database engine and creates your database. It picks up where it left off, so a cancelled download costs you nothing.\n[Set Up GemDB](command:gemdb.install)\n\nEverything goes in one folder: `~/GemDB`, unless you [choose another](command:workbench.action.openSettings?%22gemdb.rootPath%22). It has to be on a local disk.\n\nAbout 450 MB to download, 1.4 GB on disk.",
+        "when": "gemdb.state == notInstalled && !gemdb.externalDatabase && !gemdb.settingUp && isLinux"
+      },
+      {
+        "view": "gemdbStatus",
+        "contents": "GemDB is being set up.\n\nThe notification shows how far it has got, and this view changes when it finishes.\n[Show Log](command:gemdb.showLog)",
+        "when": "gemdb.state == notInstalled && gemdb.settingUp"
+      },
+      {
+        "view": "gemdbStatus",
+        "contents": "GemDB is set to use this machine's database, which its administrator runs.\n\nSetup installs Python support into your account. It downloads nothing.\n[Set Up GemDB](command:gemdb.install)",
+        "when": "gemdb.state == notInstalled && gemdb.externalDatabase && !gemdb.settingUp"
       },
       {
         "view": "gemdbStatus",
@@ -303,12 +354,12 @@
       "view/title": [
         {
           "command": "gemdb.start",
-          "when": "view == gemdbStatus && gemdb.state == stopped",
+          "when": "view == gemdbStatus && gemdb.state == stopped && !gemdb.externalDatabase",
           "group": "navigation@1"
         },
         {
           "command": "gemdb.stop",
-          "when": "view == gemdbStatus && gemdb.state == running",
+          "when": "view == gemdbStatus && gemdb.state == running && !gemdb.externalDatabase",
           "group": "navigation@1"
         },
         {
@@ -348,7 +399,7 @@
         },
         {
           "command": "gemdb.uninstall",
-          "when": "view == gemdbStatus && gemdb.installed",
+          "when": "view == gemdbStatus && gemdb.installed && !gemdb.externalDatabase",
           "group": "9_danger@1"
         },
         {
@@ -452,8 +503,8 @@
         "steps": [
           {
             "id": "install",
-            "title": "Setup happens on its own",
-            "description": "GemDB Code downloads the database engine, creates your database, and asks once for the one operating-system change it needs. If you cancelled that, pick it up here — it resumes rather than starting over.\n[Set Up GemDB](command:gemdb.install)",
+            "title": "The automated GemDB setup",
+            "description": "GemDB Code downloads the database engine, creates your database, and installs Python into it. If the shared-memory limit is too low, GemDB Code prompts you to raise it. If you canceled setup, click **Set Up GemDB** to continue where it left off.\n[Set Up GemDB](command:gemdb.install)",
             "media": {
               "markdown": "resources/walkthrough/install.md"
             },
@@ -464,7 +515,7 @@
           {
             "id": "repl",
             "title": "Run your first Python",
-            "description": "Open a Python prompt that runs inside the database. GemDB Code starts the database for you — there's nothing to press first.\n[Open GemDB Shell](command:gemdb.openRepl)",
+            "description": "Open a Python prompt that runs inside the database. If the database is not running, GemDB Code starts it automatically when you open the shell.\n[Open GemDB Shell](command:gemdb.openRepl)",
             "media": {
               "markdown": "resources/walkthrough/repl.md"
             },
@@ -475,7 +526,7 @@
           {
             "id": "notebook",
             "title": "Open a notebook",
-            "description": "Notebooks are the easiest way to explore data that lives in the database.\n[New GemDB Notebook](command:gemdb.newNotebook)",
+            "description": "Create a notebook and run Python inside the database, one cell at a time.\n[New GemDB Notebook](command:gemdb.newNotebook)",
             "media": {
               "markdown": "resources/walkthrough/notebook.md"
             },
@@ -486,7 +537,7 @@
           {
             "id": "demo",
             "title": "Explore a real application",
-            "description": "Brain Freeze is a small Flask app whose data, classes and views all live in the database. Installing it puts a copy beside your database, opens it, and shows its readme.\n[Install Brain Freeze Demo](command:gemdb.cloneBrainFreeze)",
+            "description": "Brain Freeze is a small web app, built with Flask, whose data, classes, and views are stored in the database. Installing it clones a copy into `~/GemDB/brain-freeze`, opens it, and displays its README.\n[Install Brain Freeze Demo](command:gemdb.cloneBrainFreeze)",
             "media": {
               "markdown": "resources/walkthrough/demo.md"
             },
@@ -497,7 +548,7 @@
           {
             "id": "stopping",
             "title": "Stopping the database",
-            "description": "The database keeps running after you close the editor, so your data stays available. The status bar shows when it's up; click it to stop.\n[Stop GemDB](command:gemdb.stop)",
+            "description": "The database keeps running after you close VS Code, so your data stays available. To stop it, click **GemDB** in the status bar. Commit your work first, because uncommitted changes are discarded.\n[Stop GemDB](command:gemdb.stop)",
             "media": {
               "markdown": "resources/walkthrough/stopping.md"
             },

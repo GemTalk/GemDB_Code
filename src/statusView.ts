@@ -1,5 +1,11 @@
 import * as vscode from 'vscode';
-import { engineVersion, isEngineVersionOverridden, mcpEnabled, mcpReadOnly } from './config';
+import {
+  engineVersion,
+  externalDatabase,
+  isEngineVersionOverridden,
+  mcpEnabled,
+  mcpReadOnly,
+} from './config';
 import { GrailInstallFailure, bundledGrailStamp, grailInstallFailure, grailLabel } from './grail';
 import { isInstalled } from './lifecycle';
 import { bundledMcpStamp, mcpLabel, mcpServerState, mcpUrl } from './mcp';
@@ -180,6 +186,10 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
     setContext('gemdb.state', state);
     setContext('gemdb.installed', state !== 'notInstalled' && state !== 'unsupportedPlatform');
     setContext('gemdb.running', state === 'running');
+    // Hides Start, Stop and Remove, which do not apply to a database this
+    // machine's administrator runs; see config.ts externalDatabase.
+    const external = externalDatabase();
+    setContext('gemdb.externalDatabase', external !== undefined);
     // The status bar reads the same process list, so it is refreshed from here
     // rather than polling separately and risking the two disagreeing.
     this.onStateRead();
@@ -197,30 +207,50 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
     rows.push(
       state === 'running'
         ? runningRow({ listening: isListening(), pythonFailed: failure !== undefined })
-        : {
-            label: 'Stopped',
-            description: 'Start GemDB to run Python',
-            icon: new vscode.ThemeIcon('circle-outline'),
-            command: { command: 'gemdb.start', title: 'Start GemDB' },
-          },
+        : external
+          ? {
+              label: 'Stopped',
+              description: "Not running — this machine's administrator starts it",
+              tooltip: `GemDB connects to stone ${external.stone}, which it does not start or stop.`,
+              icon: warn('circle-outline'),
+            }
+          : {
+              label: 'Stopped',
+              description: 'Start GemDB to run Python',
+              icon: new vscode.ThemeIcon('circle-outline'),
+              command: { command: 'gemdb.start', title: 'Start GemDB' },
+            },
     );
 
     const engine = enginePath();
     rows.push({
       label: 'Database engine',
-      description: isEngineVersionOverridden()
-        ? `${engineVersion()} (overridden)`
-        : engineVersion(),
+      description: external
+        ? `${engineVersion()} (this machine's)`
+        : isEngineVersionOverridden()
+          ? `${engineVersion()} (overridden)`
+          : engineVersion(),
       tooltip: engine ?? 'Not installed',
       icon: new vscode.ThemeIcon('server'),
     });
 
-    rows.push({
-      label: 'Database',
-      description: databaseExists() ? 'ready' : 'missing',
-      tooltip: databasePath(),
-      icon: databaseExists() ? new vscode.ThemeIcon('database') : warn('warning'),
-    });
+    rows.push(
+      external
+        ? {
+            label: 'Database',
+            description: `${external.stone}, as ${external.user}`,
+            tooltip:
+              `Stone ${external.stone} and NetLDI ${external.netldi}, run by this machine's ` +
+              `administrator. GemDB logs in as ${external.user}.`,
+            icon: new vscode.ThemeIcon('database'),
+          }
+        : {
+            label: 'Database',
+            description: databaseExists() ? 'ready' : 'missing',
+            tooltip: databasePath(),
+            icon: databaseExists() ? new vscode.ThemeIcon('database') : warn('warning'),
+          },
+    );
 
     rows.push(
       pythonRow({

@@ -152,6 +152,13 @@ sleep 1
 send "\\x03"
 await "KeyboardInterrupt"
 
+# A paste arrives as one chunk. Every line of it runs, in order, and a line
+# that calls input() is answered by the line after it. Everything after the
+# first line was once dropped: the shell stopped reading at the first Enter.
+await ">>> "
+send "a = 11\\rb = input()\\r13\\ra * int(b)\\r"
+await "143"
+
 send "exit()\\r"
 `);
 

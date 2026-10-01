@@ -55,30 +55,87 @@ let heldHere = false;
 export async function withSetupLock<T>(work: () => Promise<T>): Promise<T | undefined> {
   if (heldHere) return undefined;
 
+  const claim = claimSetupLock();
+  if (claim !== true) {
+    if (claim !== false) {
+      log(`Another window (process ${claim}) is already setting GemDB up; leaving it to that one.`);
+    }
+    return undefined;
+  }
+  return holdingSetupLock(work);
+}
+
+/**
+ * Run `work` while holding the setup lock, waiting for another window to
+ * release it first.
+ *
+ * For a setup someone asked for — Set Up GemDB, Start, a notebook cell — where
+ * stepping aside as `withSetupLock` does would leave them with nothing, and
+ * going ahead regardless is two windows downloading into one partial file
+ * (#68). `onWaiting` is called once, when it turns out there is a wait, so the
+ * caller can say so; `stopWaiting` is asked between polls, and returning true
+ * ends the wait with undefined and `work` not run.
+ *
+ * A caller in this process that already holds the lock runs straight through.
+ * Within one process the lock is not what keeps setups apart — `runSetup`
+ * allows one at a time — and the first-run setup takes the lock before it
+ * reaches `runSetup`, so waiting here would be waiting on itself.
+ */
+export async function withSetupLockWhenFree<T>(
+  work: () => Promise<T>,
+  wait: { onWaiting: () => void; stopWaiting: () => boolean; pollMs?: number },
+): Promise<T | undefined> {
+  if (heldHere) return work();
+
+  let waiting = false;
+  for (;;) {
+    const claim = claimSetupLock();
+    if (claim === true) return holdingSetupLock(work);
+    if (!waiting) {
+      waiting = true;
+      if (claim !== false) {
+        log(`Another window (process ${claim}) is setting GemDB up; waiting for it to finish.`);
+      }
+      wait.onWaiting();
+    }
+    await new Promise((resolve) => setTimeout(resolve, wait.pollMs ?? 1000));
+    if (wait.stopWaiting()) return undefined;
+  }
+}
+
+/**
+ * Try to take the setup lock: true when this process now holds it, the
+ * holder's pid when a live process does, false when a stale lock could not be
+ * taken over.
+ */
+function claimSetupLock(): true | number | false {
   ensureRootPath();
   const file = lockPath();
 
   try {
     fs.writeFileSync(file, String(process.pid), { flag: 'wx' });
+    return true;
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
 
     const owner = Number(safeRead(file));
-    if (Number.isInteger(owner) && owner !== process.pid && isAlive(owner)) {
-      log(`Another window (process ${owner}) is already setting GemDB up; leaving it to that one.`);
-      return undefined;
-    }
+    if (Number.isInteger(owner) && owner !== process.pid && isAlive(owner)) return owner;
 
     // Stale: the owner is gone, the file is rubbish, or it names this process
     // while `heldHere` says otherwise — debris from a call that died.
     log('Clearing a setup lock left behind by a previous session.');
     try {
       fs.writeFileSync(file, String(process.pid));
+      return true;
     } catch {
-      return undefined;
+      return false;
     }
   }
+}
 
+/** Run `work` under a lock `claimSetupLock` just took, and release it after. */
+async function holdingSetupLock<T>(work: () => Promise<T>): Promise<T> {
+  const file = lockPath();
   heldHere = true;
   try {
     return await work();

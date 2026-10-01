@@ -216,7 +216,7 @@ scripts; `install-engine.sh` runs on first start into a volume, exactly as the
 extension does today. The engine still comes from GemTalk under GemTalk's
 terms, the image stays small and cheap to rebuild — and both `sudo` prompts
 still disappear, because that came from the container, not from its contents.
-What a fat image adds is only the 210 MB download and a few minutes of install.
+What a fat image adds is only the 450 MB download and a few minutes of install.
 
 Recommendation: **prototype thin**; treat fat as a separate product decision.
 
