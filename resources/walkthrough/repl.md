@@ -1,6 +1,6 @@
 ## The GemDB Shell
 
-Opens a Python prompt that runs *inside* the database:
+The GemDB Shell opens a Python prompt that runs _inside_ the database:
 
 ```
 >>> import gemdb
@@ -10,17 +10,23 @@ Opens a Python prompt that runs *inside* the database:
 42
 ```
 
-Anything you commit is still there in the next session — that is the point of
-running Python in a database rather than beside one.
+Anything you commit is still there in the next session. That is the point of running Python in a
+database rather than beside one.
 
-- **Ctrl+C** interrupts whatever is running — a `KeyboardInterrupt`, like any
-  Python. It never lands you anywhere strange.
-- **`exit()`** or **Ctrl+D** leaves.
-- **Open it again** and you get a *second* terminal, not the first one back.
-  Each shell is its own database session: two terminals hold separate
-  uncommitted work, and see each other's exactly at `commit()`.
+- **Ctrl+C** interrupts whatever is running with a `KeyboardInterrupt`, as in any Python.
+- **`exit()`** or **Ctrl+D** leaves the shell.
+- **Opening it again** gives you a _second_ terminal, not the first one back. Each shell is its own
+  database session: two terminals hold separate uncommitted work, and each sees the other's commits
+  after its own `commit()`, `abort()` or `refresh()`.
 
-GemDB starts the database for you, so it's normally already running by the
-time you get here. If you stop it yourself, it stays stopped until you start it
-again or run some Python — GemDB won't quietly restart something you turned
-off.
+GemDB Code starts the database automatically when you open VS Code, so you do not have to. If you
+stop it manually, GemDB Code no longer starts it automatically, even after you restart VS Code or
+your computer.
+
+The database starts again when you need it, when you:
+
+- Click **Start GemDB** (▶) in the GemDB Code sidebar
+- Run Python in a notebook
+- Open a GemDB Shell
+- Run a script with the `gemdb` command
+- Use an AI agent connected through the MCP server in VS Code

@@ -1,24 +1,21 @@
 ## The Brain Freeze demo
 
-A small insurance company, living entirely inside the database: a Flask app, a
-notebook and an agent's MCP server over one dataset, and no persistence layer
-anywhere — no ORM, no schema, no migration. A handler assigns to an object and
-commits.
+Brain Freeze is a small insurance company that lives entirely inside the database: a Flask app, a
+notebook and an AI agent's MCP server, all working on one dataset. There is no persistence layer
+anywhere: no ORM (object-relational mapper), no schema and no migrations. A request handler assigns
+to an object and commits.
 
-Installing it clones
-[brain-freeze](https://github.com/GemTalk/brain-freeze) into `~/GemDB/brain-freeze`
-(beside your database, under whatever root path you have set), opens that
-folder, and shows its readme, which takes it from there.
+**Install Brain Freeze Demo** clones [brain-freeze](https://github.com/GemTalk/brain-freeze) into
+`~/GemDB/brain-freeze` (beside your database, under the root path you have set), opens that folder,
+and shows its README, which takes it from there.
 
-- **An empty window** opens the demo in place. **A window with a folder open**
-  is left alone, and the demo gets a new window.
-- **The readme appears straight away.** VS Code opens a freshly cloned
-  folder in Restricted Mode, and asks whether you trust it the first time you
-  run a cell or open a terminal there. To skip that question for everything
-  GemDB installs, trust `~/GemDB` once in **Workspaces: Manage Workspace
-  Trust**.
-- **Running it again** opens the copy you already have. It never clones over
-  it, so your own changes are safe.
+- **In an empty window,** the demo opens in place. **In a window with a folder open,** that folder
+  is left alone, and the demo opens in a new window.
+- **The README appears right away.** VS Code opens a newly cloned folder in Restricted Mode, and
+  prompts you to trust it the first time you run a cell or open a terminal there. To trust
+  everything GemDB Code installs at once, add `~/GemDB` in **Workspaces: Manage Workspace Trust**.
+- **Running it again** opens the copy you already have. It never clones over it, so your own changes
+  are safe.
 
-It needs `git`, and it doesn't start the database — the first cell you run in
-the demo's notebook does that.
+It needs `git`. It does not start the database: the first cell you run in the demo's notebook does
+that.
