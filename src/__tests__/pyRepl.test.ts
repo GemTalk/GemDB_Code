@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PyRepl, ReplSession, ReplWorld } from '../pyRepl';
 import { PyResult } from '../pythonQueries';
-import { SessionError } from '../session';
+import { LibraryLoadError, SessionError } from '../session';
 
 /**
  * The REPL loop, driven the way a terminal drives it: bytes into
@@ -23,13 +23,15 @@ interface HarnessOptions {
   ensure?: boolean;
   /** When set, every login throws a SessionError with this message. */
   loginFails?: string;
+  /** When set, every login throws this instead. */
+  loginThrows?: Error;
 }
 
 function makeHarness(opts: HarnessOptions = {}) {
   const out: string[] = [];
   const runs: string[] = [];
   const counters = { interrupts: 0, logouts: 0, ensured: 0 };
-  const state = { closed: false };
+  const state: { closed: boolean; code?: number } = { closed: false };
 
   const session: ReplSession = {
     connected: opts.connected ?? true,
@@ -47,14 +49,16 @@ function makeHarness(opts: HarnessOptions = {}) {
 
   const world: ReplWorld = {
     write: (text) => out.push(text),
-    close: () => {
+    close: (code) => {
       state.closed = true;
+      state.code = code;
     },
     ensureRunning: () => {
       counters.ensured += 1;
       return Promise.resolve(opts.ensure ?? true);
     },
     login: () => {
+      if (opts.loginThrows) throw opts.loginThrows;
       if (opts.loginFails) throw new SessionError(opts.loginFails);
       return session;
     },
@@ -222,6 +226,17 @@ describe('PyRepl', () => {
     expect(h.text().endsWith('>>> ')).toBe(true);
   });
 
+  it('leaves, failing, when the client library cannot load — no retry can fix that', () => {
+    const h = makeHarness({ loginThrows: new LibraryLoadError('VS Code installed as a Snap…') });
+
+    h.repl.open();
+
+    expect(h.text()).toContain('VS Code installed as a Snap…');
+    expect(h.state).toEqual({ closed: true, code: 1 });
+    // No prompt to type into: every line would only repeat the message.
+    expect(h.text()).not.toContain('>>> ');
+  });
+
   it('logs out when disposed', () => {
     const h = makeHarness();
     h.repl.open();
@@ -272,6 +287,51 @@ describe('PyRepl', () => {
     expect(await h.repl.readLine('NAME? ')).toEqual({ line: 'Fred' });
     release(OK);
     await flush();
+  });
+
+  // A paste arrives as one chunk, several lines in it. Every line is a turn
+  // of its own, run in order — the ones after the first wait as type-ahead.
+  it('runs every line of a paste, in order', async () => {
+    const h = makeHarness();
+    h.repl.open();
+
+    h.repl.handleInput('x = 1\ry = 2\rz = 3\r');
+    await flush();
+    await flush();
+    await flush();
+
+    expect(h.runs).toEqual(['x = 1', 'y = 2', 'z = 3']);
+  });
+
+  it('runs a pasted block as one statement, then the line after it', async () => {
+    const h = makeHarness();
+    h.repl.open();
+
+    h.repl.handleInput('def f():\r    return 1\r\rf()\r');
+    await flush();
+    await flush();
+
+    expect(h.runs).toEqual(['def f():\n    return 1\n', 'f()']);
+  });
+
+  it('answers input() from the rest of the same paste', async () => {
+    let answer: unknown;
+    const h = makeHarness({
+      respond: async (source) => {
+        if (source === 'name = input()') answer = await h.repl.readLine('');
+        return OK;
+      },
+    });
+    h.repl.open();
+
+    h.repl.handleInput('name = input()\rFred\rname\r');
+    await flush();
+    await flush();
+    await flush();
+
+    expect(answer).toEqual({ line: 'Fred' });
+    // The answer was the read's, not a statement of its own.
+    expect(h.runs).toEqual(['name = input()', 'name']);
   });
 
   it('settles a pending read as end of input when disposed', async () => {

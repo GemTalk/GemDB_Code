@@ -15,7 +15,12 @@
 
 export type EditorEvent =
   | { kind: 'echo'; text: string }
-  | { kind: 'submit'; line: string }
+  /**
+   * A line was entered. `rest` is the input after it, unread: a paste arrives
+   * as one chunk, and what follows the first line belongs to whoever reads
+   * next — the next prompt, or an input() the line itself calls.
+   */
+  | { kind: 'submit'; line: string; rest: string }
   | { kind: 'interrupt' }
   | { kind: 'eof' };
 
@@ -55,7 +60,11 @@ export class LineEditor {
     return this.prompt;
   }
 
-  /** Feed raw input; returns the events it produced, echoes included, in order. */
+  /**
+   * Feed raw input; returns the events it produced, echoes included, in order.
+   * Stops at the first submitted line, handing the remainder back on the
+   * submit event rather than editing it into a line nobody has asked for.
+   */
   feed(data: string): EditorEvent[] {
     const events: EditorEvent[] = [];
     let input = this.pendingEscape + data;
@@ -92,14 +101,14 @@ export class LineEditor {
         if (line.trim().length > 0 && line !== this.history[this.history.length - 1]) {
           this.history.push(line);
         }
-        events.push({ kind: 'echo', text: '\r\n' });
-        events.push({ kind: 'submit', line });
         this.buffer = [];
         this.cursor = 0;
         this.historyAt = this.history.length;
         // Swallow the \n of a \r\n pair so one Enter is one submit.
         if (ch === '\r' && input.startsWith('\n')) input = input.slice(1);
-        continue;
+        events.push({ kind: 'echo', text: '\r\n' });
+        events.push({ kind: 'submit', line, rest: input });
+        return events;
       }
 
       switch (ch) {
