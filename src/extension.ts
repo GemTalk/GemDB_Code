@@ -48,6 +48,7 @@ import { diskSnapshot } from './paths';
 import { isSupportedPlatform, setContext, setupFootprint } from './platform';
 import { isRunning, isRunningAsync } from './processes';
 import { renameOwner } from './pythonQueries';
+import { debugFile } from './debugFile';
 import { openRepl, runFile } from './repl';
 import { closeSessionFor, logoutAll, setInputHandler } from './session';
 import { GemDbStatusBar } from './statusBar';
@@ -227,6 +228,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('gemdb.openRepl', () => openRepl(extensionPath)),
     vscode.commands.registerCommand('gemdb.runFile', (uri?: vscode.Uri) =>
       runFile(extensionPath, uri),
+    ),
+    vscode.commands.registerCommand('gemdb.debugFile', (uri?: vscode.Uri) =>
+      debugFile(extensionPath, uri, () => savedObjects.refresh()),
     ),
     vscode.commands.registerCommand('gemdb.newNotebook', () => newNotebook()),
     vscode.commands.registerCommand('gemdb.resetNotebook', () => resetActiveNotebook()),

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { MAIN_MODULE } from '../pauseVariables';
 
 /**
  * Saved stacks, without a database: what a saved frame keeps, how it is shown
@@ -182,6 +183,21 @@ describe('rebuilding the stack for the debugger', () => {
     expect(scopes.get(2)?.map((s) => [s.name, s.variablesReference])).toEqual([['Locals', 4]]);
   });
 
+  it('offers a file run’s globals under that file’s frames only', () => {
+    const fileRun = { ...meta, label: 'mod.py', notebook: '/w/mod.py' };
+    const helper = { ...fileFrame, name: 'other', path: '/w/lib.py' };
+
+    const { scopes } = restoredFrames(
+      { ...fileRun, frames: [fileFrame, helper] },
+      [3, 4],
+      9,
+      world([]),
+    );
+
+    expect(scopes.get(1)?.map((s) => s.name)).toEqual(['Locals', 'Globals']);
+    expect(scopes.get(2)?.map((s) => s.name)).toEqual(['Locals']);
+  });
+
   it('labels the stack as saved, with when', () => {
     expect(savedPauseLabel(meta)).toBe('Saved stack: breakpoint.ipynb (2026-10-01 16:20)');
   });
@@ -217,6 +233,20 @@ describe('the saved-stack queries', () => {
     expect(query).toContain('"locals": None');
     expect(query).toContain("scope removeKey: #'___gemdb_l0' ifAbsent: [].");
     expect(query).toContain("scope removeKey: #'___gemdb_m' ifAbsent: [].");
+  });
+
+  it('saves a file run’s globals from its __main__ module, in a scratch scope', () => {
+    const query = saveStackQuery(
+      'stack_job',
+      { label: 'job.py', notebook: '/w/job.py', saved_at: 'now', description: null },
+      [fileFrame],
+      [12],
+      MAIN_MODULE,
+    );
+
+    expect(query).toContain('__import__("sys").modules["__main__"].__dict__');
+    expect(query).not.toContain('globals()');
+    expect(query).toContain('scope := SymbolDictionary new.');
   });
 
   it('suggests a key from the notebook and the time', () => {

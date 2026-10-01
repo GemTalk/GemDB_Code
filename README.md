@@ -222,7 +222,8 @@ to merge into that client's configuration file. See
 GemDB Code installs the Brain Freeze demo and its other folders under `~/GemDB`, and VS Code opens
 any folder you have not trusted in Restricted Mode. So by default, GemDB Code's folders open in
 Restricted Mode. There, you can use the GemDB Code sidebar and start or stop the database, but you
-cannot run Python: notebook cells, **Run Python File in GemDB** and the GemDB Shell all wait until
+cannot run Python: notebook cells, **Run Python File in GemDB**, **Debug Python File in GemDB** and
+the GemDB Shell all wait until
 you trust the folder, and connecting Claude Code needs a trusted folder too.
 
 To work with GemDB Code, trust `~/GemDB` once: run **Workspaces: Manage Workspace Trust** from the
@@ -381,6 +382,14 @@ button opens in a terminal. Each shell is a separate session. Use `exit()` or Ct
 To run the Python file in the active editor, use the Run button's menu (▷ with an arrow) at the top
 right of the editor, or **GemDB: Run Python File in GemDB** in the Command Palette.
 
+To debug it, choose **Debug Python File in GemDB** from the same menu. The file runs as `__main__`
+in a session of its own, with its output in a **GemDB Debug** terminal, and `breakpoint()` opens
+Run and Debug on the file just as it does on a notebook cell: the call stack, each frame's locals,
+the file's globals, **Add to Persisted Objects…** and **Add Stack to Persisted Objects…**. The
+session lasts as long as the terminal, so **Commit** and **Abort** in Persisted Objects work after
+the run ends; closing the terminal ends the session and discards what it did not commit. Ctrl+C in
+the terminal stops the run.
+
 ### Notebooks
 
 GemDB Notebooks are ordinary `.ipynb` files. To run one, select the kernel **GemDB (Python in the
@@ -401,8 +410,8 @@ database)**.
   next commit. The **Persisted Objects** view, under GemDB and in Run and Debug, lists what `gemdb.root`
   holds; its title bar always has **Commit** and **Abort** for the notebook you are working in. **Add Stack to Persisted Objects…** on the Call Stack saves the whole paused stack the same
   way; once committed, Persisted Objects reopens it in the debugger, even after a restart.
-  In the GemDB Shell and in **Run Python File in GemDB**, `breakpoint()` prints where it was and
-  the code carries on.
+  **Debug Python File in GemDB** does the same for a `.py` file (see above). In the GemDB Shell
+  and in **Run Python File in GemDB**, `breakpoint()` prints where it was and the code carries on.
 - Each notebook has its own session and its own transaction, so a commit in one notebook never
   commits another notebook's half-finished changes. Closing a notebook ends its session and discards
   anything it has not committed.
@@ -587,8 +596,8 @@ Before you change the following settings, note these important details:
 GemDB Code includes commands to run useful functions in VS Code. The GemDB Code sidebar presents
 most of these, either as a button along its top or in its **⋯** menu. To run a command, either use
 the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS) or run it from the sidebar. In the
-Command Palette, type `GemDB` to list the commands. **GemDB: Run Python File in GemDB** appears only
-when a Python file is open, and **GemDB: Keep the Database Running After Logout** appears only on
+Command Palette, type `GemDB` to list the commands. **GemDB: Run Python File in GemDB** and **GemDB:
+Debug Python File in GemDB** appear only when a Python file is open, and **GemDB: Keep the Database Running After Logout** appears only on
 Linux. The table below reviews the functions available as commands or in the sidebar.
 
 | Command Palette                                   | Sidebar                                                                                   | What it does                                                                                                                  |
@@ -609,6 +618,7 @@ Linux. The table below reviews the functions available as commands or in the sid
 | **GemDB: Keep the Database Running After Logout** | Click the **Survives logout** row, shown on Linux when `RemoveIPC=no` is not set          | Sets `RemoveIPC=no` so the database keeps running after you log out (prompts you for your password in a terminal); Linux only |
 | **GemDB: Toggle Read-Only Access for AI Agents**  | Click the **Agent write access** row, shown when the MCP server is on                     | Switches whether agents can commit, and restarts the MCP server                                                               |
 | **GemDB: Run Python File in GemDB**               | None; use the Run button's menu at the top right of a Python file                         | Runs the current `.py` file in a terminal; listed only when a Python file is open                                             |
+| **GemDB: Debug Python File in GemDB**             | None; use the Run button's menu at the top right of a Python file                         | Runs the current `.py` file so that `breakpoint()` opens the debugger; listed only when a Python file is open                 |
 | **GemDB: Clear Notebook Variables**               | None                                                                                      | Clears the active notebook's variables                                                                                        |
 
 ### Using GemDB Code vs. GemStone/S

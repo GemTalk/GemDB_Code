@@ -40,7 +40,7 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "GemDB's status, setup and database controls work in Restricted Mode. Running Python from this folder (notebook cells, Run File, the GemDB Shell) waits until you trust it, and VS Code asks you when you first try."
+      "description": "GemDB's status, setup and database controls work in Restricted Mode. Running Python from this folder (notebook cells, Run File, Debug File, the GemDB Shell) waits until you trust it, and VS Code asks you when you first try."
     }
   },
   "contributes": {
@@ -238,6 +238,12 @@
         "title": "Run Python File in GemDB",
         "category": "GemDB",
         "icon": "$(play)"
+      },
+      {
+        "command": "gemdb.debugFile",
+        "title": "Debug Python File in GemDB",
+        "category": "GemDB",
+        "icon": "$(debug-alt)"
       },
       {
         "command": "gemdb.newNotebook",
@@ -461,11 +467,20 @@
           "command": "gemdb.runFile",
           "when": "resourceLangId == python",
           "group": "navigation@1"
+        },
+        {
+          "command": "gemdb.debugFile",
+          "when": "resourceLangId == python",
+          "group": "navigation@2"
         }
       ],
       "commandPalette": [
         {
           "command": "gemdb.runFile",
+          "when": "resourceLangId == python"
+        },
+        {
+          "command": "gemdb.debugFile",
           "when": "resourceLangId == python"
         },
         {

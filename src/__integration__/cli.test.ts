@@ -102,7 +102,7 @@ describe.skipIf(!ready || !canMakeFixture())('the gemdb command', () => {
     // which file mode currently routes to stdout along with print().
     const ran = await run(['paused.py'], undefined, true);
     expect(ran.stdout).toBe(
-      'breakpoint() at paused.py:2: the debugger opens in notebooks for now; continuing.\n' +
+      'breakpoint() at paused.py:2: the debugger opens in notebooks and Debug Python File in GemDB; continuing.\n' +
         'went on\n',
     );
     expect(ran.code).toBe(0);

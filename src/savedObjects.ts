@@ -8,7 +8,9 @@ import {
   toDapVariable,
 } from './debugger';
 import { errorMessage, log } from './log';
+import { runFileOf } from './fileOwner';
 import {
+  MAIN_MODULE,
   PauseVariable,
   ROOT_LISTING_LIMIT,
   abortQuery,
@@ -493,7 +495,7 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
             : notebook.dirty
               ? 'uncommitted changes'
               : 'nothing to commit';
-        item.iconPath = new vscode.ThemeIcon('notebook');
+        item.iconPath = new vscode.ThemeIcon(runFileOf(notebook.key) ? 'file-code' : 'notebook');
         item.contextValue = notebook.dirty ? 'gemdbNotebookDirty' : 'gemdbNotebook';
         item.tooltip = new vscode.MarkdownString(notebookGuide(notebook.label));
         return item;
@@ -699,7 +701,7 @@ async function saveVariable(
   if (!pause?.query || !pause.ownerKey || !variable) {
     void vscode.window.showErrorMessage(
       'Add to Persisted Objects works on a variable in Run and Debug, while a GemDB notebook ' +
-        'cell is paused at breakpoint().',
+        'cell or Debug Python File run is paused at breakpoint().',
     );
     return;
   }
@@ -773,7 +775,7 @@ async function targetOf(
 ): Promise<{ notebook: NotebookState; saves: PendingSave[] } | undefined> {
   if (clicked) return view.notebookOf(clicked);
   const connected = sessionRegistry()
-    .filter((info) => info.owner.kind === 'notebook')
+    .filter((info) => info.owner.kind === 'notebook' || info.owner.kind === 'file')
     .map((info) => info.owner);
   if (connected.length === 0) {
     void vscode.window.showInformationMessage(
@@ -782,7 +784,9 @@ async function targetOf(
     return undefined;
   }
   const pausedKey = connected.find((owner) => pauseForOwner(owner.key))?.key;
-  const activeKey = vscode.window.activeNotebookEditor?.notebook.uri.toString();
+  const activeKey =
+    vscode.window.activeNotebookEditor?.notebook.uri.toString() ??
+    vscode.window.activeTextEditor?.document.uri.fsPath;
   let owner = chooseNotebook(connected, pausedKey, activeKey);
   if (!owner) {
     const picked = await vscode.window.showQuickPick(
@@ -939,7 +943,8 @@ async function saveStack(
   }
   if (!pause?.query || !pause.ownerKey) {
     void vscode.window.showErrorMessage(
-      'Add Stack to Persisted Objects works while a GemDB notebook cell is paused at breakpoint().',
+      'Add Stack to Persisted Objects works while a GemDB notebook cell or Debug Python File ' +
+        'run is paused at breakpoint().',
     );
     return;
   }
@@ -984,7 +989,7 @@ async function saveStack(
           },
           frames,
           localsRefs,
-          pause.ownerKey,
+          runFileOf(pause.ownerKey) ? MAIN_MODULE : pause.ownerKey,
         ),
       ),
     );

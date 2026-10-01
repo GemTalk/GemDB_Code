@@ -47,6 +47,7 @@ export const TRIGGER = {
   notebook: 'notebook', // a notebook cell batch
   shell: 'shell', // Open GemDB Shell
   runFile: 'runFile', // Run Python File
+  debugFile: 'debugFile', // Debug Python File
   mcp: 'mcp', // an agent, through the MCP provider
 } as const;
 export type Trigger = (typeof TRIGGER)[keyof typeof TRIGGER];
@@ -522,6 +523,7 @@ export const SURFACE = {
   notebook: 'notebook',
   shell: 'shell',
   runFile: 'runFile',
+  debugFile: 'debugFile',
 } as const;
 export type Surface = (typeof SURFACE)[keyof typeof SURFACE];
 

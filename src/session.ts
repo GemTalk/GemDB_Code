@@ -82,7 +82,7 @@ const SESSION_LIMIT_ERRORS = new Set([4039, 4041, 4050]);
 const GCI_LOGIN_QUIET = 0x10;
 
 /** What kind of user interface a session belongs to. */
-export type SessionKind = 'notebook' | 'shell' | 'extension';
+export type SessionKind = 'notebook' | 'file' | 'shell' | 'extension';
 
 /**
  * Who a session is for.
@@ -132,6 +132,7 @@ const CACHE_NAME_LIMIT = 31;
  */
 const CACHE_NAME_TAGS: Record<SessionKind, string> = {
   notebook: 'GemDB nb',
+  file: 'GemDB py',
   shell: 'GemDB Shell',
   extension: 'GemDB Code',
 };
@@ -162,9 +163,9 @@ export function cacheNameFor(owner: SessionOwner, pid: number = process.pid): st
   const tag = CACHE_NAME_TAGS[owner.kind];
   if (owner.kind === 'extension') return tag;
   if (owner.kind === 'shell') return `${tag} ${pid}`;
-  // `.ipynb` is what the `nb` tag already said, so spend the room on the name.
+  // `.ipynb` or `.py` is what the tag already said, so spend the room on the name.
   const name = owner.label
-    .replace(/\.ipynb$/i, '')
+    .replace(owner.kind === 'file' ? /\.py$/i : /\.ipynb$/i, '')
     .replace(/[^\x20-\x7e]/g, '')
     .trim();
   if (!name) return tag;
@@ -888,7 +889,7 @@ export class GciSession {
     } catch (e) {
       log(`Could not locate a breakpoint() (${this.label}): ${e instanceof Error ? e.message : e}`);
     }
-    return `breakpoint()${where}: the debugger opens in notebooks for now; continuing.\n`;
+    return `breakpoint()${where}: the debugger opens in notebooks and Debug Python File in GemDB; continuing.\n`;
   }
 
   /**

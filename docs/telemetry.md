@@ -48,6 +48,7 @@ Several events carry `trigger`, which records what the user did to cause it:
 | `notebook`            | ran a notebook cell                                     |
 | `shell`               | ran **GemDB: Open GemDB Shell**                         |
 | `runFile`             | ran **GemDB: Run Python File in GemDB**                 |
+| `debugFile`           | ran **GemDB: Debug Python File in GemDB**               |
 | `mcp`                 | connected an AI agent through the MCP server            |
 
 ## The events
@@ -170,12 +171,12 @@ starts.
 ### `pythonUsed`
 
 The user ran Python, the last step of the journey. Sent at most once per window
-for each place Python can run, so at most three per window.
+for each place Python can run, so at most four per window.
 
 | Property / measure      | Values                                                                                                   |
 | ----------------------- | -------------------------------------------------------------------------------------------------------- |
-| `surface`               | `notebook`, `shell`, `runFile`                                                                           |
-| `evidence`              | `executed`: code ran and a result came back (notebooks).<br>`launched`: a terminal was opened, but GemDB cannot see whether anything was typed into it (shell, run file). |
+| `surface`               | `notebook`, `shell`, `runFile`, `debugFile`                                                              |
+| `evidence`              | `executed`: code ran and a result came back (notebooks, debug file).<br>`launched`: a terminal was opened, but GemDB cannot see whether anything was typed into it (shell, run file). |
 | `minutesSinceFirstSeen` | minutes since GemDB was first seen on this machine                                                       |
 
 ## Changing this document

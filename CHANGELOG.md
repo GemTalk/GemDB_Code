@@ -30,6 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interrupt button) do not start. There is nothing to launch or configure. Stepping and red-dot
   breakpoints are not supported yet, and the debugger says so when asked.
 
+- **Debug Python File in GemDB**, beside Run Python File in a `.py` file's run menu, runs the file
+  so that `breakpoint()` opens the debugger on it, the way it does on a notebook cell: its frames,
+  locals and globals, and adding objects or the stack to Persisted Objects. Output goes to a GemDB
+  Debug terminal, whose session lasts until the terminal closes, so the run's changes can still be
+  committed or aborted after it ends. In a folder VS Code does not trust, it asks you to trust it
+  first.
+
 - **Add a paused stack to Persisted Objects, and open it again later.** **Add Stack to Persisted
   Objects…**, on the Call Stack's top row or any frame's menu, saves each frame's place and source,
   its locals and the notebook's globals as one entry under `gemdb.root`. Once committed, **Restore a

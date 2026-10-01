@@ -288,7 +288,7 @@ SessionTemps current at: #'GrailConsole'
             m evaluateSource: 'import sys
 def _gemdb_breakpoint(*args, **kws):
     f = sys._getframe(1)
-    sys.stderr.write("breakpoint() at %s:%d: the debugger opens in notebooks for now; continuing.\\n" % (f.f_code.co_filename, f.f_lineno))
+    sys.stderr.write("breakpoint() at %s:%d: the debugger opens in notebooks and Debug Python File in GemDB; continuing.\\n" % (f.f_code.co_filename, f.f_lineno))
 sys.breakpointhook = _gemdb_breakpoint']]
             on: AbstractException do: [:ignored | ignored return: nil].
         target = '-m'

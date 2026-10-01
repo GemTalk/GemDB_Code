@@ -1,9 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { runFileOf } from './fileOwner';
 import { CellText, PythonFrame, firstLineOf, locateCell } from './haltStack';
 import { errorMessage, log } from './log';
 import {
+  MAIN_MODULE,
   PAGE,
   PauseVariable,
   childrenQuery,
@@ -593,22 +595,23 @@ interface PauseView {
  * Read the paused stack and register its variables, in one walk. A failure
  * costs the frames and variables, never the pause.
  *
- * The notebook's globals are offered only under a frame a cell compiled
- * (`<grail>`): a frame in an imported module has that module's globals, which
- * Grail does not hand over here, and showing the notebook's under it would
- * mislead.
+ * The globals are offered only under the frames of the code that owns them: a
+ * notebook's under a frame a cell compiled (`<grail>`), a run file's under its
+ * own frames. A frame in an imported module has that module's globals, which
+ * Grail does not hand over here, and showing the run's under it would mislead.
  */
 async function readPause(request: HaltRequest): Promise<PauseView> {
   try {
     const owner = request.session.owner;
+    const scopeKey =
+      owner.kind === 'notebook' ? owner.key : owner.kind === 'file' ? MAIN_MODULE : undefined;
     const { frames, globals } = parsePausedStack(
-      await request.query(
-        pausedStackQuery(request.process, owner.kind === 'notebook' ? owner.key : undefined),
-      ),
+      await request.query(pausedStackQuery(request.process, scopeKey)),
     );
+    const ownFile = owner.kind === 'file' ? runFileOf(owner.key) : '<grail>';
     const scopes = new Map<number, DapScope[]>();
     frames.forEach((frame, index) =>
-      scopes.set(index + 1, scopesFor(frame.locals ?? 0, frame.file === '<grail>' ? globals : 0)),
+      scopes.set(index + 1, scopesFor(frame.locals ?? 0, frame.file === ownFile ? globals : 0)),
     );
     const { running, cells } = notebookCells(owner.key);
     const texts: Array<string[] | undefined> = [];

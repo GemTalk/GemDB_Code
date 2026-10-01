@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { stageGrail } from '../grail';
 import { PythonFrame, parsePythonStack, pythonStackQuery } from '../haltStack';
 import {
+  MAIN_MODULE,
   PauseVariable,
   abortQuery,
   childrenQuery,
@@ -24,7 +25,8 @@ import {
   unquote,
 } from '../pauseVariables';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
-import { runPython } from '../pythonQueries';
+import { fileOwner } from '../fileOwner';
+import { runPython, runPythonFile } from '../pythonQueries';
 import {
   HaltAnswer,
   HaltRequest,
@@ -34,6 +36,7 @@ import {
   interruptSessionFor,
   logoutAll,
   sessionForIfOpen,
+  sessionRegistry,
   setHaltHandler,
 } from '../session';
 import {
@@ -612,6 +615,91 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
     );
   });
 
+  it('runs a .py file as __main__, pausing in its own frames with its globals, and saves that stack', async () => {
+    // The tests before this one leave their notebooks' sessions open, and the database has ten.
+    for (const info of sessionRegistry()) {
+      if (info.owner.kind === 'notebook' && info.owner.key !== NB.key)
+        closeSessionFor(info.owner.key);
+    }
+    const file = path.join(fixture!.root, 'bpjob.py');
+    const lines = [
+      'import gemdb',
+      'total = 10',
+      'def step(n):',
+      '    x = n * 2',
+      '    breakpoint()',
+      '    return x',
+      'print("as", __name__)',
+      'total = total + step(3)',
+      'print("total", total)',
+    ];
+    fs.writeFileSync(file, lines.join('\n'));
+    const owner = fileOwner(file);
+    let frames: Array<[string, string, number]> = [];
+    let locals: string[] = [];
+    let globalNames: string[] = [];
+    let saved = '';
+    setHaltHandler(async (request) => {
+      const stack = parsePausedStack(
+        await request.query(pausedStackQuery(request.process, MAIN_MODULE)),
+      );
+      frames = stack.frames.map((f) => [f.name, f.file, f.line]);
+      locals = parseChildren(
+        await request.query(childrenQuery(stack.frames[0].locals!, 0, 50)),
+      ).map((v) => `${v.name}=${v.value}`);
+      const globalRows = parseChildren(await request.query(childrenQuery(stack.globals, 0, 50)));
+      globalNames = globalRows.map((v) => v.name);
+      saved = unquote(
+        await request.query(
+          saveStackQuery(
+            'stack_bpjob',
+            { label: 'bpjob.py', notebook: owner.key, saved_at: 'now', description: null },
+            stack.frames.map((f) => ({
+              name: f.name,
+              line: f.line,
+              column: f.column + 1,
+              end_column: null,
+              source_name: 'bpjob.py',
+              path: f.file,
+              text: lines.join('\n'),
+            })),
+            stack.frames.map((f) => f.locals ?? 0),
+            MAIN_MODULE,
+          ),
+        ),
+      );
+      return 'continue';
+    });
+    const printed: string[] = [];
+
+    const result = await runPythonFile(file, owner, (chunk) => printed.push(chunk));
+    setHaltHandler(undefined);
+    await sessionForIfOpen(owner.key)!.executeAsync(commitQuery());
+    const opened = parseOpenedStack(await executeAsync(openStackQuery('stack_bpjob')));
+    const savedGlobals = parseChildren(await executeAsync(childrenQuery(opened.globals, 0, 50)));
+    const failed = await runPythonFile(
+      (fs.writeFileSync(file, 'print("a")\n1/0\n'), file),
+      owner,
+      () => {},
+    );
+    closeSessionFor(owner.key);
+
+    expect(frames).toEqual([
+      ['step', file, 5],
+      ['<module>', file, 8],
+    ]);
+    expect(locals).toEqual(['n=3', 'x=6']);
+    // The script's globals, data first; dunders such as __name__ are left out.
+    expect(globalNames).toEqual(expect.arrayContaining(['total']));
+    expect(globalNames.filter((n) => n.startsWith('__') && n.endsWith('__'))).toEqual([]);
+    expect(printed.join('')).toBe('as __main__\ntotal 16\n');
+    expect(result.value).toBe('');
+    expect(saved).toBe('saved');
+    expect(opened.meta.frames.map((f) => f.name)).toEqual(['step', '<module>']);
+    expect(savedGlobals.find((v) => v.name === 'total')?.value).toBe('10');
+    expect(failed.value).toBe('Error: ZeroDivisionError - division by zero');
+  });
+
   it('ends the cell on Stop, and the session is still usable', async () => {
     const printed: string[] = [];
     answering('stop', printed);
@@ -703,7 +791,7 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
       (chunk) => printed.push(chunk),
     );
     expect(printed.join('')).toBe(
-      'breakpoint() at line 2: the debugger opens in notebooks for now; continuing.\n',
+      'breakpoint() at line 2: the debugger opens in notebooks and Debug Python File in GemDB; continuing.\n',
     );
     expect(result.value).toBe("'went on'");
   });

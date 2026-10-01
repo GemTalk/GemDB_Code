@@ -210,12 +210,17 @@ export const window = {
   showErrorMessage(_message: string, ..._items: unknown[]): Promise<string | undefined> {
     return Promise.resolve(undefined);
   },
-  /** A terminal that records nothing and does nothing — callers only ever `show()`/`sendText()` it. */
-  createTerminal(_nameOrOptions?: unknown): {
+  /**
+   * A terminal that does nothing. Its options are kept in `__terminals`, so a
+   * test can drive an extension terminal's pty: open it, read what it wrote,
+   * close it.
+   */
+  createTerminal(nameOrOptions?: unknown): {
     show(): void;
     sendText(text: string): void;
     dispose(): void;
   } {
+    __terminals.push(nameOrOptions as FakeTerminalOptions);
     return { show: () => {}, sendText: () => {}, dispose: () => {} };
   },
   /**
@@ -427,8 +432,22 @@ export const notebooks = {
   },
 };
 
+/** What `createTerminal` was given; `pty` is there for an extension terminal. */
+export interface FakeTerminalOptions {
+  name?: string;
+  pty?: {
+    onDidWrite: (listener: (text: string) => void) => { dispose(): void };
+    open(): void;
+    close(): void;
+    handleInput?(data: string): void;
+  };
+}
+export const __terminals: FakeTerminalOptions[] = [];
+
 export const workspace = {
   notebookDocuments: [] as unknown[],
+  /** Trusted unless a test says otherwise. */
+  isTrusted: true,
   getConfiguration(section: string) {
     return {
       get<T>(key: string, fallback: T): T {

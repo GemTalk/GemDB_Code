@@ -3,7 +3,8 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { DapFrame, DapScope, Pause, scopesFor } from './debugger';
 import { FIELD } from './haltStack';
-import { REGISTRY } from './pauseVariables';
+import { runFileOf } from './fileOwner';
+import { MAIN_MODULE, MainModule, REGISTRY } from './pauseVariables';
 import { escapeString } from './pythonQueries';
 
 /**
@@ -100,14 +101,16 @@ export function savedFrameOf(frame: DapFrame, lines: string[] | undefined): Save
  * The Python runs **in the notebook's own scope** so `globals()` is the
  * notebook's, and the frames' locals — already in the pause's registry — are
  * bound there under `___gemdb_…` names for the moment it runs, then removed.
- * Dunder names and modules are left out of the saved globals.
+ * A file run has no notebook scope: its globals are its `__main__` module's,
+ * and the Python runs in a scratch scope. Dunder names and modules are left out
+ * of the saved globals.
  */
 export function saveStackQuery(
   key: string,
   meta: Omit<SavedStackMeta, 'frames'>,
   frames: SavedFrame[],
   localsRefs: number[],
-  scopeKey: string | undefined,
+  scopeKey: string | MainModule | undefined,
 ): string {
   const localName = (i: number) => `___gemdb_l${i}`;
   const framesPy = frames
@@ -126,7 +129,9 @@ export function saveStackQuery(
     `  "label": ${py(meta.label)}, "notebook": ${py(meta.notebook)},`,
     `  "saved_at": ${py(meta.saved_at)}, "description": ${py(meta.description)},`,
     `  "frames": [\n  ${framesPy}],`,
-    '  "globals": {k: v for k, v in globals().items()',
+    `  "globals": {k: v for k, v in ${
+      scopeKey === MAIN_MODULE ? '__import__("sys").modules["__main__"].__dict__' : 'globals()'
+    }.items()`,
     '              if not k.startswith("__") and type(v).__name__ != "module"},',
     '}',
     '"saved"',
@@ -142,7 +147,7 @@ export function saveStackQuery(
     .filter(Boolean)
     .join(' ');
   const scope =
-    scopeKey === undefined
+    scopeKey === undefined || scopeKey === MAIN_MODULE
       ? 'SymbolDictionary new'
       : `((SessionTemps current at: #'__gemdbScopes') at: '${escapeString(scopeKey)}')`;
   return `| scope reg d r |
@@ -323,9 +328,12 @@ export function restoredFrames(
     const id = index + 1;
     const source = restoredSource(frame, id, world, meta.saved_at);
     if (source?.sourceReference && frame.text !== null) texts.set(id, frame.text);
-    // A notebook's globals belong to its cells' frames, as when it was live.
-    const fromCell = frame.path === null || frame.path.startsWith('vscode-notebook-cell:');
-    scopes.set(id, scopesFor(locals[index] ?? 0, fromCell ? globals : 0));
+    // Globals belong to the frames of the notebook's cells or the run file, as when live.
+    const ownFrame =
+      frame.path === null ||
+      frame.path.startsWith('vscode-notebook-cell:') ||
+      frame.path === runFileOf(meta.notebook);
+    scopes.set(id, scopesFor(locals[index] ?? 0, ownFrame ? globals : 0));
     return {
       id,
       name: frame.name,

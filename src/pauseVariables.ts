@@ -193,16 +193,33 @@ none := System myUserProfile symbolList objectNamed: #'None'.
 out := WriteStream on: Unicode7 new.`;
 
 /**
+ * A file run's globals live in its `__main__` module, not in a notebook scope:
+ * `pausedStackQuery` and `saveStackQuery` are handed this in place of a scope key.
+ */
+export const MAIN_MODULE = Symbol('__main__');
+export type MainModule = typeof MAIN_MODULE;
+
+/** Smalltalk answering the running script's `__main__` globals, or nil. */
+export const MAIN_MODULE_GLOBALS = `[((System myUserProfile symbolList objectNamed: #'ModuleAst')
+    evaluateSource: 'import sys
+sys.modules["__main__"]') @env1:__dict__]
+  on: AbstractException do: [:e | e return: nil]`;
+
+/**
  * Smalltalk that reads the paused stack and, in the same walk, starts a fresh
  * registry for the pause and registers each frame's locals, plus the
- * notebook's globals when `scopeKey` names a scope.
+ * notebook's globals when `scopeKey` names a scope, or a file run's when it is
+ * `MAIN_MODULE`.
  *
  * Answers `pythonStackQuery`'s records, each with one more field — the
  * registry position of that frame's locals, or 0 — and then a final record
  * with the globals' position. One walk, so a frame and its locals cannot be
  * mismatched.
  */
-export function pausedStackQuery(processOop: bigint, scopeKey: string | undefined): string {
+export function pausedStackQuery(
+  processOop: bigint,
+  scopeKey: string | MainModule | undefined,
+): string {
   return pythonStackQuery(processOop, {
     temps: 'reg scopes scope',
     setup: `reg := OrderedCollection new.
@@ -218,7 +235,9 @@ SessionTemps current at: #'${REGISTRY}' put: reg.`,
 ${
   scopeKey === undefined
     ? ''
-    : `scopes := SessionTemps current at: #'__gemdbScopes' ifAbsent: [nil].
+    : scopeKey === MAIN_MODULE
+      ? `scope := ${MAIN_MODULE_GLOBALS}.`
+      : `scopes := SessionTemps current at: #'__gemdbScopes' ifAbsent: [nil].
 scopes notNil ifTrue: [scope := scopes at: '${escapeString(scopeKey)}' ifAbsent: [nil]].`
 }
 (scope notNil and: [scope size > 0])

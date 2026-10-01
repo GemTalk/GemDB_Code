@@ -396,13 +396,13 @@ describe('adding an object from the debugger', () => {
     expect(gem.pending.get(NB)?.size ?? 0).toBe(0);
   });
 
-  it('says it needs a paused cell when there is none', async () => {
+  it('says it needs a paused cell or file run when there is none', async () => {
     setUp();
     const shown = vi.spyOn(window, 'showErrorMessage');
 
     await command('gemdb.saveVariable')(variable('self', 5));
 
-    expect(shown.mock.calls[0][0]).toMatch(/while a GemDB notebook cell is paused/);
+    expect(shown.mock.calls[0][0]).toMatch(/notebook cell or Debug Python File run is paused/);
   });
 });
 

@@ -7,10 +7,11 @@ import { DEBUG_TYPE } from '../debugger';
  * What package.json promises VS Code about trust, held to it.
  *
  * Both halves are one decision. GemDB declares `limited` Restricted Mode
- * support and adds no trust checks of its own, which is safe only because
- * nothing a folder can supply steers it: VS Code gates the parts that run
- * that folder's code (it asks before a notebook cell executes and before a
- * terminal starts, whoever's kernel or terminal it is), and every setting is
+ * support, which is safe only because nothing a folder can supply steers it:
+ * VS Code gates most of what runs that folder's code (it asks before a
+ * notebook cell executes and before a terminal starts, whoever's kernel or
+ * terminal it is), Debug Python File, which VS Code cannot see, checks trust
+ * itself (`debugFile.ts`), and every setting is
  * machine-scoped, so a cloned repository's `.vscode/settings.json` cannot
  * choose the root path that uninstall deletes under. A setting added later
  * without the scope would reopen that quietly — hence a test, not a comment.
@@ -117,6 +118,22 @@ describe('the Persisted Objects contributions', () => {
     expect(title('gemdb.savedObjects.commitNotebook')).toMatch(/^Commit: Persist/);
     expect(title('gemdb.savedObjects.abortNotebook')).toMatch(/^Abort: Discard/);
     expect(title('gemdb.savedObjects.help')).toMatch(/Add Under gemdb\.root, Then Commit/);
+  });
+});
+
+describe('Debug Python File', () => {
+  const { commands, menus } = manifest.contributes;
+
+  it('sits beside Run Python File in a Python editor’s run menu and the Command Palette', () => {
+    const run = menus['editor/title/run'].filter((e) => e.when === 'resourceLangId == python');
+
+    expect(run.map((e) => e.command)).toEqual(['gemdb.runFile', 'gemdb.debugFile']);
+    expect(commands.find((c) => c.command === 'gemdb.debugFile')?.title).toBe(
+      'Debug Python File in GemDB',
+    );
+    expect(menus.commandPalette.find((e) => e.command === 'gemdb.debugFile')?.when).toBe(
+      'resourceLangId == python',
+    );
   });
 });
 

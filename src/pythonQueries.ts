@@ -174,6 +174,32 @@ export async function runPythonInSession(
 }
 
 /**
+ * Run a `.py` file in an owner's session, as `gemdb file.py` runs it: the
+ * file's own `__main__`, with its real path on every frame, so a
+ * breakpoint() in it opens the debugger on the file itself. The result is
+ * empty unless the file raised.
+ */
+export async function runPythonFile(
+  file: string,
+  owner: SessionOwner,
+  onOutput?: OutputSink,
+): Promise<PyResult> {
+  return framed(
+    sessionFor(owner).executeAsync(
+      buildQuery(
+        `| importlib |
+       importlib := System myUserProfile symbolList objectNamed: #'importlib'.
+       importlib runPath: src.
+       ''`,
+        file,
+        onOutput !== undefined,
+      ),
+      onOutput,
+    ),
+  );
+}
+
+/**
  * Forget a scope's globals, so the next run in it starts clean. This is the
  * "restart kernel" of a notebook. It touches only plain database collections,
  * so it works — and harmlessly does nothing — whether or not Grail is present.
