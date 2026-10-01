@@ -1,5 +1,6 @@
 import {
   ExecutionInterrupted,
+  ExecutionStopped,
   GciSession,
   OutputSink,
   SessionOwner,
@@ -43,6 +44,11 @@ export interface PyResult {
   output: string;
   /** The result's `__repr__`, empty for `None`, or an `Error: …` line. */
   value: string;
+  /**
+   * The user ended the run — Stop at a breakpoint(), or an interrupt — rather
+   * than the code failing. A notebook stops its queue of cells on this.
+   */
+  stopped?: boolean;
 }
 
 /**
@@ -59,14 +65,19 @@ const FRAME = '\u001f';
  * The result of one framed evaluation, or — when `interrupt()` had to end it
  * at a forwarder stop, where nothing gem-side gets to compose a message — the
  * same `Error:` line Grail itself produces for a KeyboardInterrupt, so every
- * display path treats the two identically.
+ * display path treats the two identically. A run stopped from the debugger at
+ * a breakpoint() gets an `Error:` line of its own for the same reason.
  */
 async function framed(evaluation: Promise<string>): Promise<PyResult> {
   try {
     return splitFramed(await evaluation);
   } catch (e) {
     if (e instanceof ExecutionInterrupted) {
-      return { output: '', value: 'Error: KeyboardInterrupt - ' };
+      return { output: '', value: 'Error: KeyboardInterrupt - ', stopped: true };
+    }
+    // Stop at a breakpoint(): the user ended the run from the debugger.
+    if (e instanceof ExecutionStopped) {
+      return { output: '', value: `Error: ${e.message}`, stopped: true };
     }
     throw e;
   }
@@ -157,6 +168,32 @@ export async function runPythonInSession(
   return framed(
     session.executeAsync(
       buildQuery(evaluateInScope(scopeId), source, onOutput !== undefined),
+      onOutput,
+    ),
+  );
+}
+
+/**
+ * Run a `.py` file in an owner's session, as `gemdb file.py` runs it: the
+ * file's own `__main__`, with its real path on every frame, so a
+ * breakpoint() in it opens the debugger on the file itself. The result is
+ * empty unless the file raised.
+ */
+export async function runPythonFile(
+  file: string,
+  owner: SessionOwner,
+  onOutput?: OutputSink,
+): Promise<PyResult> {
+  return framed(
+    sessionFor(owner).executeAsync(
+      buildQuery(
+        `| importlib |
+       importlib := System myUserProfile symbolList objectNamed: #'importlib'.
+       importlib runPath: src.
+       ''`,
+        file,
+        onOutput !== undefined,
+      ),
       onOutput,
     ),
   );

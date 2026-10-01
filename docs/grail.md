@@ -126,6 +126,62 @@ executeAsync loop clears the stack at the next forwarder stop and throws
 `Error: KeyboardInterrupt - `. Anything new that evaluates Python should go
 through that layer, not `execute` directly.
 
+**`breakpoint()` halts to the client, and the debugger reads the stack
+through Grail's private walk.** Grail's breakpoint() goes through its own
+`pdb.set_trace` to `sys breakpoint`, which sends `pause`: a Halt signalled
+with `_signalToDebugger`, so no handler on the stack runs — not even the
+`on: AbstractException do:` around every evaluation — and it arrives as GCI
+error 2709 with the suspended GsProcess in `err.context`, under the execute
+flags `session.ts` already passes (0). Measured on 4.0.0.a4: that process can
+be read while suspended, `GciTsContinueWith(context, OOP_ILLEGAL)` resumes
+it to the evaluation's real result, and `GciTsClearStack` ends it and leaves
+the session usable. When a halt handler is installed (the extension's, in
+`debugger.ts`), the executeAsync loop hands it the pause and resumes or clears
+as it answers. With none (the GemDB Shell), the loop prints where the
+breakpoint() was and resumes. File mode never reaches this loop: `gemdb-run.tpz`
+sets `sys.breakpointhook` to a function that prints the same sentence and
+returns, because a Halt reaching linked topaz abandons the `run` block and
+strands the user at `topaz 1>` holding a session. Setting the hook was measured
+not to dirty the transaction, and `sys._getframe(1)` inside it is the caller.
+The sentence goes to `sys.stderr`, which file mode currently routes to stdout
+along with `print()` — a separate issue. While a cell sits paused, its session
+still counts against the limit of ten and keeps its transaction view, so a
+pause left open for hours holds the oldest commit record just as an idle
+session does.
+The stack comes from `BaseException ___framesAndLevelsOfSuspendedProcess___:`
+fed to `___liveFramePairsFrom___:…running: false`, which drops the Smalltalk
+frames and names the Python ones (`outer`, `<lambda>`, `<module>`); lines and
+columns come from `___pythonSpanForMethod___:ip:`. Two measured traps: for a
+block frame (a def inside a notebook cell) the span answers a line from
+elsewhere in the method, so the walk's line wins and the span is used only
+when it agrees; and every cell compiles under the filename `<grail>`, so a
+cell frame finds its cell by the text of its line (from the span, or from
+`___curPosPositionsFromSource___:` on the home method). All of these
+selectors are private to Grail; `haltStack.ts` fails soft if one moves, and
+`src/__integration__/breakpoint.test.ts` is what notices. The Variables view
+reads locals with `PyFrame ___pyLocalsFromFrameContentsList___:` (which merges
+a Python frame's Smalltalk frames and adds `self`), in the same walk as the
+stack so a frame cannot be paired with another's locals, and keeps every
+object it may expand in a per-pause registry in `SessionTemps`, dropped before
+the evaluation resumes (`pauseVariables.ts`). Every query made while paused
+goes through `queryWhilePaused` in `session.ts` — nonblocking, one at a time,
+soft-broken past a two-second budget — never `execute`, because a Variables
+row runs the user's own `__repr__`. Measured traps there: every Smalltalk
+sequence answers `keysAndValuesDo:` with 1-based keys, so sequences must be
+tested before dictionaries or a list reads as entries 1, 2, 3; a `__repr__`
+that prints would send to the paused cell's `#GrailConsole` forwarder, so each
+query swaps in a WriteStream for its own duration and puts the cell's back in
+an `ensure:`; a `__repr__` that reaches `breakpoint()` or `input()` stops the
+query past every handler, and `GciTsClearStack` on it runs that `ensure:` and
+leaves the paused cell resumable; the soft break is a `Break`, a
+`ControlInterrupt` that `on: AbstractException do:` catches, which is what
+lets one slow `__repr__` be cut short while the rest of the rows still arrive;
+and a Python `set` answers `detect:` without running its block, so it is read
+with `do:`. A direct `pdb.set_trace()` in file mode still strands the user at
+`topaz 1>`: patching it needs `import pdb`, which was measured to dirty the
+transaction, and file mode's first statement already cannot open
+`gemdb.transaction()` for that reason.
+
 **The console box says what the sink takes, because the sink cannot be
 asked.** `SessionTemps #GrailConsole` holds an Array; slot 1 is the sink, and
 slot 2 — `#'utf8'` — declares that it takes bytes. `gemdb-run.tpz` sets it,

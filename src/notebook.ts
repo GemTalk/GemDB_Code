@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { noteRunningCell } from './debugger';
 import { ensureRunning } from './lifecycle';
 import { errorMessage, log } from './log';
 import { PyResult, isErrorResult, resetScope, runPython } from './pythonQueries';
@@ -54,8 +55,21 @@ export const CONTROLLER_ID = 'gemdb-python';
 export class GemDbNotebookController {
   private readonly controller: vscode.NotebookController;
   private executionOrder = 0;
+  /**
+   * How many times each notebook has been interrupted. A run notes the count
+   * when it is requested, and stops at the first cell boundary where it has
+   * moved — so an interrupt ends every run already asked for, including one
+   * still waiting for the database to start or for an earlier run.
+   */
+  private readonly interrupts = new Map<string, number>();
+  /** Each notebook's last requested run, so a new request waits its turn. */
+  private readonly runs = new Map<string, Promise<void>>();
 
-  constructor(private readonly extensionPath: string) {
+  constructor(
+    private readonly extensionPath: string,
+    /** Told after every cell, which is where a notebook's commits happen. */
+    private readonly onCellFinished: () => void = () => {},
+  ) {
     this.controller = vscode.notebooks.createNotebookController(
       CONTROLLER_ID,
       NOTEBOOK_TYPE,
@@ -68,20 +82,52 @@ export class GemDbNotebookController {
     // Interrupt only this notebook's session. VS Code hands the handler the
     // notebook that asked, and now that each has a session of its own, one
     // notebook's Ctrl+C no longer stops another's cell.
-    this.controller.interruptHandler = async (notebook) =>
-      interruptSessionFor(notebookOwner(notebook).key);
+    this.controller.interruptHandler = async (notebook) => {
+      const key = notebookOwner(notebook).key;
+      this.interrupts.set(key, this.interruptsOf(key) + 1);
+      interruptSessionFor(key);
+    };
   }
 
   dispose(): void {
     this.controller.dispose();
   }
 
+  private interruptsOf(key: string): number {
+    return this.interrupts.get(key) ?? 0;
+  }
+
   /**
-   * Cells run one at a time. They share a single database session and the
-   * call into it is synchronous, so there is no concurrency to be had — and
-   * running them in order is what makes a notebook reproducible anyway.
+   * Cells run one at a time. They share a single database session, which
+   * runs one evaluation at a time, so there is no concurrency to be had — and
+   * running them in order is what makes a notebook reproducible anyway. VS
+   * Code does not wait for one run request before sending the next (Run on
+   * another cell while one is paused at breakpoint()), so each notebook's
+   * requests queue behind each other, as Jupyter's do.
+   *
+   * A cell whose code fails does not stop the ones after it. A cell the *user*
+   * ended does — Stop in the debugger at a breakpoint(), or the interrupt
+   * button — as in Jupyter: stopping a run means the rest of it too, not
+   * "this cell, then carry on with the next". So does a cell that could not
+   * run at all (the session closed under it, the database stopped): the next
+   * would log in afresh, without the state the earlier cells built.
    */
   private async executeCells(cells: vscode.NotebookCell[]): Promise<void> {
+    if (cells.length === 0) return;
+    const key = notebookOwner(cells[0].notebook).key;
+    const asked = this.interruptsOf(key);
+    const previous = this.runs.get(key) ?? Promise.resolve();
+    const run = previous.catch(() => undefined).then(() => this.runCells(cells, key, asked));
+    this.runs.set(key, run);
+    try {
+      await run;
+    } finally {
+      if (this.runs.get(key) === run) this.runs.delete(key);
+    }
+  }
+
+  private async runCells(cells: vscode.NotebookCell[], key: string, asked: number): Promise<void> {
+    const interrupted = (): boolean => this.interruptsOf(key) !== asked;
     // Running a cell is a request to run Python, and Python only runs inside
     // the database — so start it rather than asking. Done once for the whole
     // batch, before any cell reports a spurious failure.
@@ -91,7 +137,8 @@ export class GemDbNotebookController {
       return;
     }
     for (const cell of cells) {
-      await this.executeCell(cell);
+      if (interrupted()) break;
+      if (await this.executeCell(cell)) break;
     }
   }
 
@@ -102,16 +149,21 @@ export class GemDbNotebookController {
     this.endWithError(execution, message);
   }
 
-  private async executeCell(cell: vscode.NotebookCell): Promise<void> {
+  /** Run one cell. Answers whether the run should stop here (see `executeCells`). */
+  private async executeCell(cell: vscode.NotebookCell): Promise<boolean> {
     const execution = this.controller.createNotebookCellExecution(cell);
     execution.executionOrder = ++this.executionOrder;
     execution.start(Date.now());
+    // The previous run's output goes now, not when this run first prints: a
+    // cell paused at breakpoint() has printed nothing yet, and leaving the
+    // last run's error under it reads as this run's.
+    execution.replaceOutput([]);
 
     const source = cell.document.getText();
     if (!source.trim()) {
       execution.replaceOutput([]);
       execution.end(true, Date.now());
-      return;
+      return false;
     }
 
     // print() streams: each chunk repaints the cell's text output, so a
@@ -121,9 +173,13 @@ export class GemDbNotebookController {
     const textOutput = (text: string): vscode.NotebookCellOutput =>
       new vscode.NotebookCellOutput([vscode.NotebookCellOutputItem.text(text, 'text/plain')]);
 
+    // A breakpoint() in this cell opens the debugger here, so it needs to
+    // know which cell is running to show a `<grail>` frame in it.
+    const owner = notebookOwner(cell.notebook);
+    noteRunningCell(owner.key, cell.document.uri.toString());
     let result: PyResult;
     try {
-      result = await runPython(source, notebookOwner(cell.notebook), (chunk) => {
+      result = await runPython(source, owner, (chunk) => {
         printed += chunk;
         execution.replaceOutput([textOutput(printed)]);
       });
@@ -135,7 +191,10 @@ export class GemDbNotebookController {
       const message = errorMessage(e);
       log(`Notebook cell failed: ${message}`);
       this.endWithError(execution, message);
-      return;
+      return true;
+    } finally {
+      noteRunningCell(owner.key, undefined);
+      this.onCellFinished();
     }
     reportPythonUsed(SURFACE.notebook, EVIDENCE.executed);
 
@@ -151,12 +210,13 @@ export class GemDbNotebookController {
     if (isErrorResult(result.value)) {
       execution.replaceOutput(outputs);
       this.appendError(execution, result.value);
-      return;
+      return result.stopped === true;
     }
 
     if (result.value) outputs.push(textOutput(result.value));
     execution.replaceOutput(outputs);
     execution.end(true, Date.now());
+    return false;
   }
 
   private endWithError(execution: vscode.NotebookCellExecution, message: string): void {

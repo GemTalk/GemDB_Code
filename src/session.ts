@@ -1,8 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { dbPassword, dbUser, engineVersion, stoneName } from './config';
-import { OOP_ILLEGAL } from './gci/gciConstants';
+import { OOP_ILLEGAL, OOP_NIL } from './gci/gciConstants';
 import { GciError, GciLibrary } from './gci/gciLibrary';
+import { parsePythonStack, pythonStackQuery } from './haltStack';
 import { errorMessage, log } from './log';
 import { enginePath } from './paths';
 import { explainLibraryLoadFailure, sharedLibraryExtension } from './platform';
@@ -37,6 +38,13 @@ export class LibraryLoadError extends SessionError {}
  * environment.
  */
 export class ExecutionInterrupted extends SessionError {}
+
+/**
+ * The evaluation paused at `breakpoint()` and the user chose Stop in the
+ * debugger. Its own class for the same reason as `ExecutionInterrupted`: it is
+ * a decision, not a failure of the environment.
+ */
+export class ExecutionStopped extends SessionError {}
 
 /**
  * The database refused a login because every session is in use.
@@ -74,7 +82,7 @@ const SESSION_LIMIT_ERRORS = new Set([4039, 4041, 4050]);
 const GCI_LOGIN_QUIET = 0x10;
 
 /** What kind of user interface a session belongs to. */
-export type SessionKind = 'notebook' | 'shell' | 'extension';
+export type SessionKind = 'notebook' | 'file' | 'shell' | 'extension';
 
 /**
  * Who a session is for.
@@ -124,6 +132,7 @@ const CACHE_NAME_LIMIT = 31;
  */
 const CACHE_NAME_TAGS: Record<SessionKind, string> = {
   notebook: 'GemDB nb',
+  file: 'GemDB py',
   shell: 'GemDB Shell',
   extension: 'GemDB Code',
 };
@@ -154,9 +163,9 @@ export function cacheNameFor(owner: SessionOwner, pid: number = process.pid): st
   const tag = CACHE_NAME_TAGS[owner.kind];
   if (owner.kind === 'extension') return tag;
   if (owner.kind === 'shell') return `${tag} ${pid}`;
-  // `.ipynb` is what the `nb` tag already said, so spend the room on the name.
+  // `.ipynb` or `.py` is what the tag already said, so spend the room on the name.
   const name = owner.label
-    .replace(/\.ipynb$/i, '')
+    .replace(owner.kind === 'file' ? /\.py$/i : /\.ipynb$/i, '')
     .replace(/[^\x20-\x7e]/g, '')
     .trim();
   if (!name) return tag;
@@ -231,6 +240,61 @@ const OUTPUT_SELECTORS: Record<string, 'argument' | string> = {
 };
 
 let inputHandler: InputHandler | undefined;
+
+// ---------------------------------------------------------------------------
+// breakpoint(): the gem halts, the client decides.
+//
+// Grail's breakpoint() ends in `Object>>pause`, which signals a Halt straight
+// to the GCI client — past every exception handler on the stack, including the
+// `on: AbstractException do:` the query layer wraps each evaluation in — so it
+// surfaces here as GCI error 2709 with the suspended GsProcess in
+// `err.context`. That process can be read (its frames, via Grail) and then
+// resumed with GciTsContinueWith or discarded with GciTsClearStack; both
+// measured on 4.0.0.a4 with the execute flags this file already passes.
+// ---------------------------------------------------------------------------
+
+/** GCI error for a Halt — what Grail's breakpoint() signals. */
+const HALT = 2709;
+
+/** Whether an error's `context` names a suspended process, which can be cleared. */
+function isProcess(context: bigint): boolean {
+  return context !== OOP_ILLEGAL && context !== OOP_NIL && context !== 0n;
+}
+
+/** What the user chose while the evaluation sat at a breakpoint(). */
+export type HaltAnswer = 'continue' | 'stop';
+
+/** One paused evaluation, as the host's handler sees it. */
+export interface HaltRequest {
+  session: GciSession;
+  /** The suspended GsProcess — what a stack query reads. */
+  process: bigint;
+  /**
+   * Run Smalltalk while the evaluation stays paused — what the debugger reads
+   * the stack and the Variables with. Nonblocking, one query at a time, and
+   * soft-broken past a time budget; see `queryWhilePaused`. Refused once the
+   * pause is settled.
+   */
+  query(code: string): Promise<string>;
+  /** Runs if the evaluation is interrupted or its session closed while paused,
+   * so the handler can take down its debugger (the halt is already answered). */
+  onCancel(callback: () => void): void;
+}
+
+export type HaltHandler = (request: HaltRequest) => Promise<HaltAnswer>;
+
+let haltHandler: HaltHandler | undefined;
+
+/**
+ * Install this process's answer to breakpoint(). One per process, like
+ * `setInputHandler`. With none installed — the GemDB Shell — the evaluation
+ * says where the breakpoint() was and carries on past it, the way CPython does
+ * with the hook disabled, rather than failing a run the user did not ask to
+ * end.
+ */
+export function setHaltHandler(handler: HaltHandler | undefined): void {
+  haltHandler = handler;
+}
 
 /**
  * Install this process's answer to input(). One per process, deliberately:
@@ -323,6 +387,13 @@ const POLL_CAP_MS = 50;
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * How long a query run while paused may take before it is soft-broken, and
+ * then how often it is broken again. A Variables row runs the user's own
+ * `__repr__`, and one that never returns must not wedge the pause.
+ */
+const PAUSED_QUERY_BUDGET_MS = 2000;
+
+/**
  * One logged-in session.
  *
  * `execute` is the synchronous path and blocks the extension host for its
@@ -332,6 +403,8 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * painting during a long computation and, crucially, `interrupt()` can still be
  * delivered. A synchronous call cannot be interrupted from the same process,
  * because the thread that would send the break is the one that is blocked.
+ * What the debugger reads while an evaluation is paused at breakpoint() goes
+ * through `queryWhilePaused`, nonblocking for the same reason.
  */
 export class GciSession {
   private busy = false;
@@ -345,6 +418,12 @@ export class GciSession {
    * loop end the evaluation at its next forwarder stop with GciTsClearStack.
    */
   private breakPending = false;
+  /** Resolves the pending breakpoint() pause as a stop, when one is pending. */
+  private pendingHaltCancel: (() => void) | undefined;
+  /** The queries run while paused, chained so only one is ever in flight. */
+  private pausedQueries: Promise<void> = Promise.resolve();
+  /** Whether a query run while paused is executing now, so a cancel can break it. */
+  private pausedQueryRunning = false;
 
   /** When this session last ran something, for "which is idlest". */
   private lastUsedAt = Date.now();
@@ -513,44 +592,59 @@ export class GciSession {
     try {
       this.ensureStdinProvider(handle);
 
-      const started = this.gci.GciTsNbExecute(
-        handle,
-        code,
-        // The source is UTF-8; saying so is what keeps non-ASCII string
-        // literals in user code intact. Same values the sync path passes.
-        this.gci.utf8ClassOop(handle),
-        OOP_ILLEGAL, // no context receiver
-        this.gci.nilOop(),
-        0,
-        0,
-      );
-      if (!started.success) {
-        throw new SessionError(started.err.message || 'Could not start the execution.');
-      }
-
-      // Poll with a little backoff: quick results stay quick (5 ms), long runs
-      // cost one no-op FFI call every 50 ms, and the event loop breathes in
-      // between — which is exactly the window an interrupt arrives through.
-      let wait = POLL_START_MS;
-      for (;;) {
-        const poll = this.gci.GciTsNbPoll(handle, 0);
-        if (poll.result === 1) break;
-        if (poll.result < 0) {
-          throw new SessionError(poll.err.message || 'The execution failed.');
-        }
-        await sleep(wait);
-        wait = Math.min(wait * 2, POLL_CAP_MS);
-      }
-
       // The execution may pause any number of times to ask the user for a
       // line (Grail's input(), via the stdin provider — see the top of this
-      // file) or to hand over a chunk of output (print(), via the Transcript
-      // forwarder); each pause is answered and resumed until a real result
-      // (or a real error) comes back. GciTsContinueWith runs on a koffi
-      // worker thread, so the event loop — and with it GciTsBreak — stays
-      // available while the rest of the Python runs.
-      let { result: oop, err } = this.gci.GciTsNbResult(handle);
-      while (oop === OOP_ILLEGAL && err.number === CLIENT_FORWARDER_SEND) {
+      // file), to hand over a chunk of output (print(), via the Transcript
+      // forwarder), or at a breakpoint() — for the halt handler to answer, or
+      // with none installed, to say so and carry on;
+      // each pause is answered and resumed until a real result (or a real
+      // error) comes back. GciTsContinueWith runs on a koffi worker thread,
+      // so the event loop — and with it GciTsBreak — stays available while
+      // the rest of the Python runs.
+      let { result: oop, err } = await this.submitAndWait(handle, code);
+      while (oop === OOP_ILLEGAL && (err.number === CLIENT_FORWARDER_SEND || err.number === HALT)) {
+        if (err.number === HALT) {
+          // An interrupt sent while the gem was still running can land after
+          // it reached breakpoint(): the user already asked to stop, so do
+          // not open a debugger for them to dismiss.
+          if (this.breakPending) {
+            this.gci.GciTsClearStack(handle, err.context);
+            throw new ExecutionInterrupted('The execution was interrupted.');
+          }
+          if (!haltHandler) {
+            onOutput?.(this.breakpointNotice(err.context));
+            ({ result: oop, err } = await this.gci.GciTsContinueWithAsync(
+              handle,
+              err.context,
+              OOP_ILLEGAL,
+              null,
+              0,
+            ));
+            continue;
+          }
+          const answer = await this.awaitHalt(haltHandler, err.context);
+          // A query the debugger still has in flight goes first: GCI takes
+          // one call at a time, and the last one queued drops the registry.
+          await this.pausedQueries;
+          // Closed while paused: the handle is gone, and GCI must not be
+          // handed it again.
+          if (this.handle === undefined) {
+            throw new SessionError('The session was closed while paused at breakpoint().');
+          }
+          if (answer === 'stop' || this.breakPending) {
+            this.gci.GciTsClearStack(handle, err.context);
+            if (this.breakPending) throw new ExecutionInterrupted('The execution was interrupted.');
+            throw new ExecutionStopped('Stopped at breakpoint() in the debugger.');
+          }
+          ({ result: oop, err } = await this.gci.GciTsContinueWithAsync(
+            handle,
+            err.context,
+            OOP_ILLEGAL, // resume the halt as if it returned; no replacement value
+            null,
+            0,
+          ));
+          continue;
+        }
         // An interrupt cannot reach a gem that is idle inside a forwarder
         // send: a queued break is discarded on resume, and continuing the
         // send with an error only re-signals the SAME send (both measured).
@@ -575,18 +669,111 @@ export class GciSession {
       if (oop === OOP_ILLEGAL) {
         throw new SessionError(err.message || 'The execution failed.');
       }
-      try {
-        return this.gci.performAndRelease(handle, oop, 'encodeAsUTF8', (utf8Oop) =>
-          this.fetchString(utf8Oop),
-        );
-      } finally {
-        this.gci.GciTsReleaseObjs(handle, [oop]);
-      }
+      return this.fetchResult(handle, oop);
     } catch (e) {
       throw this.asSessionError(e);
     } finally {
       this.busy = false;
       this.breakPending = false;
+    }
+  }
+
+  /**
+   * Submit Smalltalk without blocking and wait for its first answer — a
+   * result, or the error or pause it stopped at. `whileWaiting` runs between
+   * polls.
+   */
+  private async submitAndWait(
+    handle: unknown,
+    code: string,
+    whileWaiting?: () => void,
+  ): Promise<{ result: bigint; err: GciError }> {
+    const started = this.gci.GciTsNbExecute(
+      handle,
+      code,
+      // The source is UTF-8; saying so is what keeps non-ASCII string
+      // literals in user code intact. Same values the sync path passes.
+      this.gci.utf8ClassOop(handle),
+      OOP_ILLEGAL, // no context receiver
+      this.gci.nilOop(),
+      0,
+      0,
+    );
+    if (!started.success) {
+      throw new SessionError(started.err.message || 'Could not start the execution.');
+    }
+
+    // Poll with a little backoff: quick results stay quick (5 ms), long runs
+    // cost one no-op FFI call every 50 ms, and the event loop breathes in
+    // between — which is exactly the window an interrupt arrives through.
+    let wait = POLL_START_MS;
+    for (;;) {
+      const poll = this.gci.GciTsNbPoll(handle, 0);
+      if (poll.result === 1) break;
+      if (poll.result < 0) {
+        throw new SessionError(poll.err.message || 'The execution failed.');
+      }
+      whileWaiting?.();
+      await sleep(wait);
+      wait = Math.min(wait * 2, POLL_CAP_MS);
+    }
+    return this.gci.GciTsNbResult(handle);
+  }
+
+  /** A result object as a String, releasing it. */
+  private fetchResult(handle: unknown, oop: bigint): string {
+    try {
+      return this.gci.performAndRelease(handle, oop, 'encodeAsUTF8', (utf8Oop) =>
+        this.fetchString(utf8Oop),
+      );
+    } finally {
+      this.gci.GciTsReleaseObjs(handle, [oop]);
+    }
+  }
+
+  /**
+   * Run a query while an evaluation of this session is paused at
+   * breakpoint(). Nonblocking, like `executeAsync`, because a Variables row
+   * runs the user's own `__repr__`, and a synchronous call that never
+   * returned would freeze the extension host with no way to send a break.
+   * Past `PAUSED_QUERY_BUDGET_MS` the query is soft-broken, again each budget
+   * after; the Variables query catches that break around a `__repr__` and
+   * shows the rest without one.
+   *
+   * Queries run one at a time, chained, and the paused evaluation waits for
+   * the chain before it resumes or ends. A query that itself stops — a
+   * `__repr__` that reached breakpoint() or input(), or a break nothing
+   * caught — has its stack cleared, which runs its `ensure:` blocks, and
+   * fails.
+   */
+  private queryWhilePaused(code: string): Promise<string> {
+    const run = this.pausedQueries.then(() => this.runPausedQuery(code));
+    this.pausedQueries = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async runPausedQuery(code: string): Promise<string> {
+    const handle = this.requireHandle();
+    let deadline = Date.now() + PAUSED_QUERY_BUDGET_MS;
+    this.pausedQueryRunning = true;
+    try {
+      const { result: oop, err } = await this.submitAndWait(handle, code, () => {
+        if (Date.now() < deadline) return;
+        deadline = Date.now() + PAUSED_QUERY_BUDGET_MS;
+        this.gci.GciTsBreak(handle, false);
+      });
+      if (oop === OOP_ILLEGAL) {
+        if (isProcess(err.context)) this.gci.GciTsClearStack(handle, err.context);
+        throw new SessionError(err.message || 'The query failed.');
+      }
+      return this.fetchResult(handle, oop);
+    } catch (e) {
+      throw this.asSessionError(e);
+    } finally {
+      this.pausedQueryRunning = false;
     }
   }
 
@@ -685,6 +872,67 @@ export class GciSession {
     });
   }
 
+  /**
+   * The line a debugger-less host prints at a breakpoint(): where it was, and
+   * that the run goes on. The same words `gemdb-run.tpz` prints in file mode.
+   * Naming the place is best-effort — a stack Grail cannot read still gets the
+   * sentence.
+   */
+  private breakpointNotice(process: bigint): string {
+    let where = '';
+    try {
+      const [frame] = parsePythonStack(this.execute(pythonStackQuery(process)));
+      if (frame && frame.line > 0) {
+        where =
+          frame.file === '<grail>' ? ` at line ${frame.line}` : ` at ${frame.file}:${frame.line}`;
+      }
+    } catch (e) {
+      log(`Could not locate a breakpoint() (${this.label}): ${e instanceof Error ? e.message : e}`);
+    }
+    return `breakpoint()${where}: the debugger opens in notebooks and Debug Python File in GemDB; continuing.\n`;
+  }
+
+  /**
+   * Hand a breakpoint() pause to the handler, with the same interrupt path
+   * `awaitAnswer` gives input(): `interrupt()` or `logout()` during the pause
+   * resolves it as a stop and tells the handler to take its debugger down.
+   * A handler that throws stops the evaluation rather than leaving it paused.
+   */
+  private awaitHalt(handler: HaltHandler, process: bigint): Promise<HaltAnswer> {
+    return new Promise((resolve) => {
+      const cancels: Array<() => void> = [];
+      let settled = false;
+      const finish = (answer: HaltAnswer): void => {
+        if (settled) return;
+        settled = true;
+        this.pendingHaltCancel = undefined;
+        resolve(answer);
+      };
+      this.pendingHaltCancel = () => {
+        // The handler hears first, so what it queues on the way out (dropping
+        // the registry) is still accepted and still runs before the stop.
+        for (const callback of cancels) callback();
+        finish('stop');
+        if (this.pausedQueryRunning && this.handle !== undefined) {
+          this.gci.GciTsBreak(this.handle, false);
+        }
+      };
+      const query = (code: string): Promise<string> =>
+        settled
+          ? Promise.reject(new SessionError('The breakpoint() pause is over.'))
+          : this.queryWhilePaused(code);
+      handler({
+        session: this,
+        process,
+        query,
+        onCancel: (callback) => cancels.push(callback),
+      }).then(
+        (answer) => finish(answer),
+        () => finish('stop'),
+      );
+    });
+  }
+
   /** The selector of a suspended forwarder send — Symbols are byte objects. */
   private fetchSelector(handle: unknown, selectorOop: bigint): string {
     const fetched = this.gci.GciTsFetchChars(handle, selectorOop, 1n, 256);
@@ -714,6 +962,13 @@ export class GciSession {
       this.pendingInputCancel();
       return;
     }
+    // Paused at breakpoint(): the gem is not executing, so a break has nothing
+    // to land on. Ending the pause is what the user meant.
+    if (this.pendingHaltCancel) {
+      this.breakPending = true;
+      this.pendingHaltCancel();
+      return;
+    }
     // The break below lands only if the gem is executing. If it is instead
     // idle in a Transcript forwarder send (streamed print()), it is discarded
     // on resume — the flag has the loop end the evaluation at its next
@@ -731,6 +986,9 @@ export class GciSession {
   /** Log out, if logged in. Safe to call twice. */
   logout(): void {
     if (this.handle === undefined) return;
+    // A pause must not outlive its session: end it (the evaluation's loop
+    // sees the handle gone and stops touching GCI) and let the debugger close.
+    this.pendingHaltCancel?.();
     try {
       this.gci.GciTsLogout(this.handle);
       log(`Disconnected from GemDB (${this.label})`);
@@ -776,7 +1034,8 @@ export class GciSession {
 
   /** A dropped connection must not leave a dead handle to fail the same way forever. */
   private asSessionError(e: unknown): SessionError {
-    if (e instanceof ExecutionInterrupted) return e; // deliberate, not a failure
+    // Deliberate, not failures.
+    if (e instanceof ExecutionInterrupted || e instanceof ExecutionStopped) return e;
     const message = e instanceof Error ? e.message : String(e);
     if (isDeadSession(message)) {
       this.handle = undefined;

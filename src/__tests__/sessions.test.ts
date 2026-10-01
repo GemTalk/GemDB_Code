@@ -81,6 +81,10 @@ describe('the name a session publishes to the shared cache', () => {
     expect(cacheNameFor(nb('analysis.ipynb'))).toBe('GemDB nb analysis');
   });
 
+  it('names a Debug Python File run by its file, tagged as Python', () => {
+    expect(cacheNameFor({ key: '/w/job.py', kind: 'file', label: 'job.py' })).toBe('GemDB py job');
+  });
+
   it('spells out the shell, which is a product name and has room', () => {
     // "GemDB Shell" is what a user is told this thing is called, and an
     // administrator reading a session list is a user. The pid is fixed-width,

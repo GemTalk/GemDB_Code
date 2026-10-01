@@ -17,6 +17,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `settings.json`. The Get Started walkthrough describes that setup instead of a download, and
   leaves out stopping the database (#79). See [docs/external-database.md](docs/external-database.md).
 
+- **`breakpoint()` in a notebook cell opens the debugger.** The cell pauses, VS Code's Run and Debug
+  view shows the Python call stack — methods named with their class, frames from other cells and
+  imported files in place — and the paused line is highlighted. Variables shows each frame's locals
+  and the notebook's globals, and expands objects into their attributes, lists and sets into their
+  items and dicts into their entries, a page at a time for big ones. Classes, functions and modules
+  are folded into their own rows, as in VS Code's Python debugger, so the data stands out. A
+  `__repr__` that takes more than a couple of seconds is cut short and its row says so, rather than
+  freezing VS Code. Right-click a row and **Add to Persisted Objects…** puts that object under
+  `gemdb.root` with a key it suggests (`employee_barbara`, from the object's type and name). The
+  notebook's next commit writes it, so a half-finished cell is never committed behind your back.
+  **Continue** resumes the cell; **Stop** ends it, and the cells queued after it (as does the cell's
+  interrupt button) do not start. There is nothing to launch or configure. Stepping and red-dot
+  breakpoints are not supported yet, and the debugger says so when asked.
+
+- **Debug Python File in GemDB**, beside Run Python File in a `.py` file's run menu, runs the file
+  so that `breakpoint()` opens the debugger on it, the way it does on a notebook cell: its frames,
+  locals and globals, and adding objects or the stack to Persisted Objects. Output goes to a GemDB
+  Debug terminal, whose session lasts until the terminal closes, so the run's changes can still be
+  committed or aborted after it ends. In a folder VS Code does not trust, it asks you to trust it
+  first.
+
+- **Add a paused stack to Persisted Objects, and open it again later.** **Add Stack to Persisted
+  Objects…**, on the Call Stack's top row or any frame's menu, saves each frame's place and source,
+  its locals and the notebook's globals as one entry under `gemdb.root`. Once committed, **Restore a
+  Saved Stack…** (a button in Run and Debug, and in the GemDB panel) lists the saved stacks, or
+  opens the only one, in Run and Debug again; Persisted Objects can open it from its row too — after
+  a restart, and with the notebook or file gone. Each frame shows the copy of its source saved with
+  the stack, marked "(saved <time>)" in its tab and Call Stack row. It is a read-only snapshot: the run itself is not resumed.
+- **A Persisted Objects view** under GemDB, and in Run and Debug while a cell is paused, lists what
+  `gemdb.root` has committed, with a check mark, and under each notebook the objects added from the
+  debugger that it has not committed yet. Its title bar always has **Commit** and **Abort**, for the
+  paused notebook (or the active one), and each added object's row has them too. They act on that
+  notebook's whole session and work while it is paused at `breakpoint()`. Adding opens the view on
+  the new row, and resting the pointer on an object shows its type, its value and its first
+  attributes or items. **Remove from Persisted Objects** takes back an addition not yet committed,
+  or deletes a committed entry and commits just that removal. Its **?** button explains, for someone
+  new, that persisting is adding under `gemdb.root` and then committing.
+
 ### Fixed
 
 - **Setup no longer fails when it is asked for twice.** Pressing **Set Up GemDB**, or running a
@@ -54,6 +92,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first line of a paste ran; the rest were silently dropped. Each line now
   runs in turn, a pasted block runs as one statement, and a line that calls
   `input()` takes its answer from the next line of the paste, as in CPython.
+- **`breakpoint()` in a file run with `gemdb` or Run Python File in GemDB no longer leaves you at a
+  `topaz 1>` prompt.** It prints where it was and the script carries on. The GemDB Shell does the
+  same, where it used to fail with `a Halt occurred (error 2709)`. A direct `pdb.set_trace()` in a
+  file still stops at `topaz 1>`.
+- **Running a cell while another in the same notebook is running now waits its turn**, rather than
+  failing with "This session is busy running something else". An interrupt ends every run already
+  requested, including one still waiting for the database to start, and a cell that cannot run at
+  all (its session closed under it) stops the cells queued after it instead of running them in a
+  fresh session.
 
 ## [1.5.3] - 2026-09-28
 

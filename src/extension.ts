@@ -31,6 +31,9 @@ import {
   resetActiveNotebook,
 } from './notebook';
 import { isMcpRunning, startMcpServer, stopMcpServer } from './mcp';
+import { registerBreakpointDebugger } from './debugger';
+import { registerSavedObjects } from './savedObjects';
+import { onSavedStacksChanged } from './savedStacks';
 import { cloneBrainFreeze, initPendingReadme, showPromisedReadme } from './demo';
 import { confirmMcpEnabled, registerMcpProvider, registerWithClient } from './mcpRegistration';
 import {
@@ -45,6 +48,7 @@ import { diskSnapshot } from './paths';
 import { isSupportedPlatform, setContext, setupFootprint } from './platform';
 import { isRunning, isRunningAsync } from './processes';
 import { renameOwner } from './pythonQueries';
+import { debugFile } from './debugFile';
 import { openRepl, runFile } from './repl';
 import { closeSessionFor, logoutAll, setInputHandler } from './session';
 import { GemDbStatusBar } from './statusBar';
@@ -87,12 +91,17 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     statusBar,
     vscode.window.registerTreeDataProvider('gemdbStatus', status),
+    // The panel's Restore row comes and goes with the saved stacks.
+    onSavedStacksChanged(() => status.refresh()),
     new vscode.Disposable(() => disposeLog()),
   );
 
   // The notebook kernel is registered even on an unsupported platform so the
   // kernel picker explains itself, rather than silently offering nothing.
-  const notebooks = new GemDbNotebookController(extensionPath);
+  // Persisted Objects shows what gemdb.root holds and each notebook's pending
+  // changes, so it re-reads after every cell: a cell is where commits happen.
+  const savedObjects = registerSavedObjects(context);
+  const notebooks = new GemDbNotebookController(extensionPath, () => savedObjects.refresh());
   context.subscriptions.push(notebooks);
 
   // The MCP server is offered to this editor for free: VS Code has an API for
@@ -158,6 +167,11 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
+  // Python's breakpoint() in a notebook cell opens VS Code's debugger on the
+  // paused cell — no Debug command, no launch configuration: the user just
+  // runs the code. Continue resumes the cell; Stop ends it.
+  context.subscriptions.push(registerBreakpointDebugger());
+
   // Every command that changes state refreshes the view afterwards, so the
   // status readout can never disagree with what just happened.
   const refreshing = (run: () => Promise<void> | void) => async (): Promise<void> => {
@@ -220,6 +234,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('gemdb.openRepl', () => openRepl(extensionPath)),
     vscode.commands.registerCommand('gemdb.runFile', (uri?: vscode.Uri) =>
       runFile(extensionPath, uri),
+    ),
+    vscode.commands.registerCommand('gemdb.debugFile', (uri?: vscode.Uri) =>
+      debugFile(extensionPath, uri, () => savedObjects.refresh()),
     ),
     vscode.commands.registerCommand('gemdb.newNotebook', () => newNotebook()),
     vscode.commands.registerCommand('gemdb.resetNotebook', () => resetActiveNotebook()),

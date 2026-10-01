@@ -108,6 +108,12 @@ const FAKE_COMMON_PROPERTIES: Record<string, string> = { 'common.fake': 'yes' };
 /** Two-line insurance: nothing here reads `env` today, but `activate()` does. */
 export const env = {
   remoteName: undefined as string | undefined,
+  clipboard: {
+    writeText: (text: string): Promise<void> => {
+      __clipboard.text = text;
+      return Promise.resolve();
+    },
+  },
   uiKind: UIKind.Desktop,
   createTelemetryLogger(
     _sender: unknown,
@@ -141,6 +147,24 @@ export const env = {
   },
 };
 
+/** A tree view as created, recording what it was asked to reveal. */
+export interface FakeTreeView {
+  id: string;
+  options: unknown;
+  message: string | undefined;
+  description: string | undefined;
+  reveals: Array<{ element: unknown; options: unknown }>;
+  reveal(element: unknown, options?: unknown): Promise<void>;
+  onDidChangeVisibility(listener: (event: { visible: boolean }) => void): Disposable;
+  dispose(): void;
+}
+
+/** Tree views created so far, by view id. */
+export const __treeViews = new Map<string, FakeTreeView>();
+
+/** What was last written to the clipboard. */
+export const __clipboard = { text: '' };
+
 export const window = {
   createOutputChannel(_name: string) {
     return {
@@ -163,6 +187,33 @@ export const window = {
   registerTreeDataProvider(_viewId: string, _provider: unknown): Disposable {
     return new Disposable(() => {});
   },
+  createTreeView(viewId: string, options: unknown): FakeTreeView {
+    const view: FakeTreeView = {
+      id: viewId,
+      options,
+      message: undefined,
+      description: undefined,
+      reveals: [],
+      reveal: async (element: unknown, revealOptions?: unknown) => {
+        view.reveals.push({ element, options: revealOptions });
+      },
+      onDidChangeVisibility: (_listener: (event: { visible: boolean }) => void) =>
+        new Disposable(() => {}),
+      dispose: () => {},
+    };
+    __treeViews.set(viewId, view);
+    return view;
+  },
+  /** What the active notebook editor shows, if a test sets one. */
+  activeNotebookEditor: undefined as { notebook: { uri: { toString(): string } } } | undefined,
+  /** Answers undefined (Escape) unless a test spies on it. */
+  showInputBox(_options?: unknown): Promise<string | undefined> {
+    return Promise.resolve(undefined);
+  },
+  /** Answers undefined (Escape) unless a test spies on it. */
+  showQuickPick<T>(_items: T[], _options?: unknown): Promise<T | undefined> {
+    return Promise.resolve(undefined);
+  },
   onDidChangeWindowState(_listener: (state: { focused: boolean }) => void): Disposable {
     return new Disposable(() => {});
   },
@@ -175,12 +226,17 @@ export const window = {
   showErrorMessage(_message: string, ..._items: unknown[]): Promise<string | undefined> {
     return Promise.resolve(undefined);
   },
-  /** A terminal that records nothing and does nothing — callers only ever `show()`/`sendText()` it. */
-  createTerminal(_nameOrOptions?: unknown): {
+  /**
+   * A terminal that does nothing. Its options are kept in `__terminals`, so a
+   * test can drive an extension terminal's pty: open it, read what it wrote,
+   * close it.
+   */
+  createTerminal(nameOrOptions?: unknown): {
     show(): void;
     sendText(text: string): void;
     dispose(): void;
   } {
+    __terminals.push(nameOrOptions as FakeTerminalOptions);
     return { show: () => {}, sendText: () => {}, dispose: () => {} };
   },
   /**
@@ -225,6 +281,26 @@ export class EventEmitter<T> {
   dispose(): void {
     this.listeners = [];
   }
+}
+
+export const TreeItemCollapsibleState = { None: 0, Collapsed: 1, Expanded: 2 } as const;
+
+export const InputBoxValidationSeverity = { Info: 1, Warning: 2, Error: 3 } as const;
+
+export class MarkdownString {
+  constructor(readonly value: string = '') {}
+}
+
+export class TreeItem {
+  description?: string;
+  tooltip?: string | MarkdownString;
+  iconPath?: unknown;
+  contextValue?: string;
+  command?: unknown;
+  constructor(
+    readonly label: string,
+    readonly collapsibleState: number = 0,
+  ) {}
 }
 
 export class ThemeColor {
@@ -283,7 +359,7 @@ export interface FakeController {
   supportsExecutionOrder?: boolean;
   description?: string;
   executeHandler?: (cells: unknown[]) => unknown;
-  interruptHandler?: () => unknown;
+  interruptHandler?: (notebook: unknown) => unknown;
   /** Every execution this controller created, in the order it created them. */
   executions: FakeExecution[];
   createNotebookCellExecution(cell: unknown): {
@@ -294,6 +370,42 @@ export interface FakeController {
     appendOutput(output: NotebookCellOutput[]): void;
   };
   dispose(): void;
+}
+
+export const NotebookCellKind = { Markup: 1, Code: 2 } as const;
+
+/** What `debug.startDebugging` answers; a test sets it to false to refuse, or to an Error to reject. */
+export const __debugStartResult: { value: boolean | Error } = { value: true };
+
+/** What `debug.startDebugging` was asked to start, for a test to inspect. */
+export const __debugStarts: unknown[] = [];
+/** The options each of those starts passed. */
+export const __debugStartOptions: unknown[] = [];
+
+/** Debug adapter factories registered so far, by debug type. */
+export const __debugFactories = new Map<string, unknown>();
+
+export const debug = {
+  registerDebugAdapterDescriptorFactory: (type: string, factory: unknown) => {
+    __debugFactories.set(type, factory);
+    return new Disposable(() => __debugFactories.delete(type));
+  },
+  startDebugging: (
+    _folder: unknown,
+    configuration: unknown,
+    options?: unknown,
+  ): Promise<boolean> => {
+    __debugStarts.push(configuration);
+    __debugStartOptions.push(options);
+    const result = __debugStartResult.value;
+    return result instanceof Error ? Promise.reject(result) : Promise.resolve(result);
+  },
+  stopDebugging: (): Promise<void> => Promise.resolve(),
+  activeDebugSession: undefined as { id: string; type: string } | undefined,
+};
+
+export class DebugAdapterInlineImplementation {
+  constructor(readonly implementation: unknown) {}
 }
 
 /** Controllers created so far, so a test can reach the one under test. */
@@ -336,7 +448,22 @@ export const notebooks = {
   },
 };
 
+/** What `createTerminal` was given; `pty` is there for an extension terminal. */
+export interface FakeTerminalOptions {
+  name?: string;
+  pty?: {
+    onDidWrite: (listener: (text: string) => void) => { dispose(): void };
+    open(): void;
+    close(): void;
+    handleInput?(data: string): void;
+  };
+}
+export const __terminals: FakeTerminalOptions[] = [];
+
 export const workspace = {
+  notebookDocuments: [] as unknown[],
+  /** Trusted unless a test says otherwise. */
+  isTrusted: true,
   getConfiguration(section: string) {
     return {
       get<T>(key: string, fallback: T): T {
