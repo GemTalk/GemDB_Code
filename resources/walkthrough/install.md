@@ -1,7 +1,7 @@
 ## The automated GemDB setup
 
 GemDB Code sets up GemDB on your computer running VS Code. The setup includes managing the download,
-storing the database under `~/GemDB` and making any required shared-memory changes.
+storing the database under `~/GemDB`, and making any required shared-memory changes.
 
 The first time GemDB Code activates, it:
 
@@ -18,7 +18,7 @@ Linux.
 ### Raise the shared-memory limit if needed
 
 The database keeps the objects it is working with in a cache in **shared memory**, so that every
-session (each GemDB Shell, notebook and AI agent) can read them quickly without going to disk. The
+session (each GemDB Shell, notebook, and AI agent) can read them quickly without going to disk. The
 operating system limits how much shared memory a program can use, and GemDB needs that limit to be
 at least 1 GB. Most Linux systems already allow enough; macOS usually does not.
 

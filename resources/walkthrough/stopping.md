@@ -1,7 +1,7 @@
 ## Keeping the database running, and when to stop it
 
 The database keeps running after you close VS Code, so your data stays available to scripts,
-terminals and AI agents. GemDB Code starts it for you, so you never need to start it before running
+terminals, and AI agents. GemDB Code starts it for you, so you never need to start it before running
 Python.
 
 ### Why stop it

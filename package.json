@@ -359,8 +359,8 @@
         "steps": [
           {
             "id": "install",
-            "title": "Setup happens on its own",
-            "description": "GemDB Code downloads the database engine, creates your database, and asks once for the one operating-system change it needs. If you cancelled that, pick it up here — it resumes rather than starting over.\n[Set Up GemDB](command:gemdb.install)",
+            "title": "The automated GemDB setup",
+            "description": "GemDB Code downloads the database engine, creates your database, and installs Python into it. If the shared-memory limit is too low, GemDB Code prompts you to raise it. If you canceled setup, click **Set Up GemDB** to continue where it left off.\n[Set Up GemDB](command:gemdb.install)",
             "media": {
               "markdown": "resources/walkthrough/install.md"
             },
@@ -371,7 +371,7 @@
           {
             "id": "repl",
             "title": "Run your first Python",
-            "description": "Open a Python prompt that runs inside the database. GemDB Code starts the database for you — there's nothing to press first.\n[Open GemDB Shell](command:gemdb.openRepl)",
+            "description": "Open a Python prompt that runs inside the database. If the database is not running, GemDB Code starts it automatically when you open the shell.\n[Open GemDB Shell](command:gemdb.openRepl)",
             "media": {
               "markdown": "resources/walkthrough/repl.md"
             },
@@ -382,7 +382,7 @@
           {
             "id": "notebook",
             "title": "Open a notebook",
-            "description": "Notebooks are the easiest way to explore data that lives in the database.\n[New GemDB Notebook](command:gemdb.newNotebook)",
+            "description": "Create a notebook and run Python inside the database, one cell at a time.\n[New GemDB Notebook](command:gemdb.newNotebook)",
             "media": {
               "markdown": "resources/walkthrough/notebook.md"
             },
@@ -393,7 +393,7 @@
           {
             "id": "demo",
             "title": "Explore a real application",
-            "description": "Brain Freeze is a small Flask app whose data, classes and views all live in the database. Installing it puts a copy beside your database, opens it, and shows its readme.\n[Install Brain Freeze Demo](command:gemdb.cloneBrainFreeze)",
+            "description": "Brain Freeze is a small web app, built with Flask, whose data, classes, and views are stored in the database. Installing it clones a copy into `~/GemDB/brain-freeze`, opens it, and displays its README.\n[Install Brain Freeze Demo](command:gemdb.cloneBrainFreeze)",
             "media": {
               "markdown": "resources/walkthrough/demo.md"
             },
@@ -404,7 +404,7 @@
           {
             "id": "stopping",
             "title": "Stopping the database",
-            "description": "The database keeps running after you close the editor, so your data stays available. The status bar shows when it's up; click it to stop.\n[Stop GemDB](command:gemdb.stop)",
+            "description": "The database keeps running after you close VS Code, so your data stays available. To stop it, click **GemDB** in the status bar. Commit your work first, because uncommitted changes are discarded.\n[Stop GemDB](command:gemdb.stop)",
             "media": {
               "markdown": "resources/walkthrough/stopping.md"
             },

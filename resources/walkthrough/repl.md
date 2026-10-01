@@ -17,7 +17,7 @@ database rather than beside one.
 - **`exit()`** or **Ctrl+D** leaves the shell.
 - **Opening it again** gives you a _second_ terminal, not the first one back. Each shell is its own
   database session: two terminals hold separate uncommitted work, and each sees the other's commits
-  after its own `commit()`, `abort()` or `refresh()`.
+  after its own `commit()`, `abort()`, or `refresh()`.
 
 GemDB Code starts the database automatically when you open VS Code, so you do not have to. If you
 stop it manually, GemDB Code no longer starts it automatically, even after you restart VS Code or
