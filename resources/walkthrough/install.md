@@ -1,7 +1,7 @@
 ## The automated GemDB setup
 
 GemDB Code sets up GemDB on your computer running VS Code. The setup includes managing the download,
-storing the database under `~/GemDB` and making any required shared-memory changes.
+storing the database under `~/GemDB`, and making any required shared-memory changes.
 
 The first time GemDB Code activates, it:
 
@@ -17,16 +17,17 @@ Linux.
 
 ### Where it goes
 
-GemDB Code keeps everything in one folder: `~/GemDB`, unless you set
+GemDB Code keeps everything in one folder, `~/GemDB`, unless you set
 [`gemdb.rootPath`](command:workbench.action.openSettings?%22gemdb.rootPath%22) to another folder.
-The folder has to be on a local disk. The database engine can't open its files on an NFS mount,
-where many shared Linux machines keep home directories, so GemDB Code checks before it downloads
-anything. If the folder is on NFS, GemDB Code asks you to choose a local folder instead.
+The folder must be on a local disk. The database engine cannot open its files on a Network File
+System (NFS) mount, where many shared Linux machines keep home directories, so GemDB Code checks the
+folder before it downloads anything. If the folder is on NFS, GemDB Code prompts you to choose a
+local folder instead.
 
 ### Raise the shared-memory limit if needed
 
 The database keeps the objects it is working with in a cache in **shared memory**, so that every
-session (each GemDB Shell, notebook and AI agent) can read them quickly without going to disk. The
+session (each GemDB Shell, notebook, and AI agent) can read them quickly without going to disk. The
 operating system limits how much shared memory a program can use, and GemDB needs that limit to be
 at least 1 GB. Most Linux systems already allow enough; macOS usually does not.
 
