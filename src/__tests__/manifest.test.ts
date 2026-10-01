@@ -15,14 +15,23 @@ import { describe, expect, it } from 'vitest';
  * without the scope would reopen that quietly — hence a test, not a comment.
  */
 
-interface Manifest {
-  capabilities?: { untrustedWorkspaces?: { supported?: unknown } };
-  contributes: { configuration: { properties: Record<string, { scope?: string }> } };
+interface WalkthroughStep {
+  id: string;
+  when?: string;
+  media: { markdown?: string };
 }
 
-const manifest = JSON.parse(
-  fs.readFileSync(path.resolve(__dirname, '../../package.json'), 'utf8'),
-) as Manifest;
+interface Manifest {
+  capabilities?: { untrustedWorkspaces?: { supported?: unknown } };
+  contributes: {
+    configuration: { properties: Record<string, { scope?: string }> };
+    walkthroughs: { steps: WalkthroughStep[] }[];
+  };
+}
+
+const root = path.resolve(__dirname, '../..');
+const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as Manifest;
+const steps = manifest.contributes.walkthroughs.flatMap((walkthrough) => walkthrough.steps);
 
 describe('the manifest', () => {
   it('keeps GemDB running in Restricted Mode', () => {
@@ -36,5 +45,28 @@ describe('the manifest', () => {
       .filter(([, setting]) => setting.scope !== 'machine')
       .map(([id]) => id);
     expect(unscoped).toEqual([]);
+  });
+
+  // An external database is the administrator's: setup downloads nothing and
+  // creates nothing, and Stop is refused. The walkthrough must not say otherwise.
+  it('walks an external database through its own setup, and not through stopping', () => {
+    const shownFor = (external: boolean): string[] =>
+      steps
+        .filter(
+          (step) =>
+            step.when === undefined ||
+            step.when === (external ? 'gemdb.externalDatabase' : '!gemdb.externalDatabase'),
+        )
+        .map((step) => step.id);
+    expect(shownFor(false)).toEqual(['install', 'repl', 'notebook', 'demo', 'stopping']);
+    expect(shownFor(true)).toEqual(['installExternal', 'repl', 'notebook', 'demo']);
+  });
+
+  it('ships the page every walkthrough step shows', () => {
+    const missing = steps
+      .map((step) => step.media.markdown)
+      .filter((page): page is string => page !== undefined)
+      .filter((page) => !fs.existsSync(path.join(root, page)));
+    expect(missing).toEqual([]);
   });
 });

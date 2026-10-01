@@ -19,9 +19,11 @@ database rather than beside one.
   database session: two terminals hold separate uncommitted work, and each sees the other's commits
   after its own `commit()`, `abort()`, or `refresh()`.
 
-GemDB Code starts the database automatically when you open VS Code, so you do not have to. If you
-stop it manually, GemDB Code no longer starts it automatically, even after you restart VS Code or
-your computer.
+### When the database is not running
+
+If GemDB Code runs your database, it starts the database automatically when you open VS Code, so
+you do not have to. If you stop it manually, GemDB Code no longer starts it automatically, even
+after you restart VS Code or your computer.
 
 The database starts again when you need it, when you:
 
@@ -30,3 +32,7 @@ The database starts again when you need it, when you:
 - Open a GemDB Shell
 - Run a script with the `gemdb` command
 - Use an AI agent connected through the MCP server in VS Code
+
+If you use a database that this machine's administrator runs, GemDB Code does not start or stop it.
+When it is down, GemDB Code says so instead of opening the shell. Ask the administrator to start
+it.
