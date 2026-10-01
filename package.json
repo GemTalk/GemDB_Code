@@ -195,6 +195,11 @@
         "view": "gemdbStatus",
         "contents": "GemDB doesn't run on this machine yet.\n\nThis release ships the Python runtime compiled for Apple Silicon macOS and for Linux on x86-64 and ARM. Intel Macs and Windows are not supported.\n[Learn more](https://github.com/GemTalk/GemDB_Code#platform-support)",
         "when": "gemdb.state == unsupportedPlatform"
+      },
+      {
+        "view": "workbench.debug.welcome",
+        "contents": "GemDB can open a stack saved with Add Stack to Persisted Objects… again, from the database.\n[Restore a Saved Stack…](command:gemdb.restoreStack)",
+        "when": "gemdb.running && gemdb.hasSavedStacks"
       }
     ],
     "commands": [
@@ -348,6 +353,24 @@
         "title": "How Persisting Works: Add Under gemdb.root, Then Commit",
         "category": "GemDB",
         "icon": "$(question)"
+      },
+      {
+        "command": "gemdb.saveStack",
+        "title": "Add Stack to Persisted Objects…",
+        "category": "GemDB",
+        "icon": "$(save)"
+      },
+      {
+        "command": "gemdb.savedObjects.openStack",
+        "title": "Open Saved Stack in the Debugger",
+        "category": "GemDB",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "gemdb.restoreStack",
+        "title": "Restore a Saved Stack…",
+        "category": "GemDB",
+        "icon": "$(debug-alt)"
       }
     ],
     "menus": {
@@ -426,6 +449,11 @@
           "command": "gemdb.savedObjects.help",
           "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug)",
           "group": "navigation@4"
+        },
+        {
+          "command": "gemdb.restoreStack",
+          "when": "view == gemdbStatus && gemdb.running && gemdb.hasSavedStacks",
+          "group": "navigation@5"
         }
       ],
       "editor/title/run": [
@@ -463,6 +491,18 @@
         {
           "command": "gemdb.savedObjects.remove",
           "when": "false"
+        },
+        {
+          "command": "gemdb.saveStack",
+          "when": "debugType == gemdb"
+        },
+        {
+          "command": "gemdb.savedObjects.openStack",
+          "when": "false"
+        },
+        {
+          "command": "gemdb.restoreStack",
+          "when": "gemdb.running && gemdb.hasSavedStacks"
         }
       ],
       "debug/variables/context": [
@@ -485,13 +525,35 @@
         },
         {
           "command": "gemdb.savedObjects.copyAccess",
-          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /^(gemdbSavedObject|gemdbSavedPending)$/",
+          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /^(gemdbSavedObject|gemdbSavedPending|gemdbSavedStack)$/",
           "group": "inline@3"
         },
         {
           "command": "gemdb.savedObjects.remove",
-          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /^(gemdbSavedObject|gemdbSavedPending)$/",
+          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /^(gemdbSavedObject|gemdbSavedPending|gemdbSavedStack)$/",
           "group": "9_remove@1"
+        },
+        {
+          "command": "gemdb.savedObjects.openStack",
+          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem == gemdbSavedStack",
+          "group": "inline@0"
+        },
+        {
+          "command": "gemdb.savedObjects.openStack",
+          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem == gemdbSavedStack",
+          "group": "0_open@1"
+        }
+      ],
+      "debug/callstack/context": [
+        {
+          "command": "gemdb.saveStack",
+          "when": "debugType == gemdb && (callStackItemType == 'session' || callStackItemType == 'thread') && !gemdb.savedStackOpen",
+          "group": "inline@1"
+        },
+        {
+          "command": "gemdb.saveStack",
+          "when": "debugType == gemdb && !gemdb.savedStackOpen",
+          "group": "z_gemdb@1"
         }
       ]
     },

@@ -12,8 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Use a database someone else runs.** Set `gemdb.externalDatabase.gemstone` to an engine an
   administrator installed — on a hosted or shared machine — and GemDB Code connects to their stone
   instead of installing its own: it installs Python support into your account and runs the MCP
-  server, and never downloads, creates, starts, stops or removes the database. The stone, NetLDI
-  and account are settings, and the password is read from a file, so it never appears in
+  server, and never downloads, creates, starts, stops or removes the database. The stone, NetLDI and
+  account are settings, and the password is read from a file, so it never appears in
   `settings.json`. See [docs/external-database.md](docs/external-database.md).
 
 - **`breakpoint()` in a notebook cell opens the debugger.** The cell pauses, VS Code's Run and Debug
@@ -30,6 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interrupt button) do not start. There is nothing to launch or configure. Stepping and red-dot
   breakpoints are not supported yet, and the debugger says so when asked.
 
+- **Add a paused stack to Persisted Objects, and open it again later.** **Add Stack to Persisted
+  Objects…**, on the Call Stack's top row or any frame's menu, saves each frame's place and source,
+  its locals and the notebook's globals as one entry under `gemdb.root`. Once committed, **Restore a
+  Saved Stack…** (a button in Run and Debug, and in the GemDB panel) lists the saved stacks, or
+  opens the only one, in Run and Debug again; Persisted Objects can open it from its row too — after
+  a restart, and with the notebook or file gone. Each frame shows the copy of its source saved with
+  the stack, marked "(saved <time>)" in its tab and Call Stack row. It is a read-only snapshot: the run itself is not resumed.
 - **A Persisted Objects view** under GemDB, and in Run and Debug while a cell is paused, lists what
   `gemdb.root` has committed, with a check mark, and under each notebook the objects added from the
   debugger that it has not committed yet. Its title bar always has **Commit** and **Abort**, for the

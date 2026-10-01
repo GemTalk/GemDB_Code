@@ -36,6 +36,13 @@ import {
   sessionForIfOpen,
   setHaltHandler,
 } from '../session';
+import {
+  SavedFrame,
+  openStackQuery,
+  parseOpenedStack,
+  saveStackQuery,
+  savedStackKeysQuery,
+} from '../savedStacks';
 import { createDatabaseWithPython, Fixture, haveTestExtent, makeFixture } from './fixture';
 
 /**
@@ -486,6 +493,123 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
 
     expect(seen).toEqual({ dirty: 'true', aborted: 'aborted', clean: 'false', there: 'false' });
     expect(elsewhere.value).toBe('False');
+  });
+
+  it('saves a paused stack under gemdb.root and opens it again from another session after a commit', async () => {
+    const nb = notebook('bp-stack');
+    const other = notebook('bp-stack-other');
+    const cellText = [
+      'class Employee:',
+      '    def __init__(self, name, reports=()):',
+      '        self.name = name',
+      '        self.reports = list(reports)',
+      '    def find(self, name, depth=0):',
+      '        if self.name == name:',
+      '            breakpoint()',
+      '            return self',
+      '        for r in self.reports:',
+      '            found = r.find(name, depth + 1)',
+      '            if found:',
+      '                return found',
+      '        return None',
+      'ceo = Employee("Ada", [Employee("Grace", [Employee("Barbara")])])',
+      'ceo.find("Barbara")',
+    ].join('\n');
+    let saved = '';
+    let frameNames: string[] = [];
+    setHaltHandler(async (request) => {
+      const { frames } = parsePausedStack(
+        await request.query(pausedStackQuery(request.process, nb.key)),
+      );
+      frameNames = frames.map((f) => f.name);
+      const savedFrames: SavedFrame[] = frames.map((f) => ({
+        name: f.name,
+        line: f.line,
+        column: f.column + 1,
+        end_column: null,
+        source_name: 'Cell [1]',
+        path: 'vscode-notebook-cell:/gone/bp-stack.ipynb#W0',
+        text: cellText,
+      }));
+      saved = unquote(
+        await request.query(
+          saveStackQuery(
+            'stack_bp',
+            {
+              label: 'bp-stack.ipynb',
+              notebook: nb.key,
+              saved_at: '2026-10-01 16:20',
+              description: 'Saved at breakpoint()',
+            },
+            savedFrames,
+            frames.map((f) => f.locals ?? 0),
+            nb.key,
+          ),
+        ),
+      );
+      return 'continue';
+    });
+
+    await runPython(cellText, nb);
+    setHaltHandler(undefined);
+    // The save is in the notebook's transaction; nothing is visible elsewhere until it commits.
+    const beforeCommit = await runPython('import gemdb\n"stack_bp" in gemdb.root', other);
+    await sessionForIfOpen(nb.key)!.executeAsync(commitQuery());
+    const notebookGlobals = await runPython(
+      '[k for k in globals() if k.startswith("___gemdb")]',
+      nb,
+    );
+    const opened = parseOpenedStack(await executeAsync(openStackQuery('stack_bp')));
+    const findLocals = parseChildren(await executeAsync(childrenQuery(opened.locals[0], 0, 500)));
+    const globalsRows = parseChildren(await executeAsync(childrenQuery(opened.globals, 0, 500)));
+    const stacks = JSON.parse(await executeAsync(savedStackKeysQuery())) as Array<{
+      key: string;
+      label: string;
+      saved_at: string;
+      frames: number;
+    }>;
+    // A stack is told apart by what it holds, never by its key: rename one, and fake one.
+    await runPython(
+      'import gemdb\ngemdb.abort()\ngemdb.root["my notes"] = gemdb.root["stack_bp"]\ngemdb.root["stack_not_really"] = {"frames": [1]}\ngemdb.commit()\n1',
+      other,
+    );
+    const afterRename = (
+      JSON.parse(await executeAsync(savedStackKeysQuery())) as Array<{ key: string }>
+    ).map((stack) => stack.key);
+    const renamed = parseOpenedStack(await executeAsync(openStackQuery('my notes')));
+    const fromPython = await runPython(
+      'import gemdb\ngemdb.abort()\ns = gemdb.root["stack_bp"]\n(s["kind"], len(s["frames"]), s["frames"][0]["name"], sorted(s["frames"][0]["locals"].keys()), s["frames"][0]["locals"]["self"].name)',
+      other,
+    );
+
+    expect(saved).toBe('saved');
+    expect(beforeCommit.value).toBe('False');
+    // The temporary bindings the save used are gone from the notebook.
+    expect(notebookGlobals.value).toBe('[]');
+    expect(opened.meta.frames.map((f) => f.name)).toEqual(frameNames);
+    expect(opened.meta.frames[0]).toMatchObject({ name: 'Employee.find', line: 7, text: cellText });
+    expect(opened.meta.saved_at).toBe('2026-10-01 16:20');
+    expect(findLocals.map((v) => [v.name, v.value])).toEqual(
+      expect.arrayContaining([
+        ['name', "'Barbara'"],
+        ['depth', '2'],
+      ]),
+    );
+    expect(findLocals.find((v) => v.name === 'self')).toMatchObject({ type: 'Employee' });
+    expect(globalsRows.map((v) => v.name)).toEqual(expect.arrayContaining(['ceo']));
+    expect(globalsRows.map((v) => v.name).filter((n) => n.startsWith('___gemdb'))).toEqual([]);
+    expect(stacks).toContainEqual({
+      key: 'stack_bp',
+      label: 'bp-stack.ipynb',
+      saved_at: '2026-10-01 16:20',
+      frames: 4,
+    });
+    expect(afterRename).toEqual(expect.arrayContaining(['stack_bp', 'my notes']));
+    expect(afterRename).not.toContain('stack_not_really');
+    expect(renamed.meta.frames.map((f) => f.name)).toEqual(frameNames);
+    expect(fromPython.value).toBe(
+      "('gemdb.stack', 4, 'Employee.find', ['depth', 'name', 'self'], 'Barbara')",
+    );
   });
 
   it('ends the cell on Stop, and the session is still usable', async () => {

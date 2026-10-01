@@ -245,6 +245,27 @@ describe('placing frames in the editor', () => {
     });
   });
 
+  it('hands back each frame’s whole cell or file, so a saved stack can keep its source', () => {
+    const texts: Array<string[] | undefined> = [];
+    const fileLines = ['def helper(f):', '    return f()'];
+
+    toDapFrames(
+      [
+        frame({ lineText: 'breakpoint(' }),
+        frame({ name: 'helper', line: 2, file: '/w/mod.py' }),
+        frame({ name: 'nowhere', line: 3, lineText: 'not in any cell' }),
+      ],
+      cell,
+      [cell],
+      () => fileLines,
+      texts,
+    );
+
+    expect(texts[0]).toEqual(cell.lines);
+    expect(texts[1]).toEqual(fileLines);
+    expect(texts[2]).toBeUndefined();
+  });
+
   it('reads a file once however many frames are in it', () => {
     const readLines = vi.fn(() => ['def f(n):', '    return f(n - 1)']);
     const deep = Array.from({ length: 50 }, () => frame({ file: '/w/rec.py' }));
@@ -497,6 +518,49 @@ describe('the debug adapter', () => {
     expect(response('restart')?.success).toBe(false);
     expect(response('restart')?.message).toMatch(/Restarting isn't supported yet/);
     expect(answer).not.toHaveBeenCalled();
+  });
+
+  it('serves a saved stack’s source text, and says the stop is a saved stack', () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const adapter = new PauseDebugAdapter(() => ({
+      label: 'Saved stack: a.ipynb',
+      frames: [
+        {
+          id: 1,
+          name: 'f',
+          line: 2,
+          column: 1,
+          source: { name: 'Cell [1] (saved)', sourceReference: 1 },
+        },
+      ],
+      scopes: () => [],
+      variables: () => Promise.resolve([]),
+      answer: () => {},
+      sourceText: (ref: number) => (ref === 1 ? 'def f():\n    breakpoint()' : undefined),
+      description: 'Saved stack from 2026-10-01 16:20 (read-only)',
+      saved: true,
+    }));
+    adapter.onDidSendMessage((m) => sent.push(m as Record<string, unknown>));
+    const ask = (seq: number, command: string, args?: Record<string, unknown>) =>
+      adapter.handleMessage({ seq, type: 'request', command, arguments: args });
+
+    ask(1, 'initialize');
+    ask(2, 'launch', { gemdbPause: '1' });
+    ask(3, 'configurationDone');
+    ask(4, 'source', { source: { sourceReference: 1 }, sourceReference: 1 });
+    ask(5, 'source', { sourceReference: 7 });
+
+    const stopped = sent.find((m) => m.event === 'stopped')?.body as Record<string, unknown>;
+    const sources = sent.filter((m) => m.command === 'source');
+    expect(stopped).toMatchObject({
+      reason: 'entry',
+      description: 'Saved stack from 2026-10-01 16:20 (read-only)',
+    });
+    expect(sources[0]).toMatchObject({
+      success: true,
+      body: { content: 'def f():\n    breakpoint()' },
+    });
+    expect(sources[1]).toMatchObject({ success: false });
   });
 
   it('ends quietly when the pause it was started for has already ended', () => {

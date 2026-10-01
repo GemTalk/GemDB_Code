@@ -29,8 +29,8 @@ import { escapeString } from './pythonQueries';
  * place, and a big container or string is not asked for its whole repr.
  */
 
-/** SessionTemps key of the per-pause registry. */
-const REGISTRY = 'GemDbPauseRefs';
+/** SessionTemps key of the per-pause registry (a saved stack opened again uses it too). */
+export const REGISTRY = 'GemDbPauseRefs';
 
 /**
  * The most rows one `variables` request answers. VS Code pages indexed

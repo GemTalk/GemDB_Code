@@ -33,6 +33,7 @@ import {
 import { isMcpRunning, startMcpServer, stopMcpServer } from './mcp';
 import { registerBreakpointDebugger } from './debugger';
 import { registerSavedObjects } from './savedObjects';
+import { onSavedStacksChanged } from './savedStacks';
 import { cloneBrainFreeze, initPendingReadme, showPromisedReadme } from './demo';
 import { confirmMcpEnabled, registerMcpProvider, registerWithClient } from './mcpRegistration';
 import {
@@ -83,6 +84,8 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     statusBar,
     vscode.window.registerTreeDataProvider('gemdbStatus', status),
+    // The panel's Restore row comes and goes with the saved stacks.
+    onSavedStacksChanged(() => status.refresh()),
     new vscode.Disposable(() => disposeLog()),
   );
 

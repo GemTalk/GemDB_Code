@@ -56,7 +56,8 @@ export interface DapFrame {
   column: number;
   endLine?: number;
   endColumn?: number;
-  source?: { name: string; path: string };
+  /** A path VS Code opens, or a `sourceReference` the adapter answers with saved text. */
+  source?: { name: string; path?: string; sourceReference?: number; origin?: string };
   presentationHint?: 'normal' | 'subtle';
 }
 
@@ -97,6 +98,14 @@ export interface Pause {
   handleFor?(containerRef: number, name: string): number | undefined;
   /** Run a query in the paused session (see `HaltRequest.query`). */
   query?(code: string): Promise<string>;
+  /** Each frame's whole cell or file, by frame index, so the stack can be saved. */
+  texts?: Array<string[] | undefined>;
+  /** The saved source behind a frame's `sourceReference`, for a stack opened from the database. */
+  sourceText?(sourceReference: number): string | undefined;
+  /** What the stop says in the Call Stack; `Paused on breakpoint()` when absent. */
+  description?: string;
+  /** A saved stack opened again: nothing to resume, and nothing more to save. */
+  saved?: boolean;
 }
 
 /**
@@ -155,6 +164,31 @@ const pausesByDebugSession = new Map<string, string>();
 export function pauseForDebugSession(sessionId: string | undefined): Pause | undefined {
   const id = sessionId === undefined ? undefined : pausesByDebugSession.get(sessionId);
   return id === undefined ? undefined : pauses.get(id);
+}
+
+/** Opens a debug session on a pause built outside the halt handler; set while registered. */
+let opener: ((pause: Pause) => Promise<boolean>) | undefined;
+
+/**
+ * Open Run and Debug on a pause that no halt produced — a saved stack rebuilt
+ * from the database. Answers whether the debugger started. The pause's own
+ * `answer` runs when the session ends, however it ends.
+ */
+export function openPause(pause: Pause): Promise<boolean> {
+  return opener ? opener(pause) : Promise.resolve(false);
+}
+
+/** Every code cell of every open notebook, for telling whether a saved frame's cell is still there. */
+export function openCellTexts(): Array<{ uri: string; lines: string[] }> {
+  return vscode.workspace.notebookDocuments.flatMap((notebook) =>
+    notebook
+      .getCells()
+      .filter((cell) => cell.kind === vscode.NotebookCellKind.Code)
+      .map((cell) => ({
+        uri: cell.document.uri.toString(),
+        lines: cell.document.getText().split(/\r?\n/),
+      })),
+  );
 }
 
 /** The pause a notebook's evaluation is sitting at, if any. */
@@ -235,6 +269,8 @@ export function toDapFrames(
   running: CellText | undefined,
   cells: CellText[],
   readLines: LineReader = () => undefined,
+  /** Receives each frame's whole cell or file, by frame index. */
+  texts?: Array<string[] | undefined>,
 ): DapFrame[] {
   const files = new Map<string, string[] | undefined>();
   const linesOf = (file: string): string[] | undefined => {
@@ -251,10 +287,12 @@ export function toDapFrames(
       if (cell) {
         source = { name: cell.label ?? 'Cell', path: cell.uri };
         text = cell.lines[frame.line - 1];
+        if (texts) texts[index] = cell.lines;
       }
     } else if (frame.file) {
       source = { name: path.basename(frame.file), path: frame.file };
       text = frame.line > 0 ? linesOf(frame.file)?.[frame.line - 1] : undefined;
+      if (texts) texts[index] = linesOf(frame.file);
     }
     const columns = source && frame.line > 0 ? columnsOn(text, frame) : undefined;
     return {
@@ -369,6 +407,22 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
         this.respond(request, { stackFrames: frames, totalFrames: frames.length });
         return;
       }
+      case 'source': {
+        // A saved stack's frame whose cell or file is gone shows the text saved with it.
+        const ref = Number(
+          (request.arguments?.source as { sourceReference?: number } | undefined)
+            ?.sourceReference ??
+            request.arguments?.sourceReference ??
+            0,
+        );
+        const content = this.pause?.sourceText?.(ref);
+        if (content === undefined) {
+          this.fail(request, 'That source is not available.', false);
+        } else {
+          this.respond(request, { content, mimeType: 'text/x-python' });
+        }
+        return;
+      }
       case 'scopes': {
         const frameId = Number(request.arguments?.frameId ?? 0);
         this.respond(request, { scopes: this.pause?.scopes(frameId) ?? [] });
@@ -442,8 +496,8 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
     if (this.stoppedSent || !this.attached || !this.configured) return;
     this.stoppedSent = true;
     this.event('stopped', {
-      reason: 'breakpoint',
-      description: 'Paused on breakpoint()',
+      reason: this.pause?.saved ? 'entry' : 'breakpoint',
+      description: this.pause?.description ?? 'Paused on breakpoint()',
       threadId: THREAD_ID,
       allThreadsStopped: true,
     });
@@ -532,6 +586,7 @@ function readFileLines(file: string): string[] | undefined {
 interface PauseView {
   frames: DapFrame[];
   scopes: Map<number, DapScope[]>;
+  texts: Array<string[] | undefined>;
 }
 
 /**
@@ -556,10 +611,11 @@ async function readPause(request: HaltRequest): Promise<PauseView> {
       scopes.set(index + 1, scopesFor(frame.locals ?? 0, frame.file === '<grail>' ? globals : 0)),
     );
     const { running, cells } = notebookCells(owner.key);
-    return { frames: toDapFrames(frames, running, cells, readFileLines), scopes };
+    const texts: Array<string[] | undefined> = [];
+    return { frames: toDapFrames(frames, running, cells, readFileLines, texts), scopes, texts };
   } catch (e) {
     log(`Could not read the stack at breakpoint(): ${errorMessage(e)}`);
-    return { frames: [], scopes: new Map() };
+    return { frames: [], scopes: new Map(), texts: [] };
   }
 }
 
@@ -658,7 +714,7 @@ export function registerBreakpointDebugger(): vscode.Disposable {
         });
 
         log(`breakpoint() in ${label}: paused`);
-        void readPause(request).then(({ frames, scopes }) => {
+        void readPause(request).then(({ frames, scopes, texts }) => {
           if (settled) return;
           const handles = new Map<string, number>();
           pauses.set(id, {
@@ -670,6 +726,7 @@ export function registerBreakpointDebugger(): vscode.Disposable {
             answer,
             handleFor: (containerRef, name) => handles.get(handleKey(containerRef, name)),
             query: (code) => request.query(code),
+            texts,
           });
           vscode.debug
             .startDebugging(
@@ -695,7 +752,40 @@ export function registerBreakpointDebugger(): vscode.Disposable {
       }),
   );
 
+  opener = async (pause) => {
+    const id = String(nextPauseId++);
+    let settled = false;
+    const opened: Pause = {
+      ...pause,
+      answer: (choice) => {
+        if (settled) return;
+        settled = true;
+        pauses.delete(id);
+        sessionsByPause.delete(id);
+        for (const [sessionId, pauseId] of pausesByDebugSession) {
+          if (pauseId === id) pausesByDebugSession.delete(sessionId);
+        }
+        pause.answer(choice);
+      },
+    };
+    pauses.set(id, opened);
+    try {
+      const started = await vscode.debug.startDebugging(
+        undefined,
+        { type: DEBUG_TYPE, request: 'launch', name: `GemDB: ${pause.label}`, gemdbPause: id },
+        { suppressSaveBeforeStart: true },
+      );
+      if (!started) opened.answer('stop');
+      return started;
+    } catch (e) {
+      log(`Could not open the debugger on ${pause.label}: ${errorMessage(e)}`);
+      opened.answer('stop');
+      return false;
+    }
+  };
+
   return new vscode.Disposable(() => {
+    opener = undefined;
     setHaltHandler(undefined);
     factory.dispose();
     for (const [id, pause] of [...pauses.entries()]) {

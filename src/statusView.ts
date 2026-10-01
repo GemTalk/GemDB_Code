@@ -19,6 +19,7 @@ import {
 } from './paths';
 import { isSupportedPlatform, setContext } from './platform';
 import { isListening, isRunning, listProcesses } from './processes';
+import { knownSavedStacks } from './savedStacks';
 import { sessionRegistry } from './session';
 
 /** "20 min" — the same scale the session-limit message uses. */
@@ -420,7 +421,24 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
       });
     }
 
+    // Saved stacks live in the database, so restoring one needs it running — and is only
+    // offered when there is something to restore.
+    if (state === 'running' && knownSavedStacks() > 0) rows.push(restoreStackRow());
+
     this.rows = rows;
     this.emitter.fire(undefined);
   }
+}
+
+/** The panel's way back into a stack saved with *Add Stack to Persisted Objects…*. */
+export function restoreStackRow(): Row {
+  return {
+    label: 'Restore a Saved Stack…',
+    description: 'open it in Run and Debug',
+    tooltip:
+      'Lists the stacks saved under gemdb.root with Add Stack to Persisted Objects… and ' +
+      'opens the one you pick in Run and Debug. With only one, it opens that.',
+    icon: new vscode.ThemeIcon('debug-alt', new vscode.ThemeColor('charts.blue')),
+    command: { command: 'gemdb.restoreStack', title: 'Restore a Saved Stack' },
+  };
 }

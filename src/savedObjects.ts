@@ -1,10 +1,19 @@
 import * as vscode from 'vscode';
-import { pauseForDebugSession, pauseForOwner } from './debugger';
+import {
+  Pause,
+  openCellTexts,
+  openPause,
+  pauseForDebugSession,
+  pauseForOwner,
+  toDapVariable,
+} from './debugger';
 import { errorMessage, log } from './log';
 import {
   PauseVariable,
   ROOT_LISTING_LIMIT,
   abortQuery,
+  childrenQuery,
+  clearRegistryQuery,
   commitQuery,
   freeKeyQuery,
   inspectQuery,
@@ -20,7 +29,32 @@ import {
   unquote,
 } from './pauseVariables';
 import { isRunning, listProcesses } from './processes';
+import {
+  liveSourceWorld,
+  openStackQuery,
+  parseOpenedStack,
+  restoredFrames,
+  saveStackQuery,
+  savedFrameOf,
+  savedPauseLabel,
+  SavedStackSummary,
+  noteSavedStacks,
+  savedStackKeysQuery,
+  stackKeyFor,
+} from './savedStacks';
 import { SessionOwner, executeAsync, sessionForIfOpen, sessionRegistry } from './session';
+
+/**
+ * Run Smalltalk in the extension's own session, one query at a time. The
+ * view's reads and a saved stack's Variables share that session, and a
+ * session runs one evaluation at a time.
+ */
+let extensionChain: Promise<unknown> = Promise.resolve();
+function extensionQuery(code: string): Promise<string> {
+  const run = extensionChain.then(() => executeAsync(code));
+  extensionChain = run.catch(() => undefined);
+  return run;
+}
 
 /**
  * Adding an object from the debugger to the database, and the Persisted
@@ -129,6 +163,8 @@ export interface RootEntry {
   key: string;
   type: string;
   value: string;
+  /** A stack saved from the debugger, which can be opened in it again. */
+  stack?: boolean;
 }
 
 export type SavedRow =
@@ -377,6 +413,8 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
   /** Committed entries added from the debugger, by key; kept across restarts. */
   private origins: Record<string, Origin>;
   private inFlight: Promise<void> | undefined;
+  /** A refresh arrived while a read was running, so that read's rows are out of date. */
+  private stale = false;
   /**
    * Each parent's child rows, made once per load: `reveal` finds a row by
    * identity, so asking twice must answer the same objects.
@@ -389,6 +427,7 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
 
   refresh(): void {
     this.rows = undefined;
+    if (this.inFlight) this.stale = true;
     this.emitter.fire(undefined);
   }
 
@@ -485,10 +524,16 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
       case 'entry': {
         const item = new vscode.TreeItem(row.entry.key, None);
         const origin = originOf(row.entry, this.origins);
-        item.description =
-          (origin ? `from ${origin.notebook} · ` : '') + `${row.entry.type} = ${row.entry.value}`;
-        item.iconPath = new vscode.ThemeIcon('pass-filled', new vscode.ThemeColor('charts.green'));
-        item.contextValue = 'gemdbSavedObject';
+        item.description = row.entry.stack
+          ? (origin ? `from ${origin.notebook} · ` : '') + 'saved stack: open it in the debugger'
+          : (origin ? `from ${origin.notebook} · ` : '') + `${row.entry.type} = ${row.entry.value}`;
+        // A saved stack gets its own icon, so it stands out from saved values even when the
+        // row is too narrow for its description.
+        item.iconPath = new vscode.ThemeIcon(
+          row.entry.stack ? 'debug-stackframe' : 'pass-filled',
+          new vscode.ThemeColor('charts.green'),
+        );
+        item.contextValue = row.entry.stack ? 'gemdbSavedStack' : 'gemdbSavedObject';
         return item;
       }
       case 'message':
@@ -508,7 +553,7 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
     try {
       const raw = orThrow(
         row.kind === 'entry'
-          ? await executeAsync(inspectQuery(key, true))
+          ? await extensionQuery(inspectQuery(key, true))
           : await inNotebook(row.save.ownerKey, inspectQuery(key, false)),
       );
       const [self, ...children] = parseChildren(raw);
@@ -576,6 +621,12 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
   private load(): Promise<void> {
     this.inFlight ??= this.read().finally(() => {
       this.inFlight = undefined;
+      // Rows read from before a commit or a save must not be shown after it: read again.
+      if (this.stale) {
+        this.stale = false;
+        this.rows = undefined;
+        void this.load();
+      }
       this.emitter.fire(undefined);
     });
     return this.inFlight;
@@ -604,7 +655,16 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
     );
     let root: RootEntry[] | string;
     try {
-      root = parseChildren(await executeAsync(rootListingQuery())).map(toEntry);
+      root = parseChildren(await extensionQuery(rootListingQuery())).map(toEntry);
+      const stacks = new Set(
+        (
+          JSON.parse(
+            await extensionQuery(savedStackKeysQuery()).catch(() => '[]'),
+          ) as SavedStackSummary[]
+        ).map((stack) => stack.key),
+      );
+      noteSavedStacks(stacks.size);
+      root = root.map((entry) => (stacks.has(entry.key) ? { ...entry, stack: true } : entry));
     } catch (e) {
       root = `Could not read gemdb.root: ${errorMessage(e)}`;
     }
@@ -844,7 +904,7 @@ async function removeSaved(
   }
   if (committed.length > 0) {
     try {
-      orThrow(await executeAsync(removeCommittedQuery(committed)));
+      orThrow(await extensionQuery(removeCommittedQuery(committed)));
       log(`Removed ${committed.map(accessCode).join(', ')} from Persisted Objects`);
       for (const key of committed) view.forgetOrigin(key);
     } catch (e) {
@@ -854,6 +914,219 @@ async function removeSaved(
     }
   }
   view.refresh();
+}
+
+/** `2026-10-01 16:20`, local time: how a saved stack says when it was saved. */
+function localStamp(at: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+}
+
+/**
+ * Save the paused stack under `gemdb.root`, like any added object: in the
+ * notebook's session, not committed. The snapshot holds each frame's place
+ * and source text, its locals as the real objects, and the notebook's
+ * globals, so it can be opened again after a commit and a restart.
+ */
+async function saveStack(
+  view: SavedObjectsProvider,
+  treeViews: Map<string, vscode.TreeView<SavedRow>>,
+): Promise<void> {
+  const pause = pauseForDebugSession(vscode.debug.activeDebugSession?.id);
+  if (pause?.saved) {
+    void vscode.window.showInformationMessage('This is a saved stack already.');
+    return;
+  }
+  if (!pause?.query || !pause.ownerKey) {
+    void vscode.window.showErrorMessage(
+      'Add Stack to Persisted Objects works while a GemDB notebook cell is paused at breakpoint().',
+    );
+    return;
+  }
+  const query = pause.query;
+  const now = new Date();
+  try {
+    const suggested = unquote(orThrow(await query(freeKeyQuery(stackKeyFor(pause.label, now)))));
+    const key = await vscode.window.showInputBox({
+      title: 'Add this stack to Persisted Objects',
+      prompt:
+        'Its key under gemdb.root. It persists at the notebook’s next commit; after that, ' +
+        'Persisted Objects can open it in the debugger again, even in a later VS Code.',
+      value: suggested,
+      ignoreFocusOut: true,
+      validateInput: async (text) => {
+        if (!text.trim()) return 'Enter a key.';
+        const taken = await query(keyTakenQuery(text)).catch(() => 'false');
+        return taken === 'true'
+          ? {
+              message: `gemdb.root already has "${text}"; adding replaces it when the notebook commits.`,
+              severity: vscode.InputBoxValidationSeverity.Warning,
+            }
+          : undefined;
+      },
+    });
+    if (key === undefined) return;
+    const frames = pause.frames.map((frame, index) => savedFrameOf(frame, pause.texts?.[index]));
+    const localsRefs = pause.frames.map(
+      (frame) =>
+        pause.scopes(frame.id).find((scope) => scope.presentationHint === 'locals')
+          ?.variablesReference ?? 0,
+    );
+    orThrow(
+      await query(
+        saveStackQuery(
+          key,
+          {
+            label: pause.label,
+            notebook: pause.ownerKey,
+            saved_at: localStamp(now),
+            description: 'Saved at breakpoint()',
+          },
+          frames,
+          localsRefs,
+          pause.ownerKey,
+        ),
+      ),
+    );
+    view.notePending({
+      key,
+      type: 'stack',
+      ownerKey: pause.ownerKey,
+      notebook: pause.label,
+      at: now.toISOString(),
+    });
+    log(
+      `Saved the stack at breakpoint() as ${accessCode(key)} (${pause.label}), not yet committed`,
+    );
+    const shown = treeViews.get(DEBUG_VIEW_ID);
+    if (shown) {
+      view
+        .revealSaved(shown, key)
+        .catch((e: unknown) => log(`Could not show ${key}: ${errorMessage(e)}`));
+    }
+    void vscode.window.showInformationMessage(
+      `Added this stack to Persisted Objects as ${accessCode(key)}: ${frames.length} frames, ` +
+        `their locals and the notebook's globals. It persists when the notebook commits; then ` +
+        `Persisted Objects can open it in the debugger, even after VS Code restarts.`,
+    );
+  } catch (e) {
+    void vscode.window.showErrorMessage(`Could not add the stack: ${errorMessage(e)}`);
+  }
+}
+
+/** Whether a saved stack is open now: one at a time, since they share a registry. */
+let savedStackOpen = false;
+
+/** Note it, and tell the menus: an opened saved stack has nothing more to add. */
+function setSavedStackOpen(open: boolean): void {
+  savedStackOpen = open;
+  void vscode.commands.executeCommand('setContext', 'gemdb.savedStackOpen', open);
+}
+
+/**
+ * Open a committed saved stack in Run and Debug: the Call Stack, the
+ * highlighted lines and the Variables, rebuilt from the objects saved with
+ * it, read-only. Each frame shows the copy of its source saved with it, never
+ * the live cell or file.
+ */
+async function openSavedStack(key: string): Promise<void> {
+  if (savedStackOpen) {
+    void vscode.window.showInformationMessage(
+      'A saved stack is open in the debugger already. Stop it, then open this one.',
+    );
+    return;
+  }
+  try {
+    const { meta, locals, globals } = parseOpenedStack(await extensionQuery(openStackQuery(key)));
+    const { frames, scopes, texts } = restoredFrames(
+      meta,
+      locals,
+      globals,
+      liveSourceWorld(openCellTexts),
+    );
+    setSavedStackOpen(true);
+    const pause: Pause = {
+      label: savedPauseLabel(meta),
+      frames,
+      scopes: (frameId) => scopes.get(frameId) ?? [],
+      variables: async (ref, start, count) => {
+        try {
+          return parseChildren(await extensionQuery(childrenQuery(ref, start, count))).map(
+            toDapVariable,
+          );
+        } catch (e) {
+          log(`Could not read a saved stack's variable ${ref}: ${errorMessage(e)}`);
+          return [];
+        }
+      },
+      answer: () => {
+        setSavedStackOpen(false);
+        extensionQuery(clearRegistryQuery()).catch(() => undefined);
+      },
+      sourceText: (ref) => texts.get(ref),
+      description: `Saved stack from ${meta.saved_at} (read-only)`,
+      saved: true,
+    };
+    const started = await openPause(pause);
+    if (!started) {
+      void vscode.window.showErrorMessage(
+        `GemDB could not open ${accessCode(key)} in the debugger.`,
+      );
+    } else {
+      log(`Opened the saved stack ${accessCode(key)} (${frames.length} frames)`);
+      // VS Code shows Run and Debug for a new session only when debug.openDebug says to,
+      // which by default is the first session in a window. Restoring is asking to see it.
+      await vscode.commands.executeCommand('workbench.view.debug');
+    }
+  } catch (e) {
+    setSavedStackOpen(false);
+    void vscode.window.showErrorMessage(`Could not open the saved stack: ${errorMessage(e)}`);
+  }
+}
+
+/** How a saved stack reads in a list of them. */
+export function stackChoice(stack: SavedStackSummary): { label: string; description: string } {
+  const frames = `${stack.frames} ${stack.frames === 1 ? 'frame' : 'frames'}`;
+  return {
+    label: stack.key,
+    description: [stack.label, stack.saved_at, frames].filter(Boolean).join(' · '),
+  };
+}
+
+/**
+ * The GemDB panel's *Restore a Saved Stack…*: list the committed saved stacks
+ * and open the one picked in Run and Debug — straight away when there is only
+ * one.
+ */
+async function restoreStack(): Promise<void> {
+  if (!isRunning(listProcesses())) {
+    void vscode.window.showInformationMessage('Start GemDB to restore a saved stack.');
+    return;
+  }
+  let stacks: SavedStackSummary[];
+  try {
+    stacks = JSON.parse(await extensionQuery(savedStackKeysQuery())) as SavedStackSummary[];
+    noteSavedStacks(stacks.length);
+  } catch (e) {
+    void vscode.window.showErrorMessage(`Could not list the saved stacks: ${errorMessage(e)}`);
+    return;
+  }
+  if (stacks.length === 0) {
+    void vscode.window.showInformationMessage(
+      'No saved stacks yet. Pause a cell at breakpoint(), choose Add Stack to Persisted ' +
+        'Objects… on the Call Stack, and commit; then it can be restored here.',
+    );
+    return;
+  }
+  if (stacks.length === 1) {
+    await openSavedStack(stacks[0].key);
+    return;
+  }
+  const picked = await vscode.window.showQuickPick(
+    stacks.map((stack) => ({ ...stackChoice(stack), key: stack.key })),
+    { title: 'Restore which saved stack?', matchOnDescription: true },
+  );
+  if (picked) await openSavedStack(picked.key);
 }
 
 /** Register the view and its commands. Answers the view, for others to refresh. */
@@ -881,6 +1154,11 @@ export function registerSavedObjects(context: vscode.ExtensionContext): SavedObj
       saveVariable(view, treeViews, ctx),
     ),
     vscode.commands.registerCommand('gemdb.savedObjects.refresh', () => view.refresh()),
+    vscode.commands.registerCommand('gemdb.saveStack', () => saveStack(view, treeViews)),
+    vscode.commands.registerCommand('gemdb.restoreStack', () => restoreStack()),
+    vscode.commands.registerCommand('gemdb.savedObjects.openStack', (row: SavedRow) =>
+      row?.kind === 'entry' ? openSavedStack(row.entry.key) : undefined,
+    ),
     vscode.commands.registerCommand('gemdb.savedObjects.help', () =>
       vscode.window.showInformationMessage('How persisting works', {
         modal: true,
@@ -912,5 +1190,15 @@ export function registerSavedObjects(context: vscode.ExtensionContext): SavedObj
       },
     ),
   );
+  // Look once, quietly, shortly after startup, so the Restore buttons are right before anyone
+  // opens Persisted Objects.
+  const look = setTimeout(() => {
+    if (!isRunning(listProcesses())) return;
+    extensionQuery(savedStackKeysQuery())
+      .then((raw) => noteSavedStacks((JSON.parse(raw) as unknown[]).length))
+      .catch(() => undefined);
+  }, 2000);
+  look.unref?.();
+  context.subscriptions.push(new vscode.Disposable(() => clearTimeout(look)));
   return view;
 }

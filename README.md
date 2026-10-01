@@ -399,7 +399,8 @@ database)**.
   yet. Right-click a Variables row and choose **Add to Persisted Objects…** to keep that object: it
   goes in `gemdb.root` under the key you give (one is suggested) and is written at the notebook's
   next commit. The **Persisted Objects** view, under GemDB and in Run and Debug, lists what `gemdb.root`
-  holds; its title bar always has **Commit** and **Abort** for the notebook you are working in.
+  holds; its title bar always has **Commit** and **Abort** for the notebook you are working in. **Add Stack to Persisted Objects…** on the Call Stack saves the whole paused stack the same
+  way; once committed, Persisted Objects reopens it in the debugger, even after a restart.
   In the GemDB Shell and in **Run Python File in GemDB**, `breakpoint()` prints where it was and
   the code carries on.
 - Each notebook has its own session and its own transaction, so a commit in one notebook never

@@ -43,9 +43,24 @@ class FakeGem {
     return JSON.parse(`[${list}]`) as string[];
   }
 
+  /** Committed saved stacks, by key: what the snapshot answers when opened. */
+  stacks = new Map<string, string>();
+
   run(session: string, code: string): string {
     this.queries.push({ session, code });
     const additions = this.additions(session);
+    if (code.includes('v.get("kind") == "gemdb.stack"')) {
+      return JSON.stringify(
+        [...this.stacks.keys()].map((key) => ({
+          key,
+          label: 'breakpoint.ipynb',
+          saved_at: '2026-10-01 16:20',
+          frames: 1,
+        })),
+      );
+    }
+    const openStack = /_s = gemdb\.root\["([^"]+)"\]/.exec(code);
+    if (openStack) return this.stacks.get(openStack[1]) ?? 'Error: KeyError - ' + openStack[1];
     if (code.includes('list(gemdb.root.items())')) {
       return [...this.committed]
         .map(([key, type]) => row(key, `<${type}>`, type, 0, 0, 0, 1))
@@ -65,6 +80,11 @@ class FakeGem {
       let key = base;
       for (let n = 2; taken(key); n++) key = `${base}_${n}`;
       return `'${key}'`;
+    }
+    const stack = /___gemdb_m\.root\["([^"]+)"\] = \{/.exec(code);
+    if (stack) {
+      additions.set(stack[1], 'dict');
+      return 'saved';
     }
     const saved = /gemdb\.root\["([^"]+)"\] = _gemdb_value/.exec(code);
     if (saved) {
@@ -117,9 +137,24 @@ vi.mock('../session', () => ({
       : undefined,
 }));
 vi.mock('../processes', () => ({ isRunning: () => running, listProcesses: () => [] }));
+const opened: Pause[] = [];
 vi.mock('../debugger', () => ({
   pauseForDebugSession: (id: string | undefined) => (id === 'debug-1' ? paused.get(NB) : undefined),
   pauseForOwner: (key: string) => paused.get(key),
+  openPause: (pause: Pause) => {
+    opened.push(pause);
+    return Promise.resolve(true);
+  },
+  openCellTexts: () => [],
+  toDapVariable: (v: { name: string; value: string; ref: number }) => ({
+    name: v.name,
+    value: v.value,
+    variablesReference: v.ref,
+  }),
+  scopesFor: (locals: number, globals: number) => [
+    ...(locals ? [{ name: 'Locals', variablesReference: locals, expensive: false }] : []),
+    ...(globals ? [{ name: 'Globals', variablesReference: globals, expensive: false }] : []),
+  ],
 }));
 
 const { DEBUG_VIEW_ID, EMPTY_GUIDE, VIEW_DESCRIPTION, VIEW_ID, registerSavedObjects } =
@@ -516,6 +551,168 @@ describe('removing objects', () => {
     await command('gemdb.savedObjects.remove')(b, [a]);
 
     expect([...gem.committed.keys()]).toEqual(['a']);
+  });
+});
+
+describe('saved stacks', () => {
+  const snapshot = (label: string) =>
+    JSON.stringify({
+      label,
+      notebook: NB,
+      saved_at: '2026-10-01 16:20',
+      description: 'Saved at breakpoint()',
+      frames: [
+        {
+          name: 'Employee.find',
+          line: 2,
+          column: 5,
+          end_column: null,
+          source_name: 'Cell [1]',
+          path: 'vscode-notebook-cell:/gone#W0',
+          text: 'def find(self):\n    breakpoint()',
+        },
+      ],
+    }) + `${F}3 ${F}9`;
+
+  it('shows a committed saved stack with an Open in Debugger button', async () => {
+    gem.committed.set('stack_bp', 'dict');
+    gem.stacks.set('stack_bp', snapshot('breakpoint.ipynb'));
+    const { view } = setUp();
+
+    const [root] = await topOf(view);
+    const [entry] = view.getChildren(root);
+
+    expect(item(view, entry)).toMatchObject({
+      label: 'stack_bp',
+      contextValue: 'gemdbSavedStack',
+      description: 'saved stack: open it in the debugger',
+    });
+  });
+
+  it('opens the stack in the debugger, rebuilt from the database, with its saved source', async () => {
+    gem.committed.set('stack_bp', 'dict');
+    gem.stacks.set('stack_bp', snapshot('breakpoint.ipynb'));
+    opened.length = 0;
+    const { view } = setUp();
+    const [root] = await topOf(view);
+
+    await command('gemdb.savedObjects.openStack')(view.getChildren(root)[0]);
+
+    const [pause] = opened;
+    expect(pause).toMatchObject({
+      label: 'Saved stack: breakpoint.ipynb (2026-10-01 16:20)',
+      saved: true,
+      frames: [
+        {
+          name: 'Employee.find',
+          source: { name: 'Cell [1] (saved 2026-10-01 16:20)', sourceReference: 1 },
+        },
+      ],
+    });
+    expect(pause.sourceText?.(1)).toBe('def find(self):\n    breakpoint()');
+    expect(pause.scopes(1).map((s) => s.variablesReference)).toEqual([3, 9]);
+    pause.answer('continue');
+  });
+
+  it('restores the only saved stack straight away from the GemDB panel, showing Run and Debug', async () => {
+    gem.committed.set('stack_bp', 'dict');
+    gem.stacks.set('stack_bp', snapshot('breakpoint.ipynb'));
+    opened.length = 0;
+    setUp();
+    const picked = vi.spyOn(window, 'showQuickPick');
+    const shown = vi.fn();
+    __commands.set('workbench.view.debug', shown);
+
+    await command('gemdb.restoreStack')();
+
+    expect(shown).toHaveBeenCalledTimes(1);
+    __commands.delete('workbench.view.debug');
+    expect(picked).not.toHaveBeenCalled();
+    expect(opened.map((p) => p.label)).toEqual([
+      'Saved stack: breakpoint.ipynb (2026-10-01 16:20)',
+    ]);
+    opened[0].answer('stop');
+  });
+
+  it('lists the saved stacks, with notebook, time and frames, when there are several', async () => {
+    for (const key of ['stack_a', 'stack_b', 'stack_c']) gem.stacks.set(key, snapshot(key));
+    opened.length = 0;
+    setUp();
+    const picked = vi
+      .spyOn(window, 'showQuickPick')
+      .mockImplementation((items) => Promise.resolve((items as Array<{ key: string }>)[1]));
+
+    await command('gemdb.restoreStack')();
+
+    const items = picked.mock.calls[0][0] as Array<{ label: string; description: string }>;
+    expect(items.map((i) => i.label)).toEqual(['stack_a', 'stack_b', 'stack_c']);
+    expect(items[0].description).toBe('breakpoint.ipynb · 2026-10-01 16:20 · 1 frame');
+    expect(opened.map((p) => p.label)).toEqual(['Saved stack: stack_b (2026-10-01 16:20)']);
+    opened[0].answer('stop');
+  });
+
+  it('says how to save one when there is no saved stack', async () => {
+    setUp();
+    const told = vi.spyOn(window, 'showInformationMessage');
+
+    await command('gemdb.restoreStack')();
+
+    expect(told.mock.calls[0][0]).toMatch(
+      /^No saved stacks yet\..*Add Stack to Persisted Objects…/,
+    );
+  });
+
+  it('opens one saved stack at a time', async () => {
+    gem.committed.set('stack_bp', 'dict');
+    gem.stacks.set('stack_bp', snapshot('breakpoint.ipynb'));
+    opened.length = 0;
+    const { view } = setUp();
+    const [root] = await topOf(view);
+    const told = vi.spyOn(window, 'showInformationMessage');
+    const entry = view.getChildren(root)[0];
+
+    await command('gemdb.savedObjects.openStack')(entry);
+    await command('gemdb.savedObjects.openStack')(entry);
+
+    expect(opened).toHaveLength(1);
+    expect(told.mock.calls.at(-1)?.[0]).toMatch(/open in the debugger already/);
+    opened[0].answer('stop');
+  });
+
+  it('adds the paused stack like a variable: under gemdb.root, waiting on the notebook’s commit', async () => {
+    const pause = pauseIn(NB);
+    pause.frames = [
+      {
+        id: 1,
+        name: 'Employee.find',
+        line: 2,
+        column: 5,
+        source: { name: 'Cell [1]', path: 'vscode-notebook-cell:/w#W0' },
+      },
+    ];
+    pause.texts = [['def find(self):', '    breakpoint()']];
+    pause.scopes = () => [
+      { name: 'Locals', variablesReference: 4, presentationHint: 'locals', expensive: false },
+    ];
+    connected.push({ key: NB, label: 'breakpoint.ipynb' });
+    const { view } = setUp();
+    vi.spyOn(window, 'showInputBox').mockResolvedValue('stack_bp');
+    const told = vi.spyOn(window, 'showInformationMessage');
+    const { debug } = await import('../__mocks__/vscode');
+    debug.activeDebugSession = { id: 'debug-1', type: 'gemdb' };
+
+    await command('gemdb.saveStack')();
+    const rows = await topOf(view);
+
+    const save = gem.queries.find((q) => q.code.includes('"kind": "gemdb.stack"'))!;
+    expect(save.session).toBe(NB);
+    expect(save.code).toContain('___gemdb_l0');
+    expect(told.mock.calls[0][0]).toMatch(
+      /^Added this stack to Persisted Objects as gemdb\.root\["stack_bp"\]/,
+    );
+    const notebook = rows.find((r) => r.kind === 'notebook')!;
+    expect(view.getChildren(notebook).map((r) => item(view, r).label)).toEqual(['stack_bp']);
+    debug.activeDebugSession = undefined;
   });
 });
 

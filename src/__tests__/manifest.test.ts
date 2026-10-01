@@ -24,6 +24,7 @@ interface Manifest {
     commands: Array<{ command: string; title: string }>;
     views: Record<string, Array<{ id: string; name: string; when?: string; visibility?: string }>>;
     menus: Record<string, Array<{ command: string; when?: string; group?: string }>>;
+    viewsWelcome: Array<{ view: string; contents: string; when?: string }>;
   };
 }
 
@@ -116,5 +117,54 @@ describe('the Persisted Objects contributions', () => {
     expect(title('gemdb.savedObjects.commitNotebook')).toMatch(/^Commit: Persist/);
     expect(title('gemdb.savedObjects.abortNotebook')).toMatch(/^Abort: Discard/);
     expect(title('gemdb.savedObjects.help')).toMatch(/Add Under gemdb\.root, Then Commit/);
+  });
+});
+
+describe('the saved-stack contributions', () => {
+  const { commands, menus } = manifest.contributes;
+  const title = (command: string) => commands.find((c) => c.command === command)?.title;
+
+  it('names adding a stack the way adding a variable is named', () => {
+    expect(title('gemdb.saveVariable')).toBe('Add to Persisted Objects…');
+    expect(title('gemdb.saveStack')).toBe('Add Stack to Persisted Objects…');
+  });
+
+  it('puts Add Stack on the Call Stack’s session and thread rows, and in every row’s menu', () => {
+    const entries = menus['debug/callstack/context'].filter((e) => e.command === 'gemdb.saveStack');
+
+    const inline = entries.find((e) => e.group?.startsWith('inline'));
+    expect(inline?.when).toMatch(
+      /callStackItemType == 'session' \|\| callStackItemType == 'thread'/,
+    );
+    expect(entries.some((e) => !e.group?.startsWith('inline'))).toBe(true);
+    // Not on an opened saved stack: there is nothing more to add.
+    expect(entries.every((e) => e.when?.includes('!gemdb.savedStackOpen'))).toBe(true);
+  });
+
+  it('opens a saved stack from its row, by icon and from the top of its right-click menu', () => {
+    const entries = menus['view/item/context'].filter(
+      (e) => e.command === 'gemdb.savedObjects.openStack',
+    );
+
+    expect(entries.every((e) => e.when?.includes('viewItem == gemdbSavedStack'))).toBe(true);
+    // The icon can be crowded out of a narrow view; the menu item can't.
+    expect(entries.map((e) => e.group?.startsWith('inline'))).toEqual([true, false]);
+  });
+});
+
+describe('restoring a saved stack', () => {
+  const { menus, viewsWelcome } = manifest.contributes;
+
+  it('puts a blue Restore button in Run and Debug only while there is a saved stack to restore', () => {
+    const welcome = viewsWelcome.find((w) => w.view === 'workbench.debug.welcome');
+
+    expect(welcome?.contents).toContain('[Restore a Saved Stack…](command:gemdb.restoreStack)');
+    expect(welcome?.when).toBe('gemdb.running && gemdb.hasSavedStacks');
+  });
+
+  it('offers Restore in the GemDB panel’s title bar too', () => {
+    const entry = menus['view/title'].find((e) => e.command === 'gemdb.restoreStack');
+
+    expect(entry?.when).toBe('view == gemdbStatus && gemdb.running && gemdb.hasSavedStacks');
   });
 });
