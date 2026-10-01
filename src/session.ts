@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { DB_PASSWORD, DB_USER, STONE_NAME, engineVersion } from './config';
+import { dbPassword, dbUser, engineVersion, stoneName } from './config';
 import { OOP_ILLEGAL } from './gci/gciConstants';
 import { GciError, GciLibrary } from './gci/gciLibrary';
 import { errorMessage, log } from './log';
@@ -288,7 +288,7 @@ function gemNrs(): string {
 }
 
 function stoneNrs(): string {
-  return `!tcp@localhost#server!${STONE_NAME}`;
+  return `!tcp@localhost#server!${stoneName()}`;
 }
 
 /** Load the GCI library once per extension host; koffi caches the handle. */
@@ -434,8 +434,8 @@ export class GciSession {
       null,
       false,
       gemNrs(),
-      DB_USER,
-      DB_PASSWORD,
+      dbUser(),
+      dbPassword(),
       GCI_LOGIN_QUIET,
       0,
     );
@@ -473,7 +473,7 @@ export class GciSession {
     }
     session.publishName();
     log(
-      `Connected to GemDB as ${DB_USER} (${resolved.label}` +
+      `Connected to GemDB as ${dbUser()} (${resolved.label}` +
         `${session.sessionSerial === undefined ? '' : `, session ${session.sessionSerial}`})`,
     );
     return session;

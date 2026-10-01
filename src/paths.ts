@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { DB_DIR_NAME, engineVersion, rootPath } from './config';
+import { DB_DIR_NAME, engineVersion, externalDatabase, rootPath } from './config';
 import { platformKey } from './platform';
 
 /**
@@ -31,9 +31,15 @@ export function engineDirName(version = engineVersion()): string {
   return `${ENGINE_DIR_PREFIX}${version}-${platformKey() ?? 'unknown'}`;
 }
 
-/** Absolute path of the extracted engine, or undefined if it is not there. */
+/**
+ * Absolute path of the extracted engine, or undefined if it is not there.
+ *
+ * For an external database this is the administrator's product directory,
+ * whatever version asked for: there is exactly one engine, and it is theirs.
+ */
 export function enginePath(version = engineVersion()): string | undefined {
-  const dir = path.join(rootPath(), engineDirName(version));
+  const external = externalDatabase();
+  const dir = external ? external.gemstone : path.join(rootPath(), engineDirName(version));
   return fs.existsSync(dir) ? dir : undefined;
 }
 

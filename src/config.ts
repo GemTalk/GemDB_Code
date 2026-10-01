@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
@@ -53,6 +54,102 @@ export const DB_DIR_NAME = 'db';
 export const DB_USER = 'DataCurator';
 export const DB_PASSWORD = 'swordfish';
 
+/**
+ * A database someone else installed and runs, which GemDB only connects to.
+ *
+ * The case this exists for is a hosted machine — a cloud droplet, a shared
+ * server — where an administrator installs the engine, runs the stone and
+ * NetLDI as their own services, and gives the developer an ordinary database
+ * account. GemDB then does the per-user half of its job (stage and file in
+ * Grail, run the MCP server, open sessions) and none of the machine half: it
+ * downloads no engine, creates no database, asks for no shared memory, and
+ * never starts or stops a process. That last one is the point rather than a
+ * convenience. The administrator's stone runs as another OS user, and GemDB
+ * starting one on the same extent as the developer would hand the developer
+ * the stone's identity — and with it passwordless logins as any user.
+ *
+ * Switched on by `gemdb.externalDatabase.gemstone`, the product directory,
+ * because nothing else about an external database can be found without it.
+ */
+export interface ExternalDatabase {
+  /** The engine's product directory: GEMSTONE. */
+  gemstone: string;
+  /** Where the engine keeps its lock files: GEMSTONE_GLOBAL_DIR. */
+  globalDirectory: string;
+  stone: string;
+  netldi: string;
+  user: string;
+  /** A file whose first line is the password, or undefined for the stock one. */
+  passwordFile: string | undefined;
+}
+
+/** The external database GemDB is configured to use, or undefined for its own. */
+export function externalDatabase(): ExternalDatabase | undefined {
+  const config = vscode.workspace.getConfiguration('gemdb');
+  const setting = (key: string, fallback: string): string =>
+    String(config.get<string>(`externalDatabase.${key}`, fallback) ?? '').trim() || fallback;
+  const gemstone = setting('gemstone', '');
+  if (!gemstone) return undefined;
+  const passwordFile = setting('passwordFile', '');
+  return {
+    gemstone: expandHome(gemstone),
+    globalDirectory: expandHome(setting('globalDirectory', '/opt/gemstone')),
+    stone: setting('stone', 'gs64stone'),
+    netldi: setting('netldi', 'gs64ldi'),
+    user: setting('user', DB_USER),
+    passwordFile: passwordFile ? expandHome(passwordFile) : undefined,
+  };
+}
+
+export function isExternalDatabase(): boolean {
+  return externalDatabase() !== undefined;
+}
+
+/** The stone GemDB logs in to. */
+export function stoneName(): string {
+  return externalDatabase()?.stone ?? STONE_NAME;
+}
+
+/** The NetLDI GemDB's sessions are forked through. */
+export function netldiName(): string {
+  return externalDatabase()?.netldi ?? NETLDI_NAME;
+}
+
+/** The database account every GemDB session, installer and router logs in as. */
+export function dbUser(): string {
+  return externalDatabase()?.user ?? DB_USER;
+}
+
+/**
+ * The password for {@link dbUser}.
+ *
+ * Read from a file rather than a setting so that it never sits in
+ * `settings.json`, which is synced, shared and pasted into bug reports. The
+ * administrator writes the file, readable only by the developer's OS account,
+ * and GemDB reads it on every use — so a password changed on the server is
+ * picked up without touching the editor.
+ */
+export function dbPassword(): string {
+  const file = externalDatabase()?.passwordFile;
+  if (!file) return DB_PASSWORD;
+  let text: string;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    throw new Error(
+      `Cannot read the database password from ${file} (gemdb.externalDatabase.passwordFile): ` +
+        `${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+  const password = text.split(/\r?\n/, 1)[0]?.trim() ?? '';
+  if (!password) throw new Error(`The database password file ${file} is empty.`);
+  return password;
+}
+
+function expandHome(p: string): string {
+  return path.resolve(p.replace(/^~(?=$|\/)/, os.homedir()));
+}
+
 /** Minimum shared memory the engine needs, in GB, for both shmmax and shmall. */
 export const REQUIRED_SHARED_MEMORY_GB = 1;
 
@@ -65,13 +162,34 @@ export const REQUIRED_SHARED_MEMORY_GB = 1;
  */
 export const STOP_TIMEOUT_SECONDS = 10;
 
-/** Resolved engine version: the user's override if set, otherwise the pin. */
+/**
+ * Resolved engine version: the user's override if set, otherwise the version
+ * of an external database's engine, otherwise the pin.
+ *
+ * An external engine is whatever the administrator installed, and the version
+ * names the GCI library GemDB loads from it, so it is read from the product's
+ * own `version.txt` (its second line starts with the version) rather than
+ * assumed to be the pin.
+ */
 export function engineVersion(): string {
   const override = vscode.workspace
     .getConfiguration('gemdb')
     .get<string>('engineVersion', '')
     .trim();
-  return override || PINNED_ENGINE_VERSION;
+  if (override) return override;
+  const external = externalDatabase();
+  if (external) return externalEngineVersion(external.gemstone) ?? PINNED_ENGINE_VERSION;
+  return PINNED_ENGINE_VERSION;
+}
+
+/** The version an engine's `version.txt` reports, or undefined if unreadable. */
+export function externalEngineVersion(gemstone: string): string | undefined {
+  try {
+    const lines = fs.readFileSync(path.join(gemstone, 'version.txt'), 'utf8').split(/\r?\n/);
+    return /^(\d+\.\d+\.\d+\S*)\s/.exec(lines[1] ?? '')?.[1];
+  } catch {
+    return undefined;
+  }
 }
 
 /** True when the user has overridden the pinned version. */
@@ -96,8 +214,7 @@ export function isEngineVersionOverridden(): boolean {
  * database is, rather than from the laptop's.
  */
 export function rootPath(): string {
-  const raw = vscode.workspace.getConfiguration('gemdb').get<string>('rootPath', '~/GemDB');
-  return path.resolve(raw.replace(/^~(?=$|\/)/, os.homedir()));
+  return expandHome(vscode.workspace.getConfiguration('gemdb').get<string>('rootPath', '~/GemDB'));
 }
 
 export function reinstallPythonOnUpdate(): boolean {

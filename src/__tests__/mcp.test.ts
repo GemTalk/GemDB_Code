@@ -1,3 +1,4 @@
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
@@ -8,6 +9,7 @@ import { DEFAULT_MCP_PORT, mcpEnabled, mcpPort, mcpReadOnly } from '../config';
 import {
   bundledMcpStamp,
   isPortOpen,
+  listeningPid,
   mcpLabel,
   mcpNeedsUpdate,
   mcpServerState,
@@ -18,6 +20,15 @@ import {
 } from '../mcp';
 import { installedMcpStamp, mcpPath, mcpRouterStatePath, mcpStagedOnDisk } from '../paths';
 import { clientRecipesFor } from '../mcpRegistration';
+
+const hasLsof = (() => {
+  try {
+    execFileSync('lsof', ['-v'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 /**
  * The MCP server's decisions, without a database.
@@ -224,6 +235,23 @@ describe('what is on the port', () => {
     } finally {
       server.close();
     }
+  });
+
+  // The router's pid, when `forkOnPort:` could not report it: an ordinary
+  // account may not describe another session, so it is found by the port.
+  it.skipIf(!hasLsof)('finds the pid listening on a port', async () => {
+    const server = net.createServer();
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as net.AddressInfo).port;
+    try {
+      expect(listeningPid(port)).toBe(process.pid);
+    } finally {
+      server.close();
+    }
+  });
+
+  it('finds no pid for a port nothing listens on', () => {
+    expect(listeningPid(54999)).toBeUndefined();
   });
 
   it('ignores a record written for a different port', () => {

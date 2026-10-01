@@ -6,6 +6,7 @@ import {
   isInstalled,
   prepare,
   reinstallGrail,
+  resumeMcpServing,
   start,
   stop,
   uninstall,
@@ -17,7 +18,7 @@ import {
   readUnattendedSetupMarker,
   writeUnattendedSetupMarker,
 } from './unattendedSetupMarker';
-import { mcpEnabled, mcpReadOnly } from './config';
+import { isExternalDatabase, mcpEnabled, mcpReadOnly } from './config';
 import { cliDirPath, putCliOnPath } from './cli';
 import { onDidAttemptGrailInstall } from './grail';
 import { withSetupLock } from './lock';
@@ -452,10 +453,12 @@ async function prepareOnFirstRun(extensionPath: string, refresh: () => void): Pr
       writeUnattendedSetupMarker(outcome);
       return outcome;
     });
-    const os = ensureOsConfigured(extensionPath, TRIGGER.firstRun).then(
-      osConfigAllowsStart,
-      () => false,
-    );
+    //
+    // An external database's machine is configured by whoever runs it, so, as
+    // in `ensureRunning`, GemDB neither checks shared memory nor asks.
+    const os = isExternalDatabase()
+      ? Promise.resolve(true)
+      : ensureOsConfigured(extensionPath, TRIGGER.firstRun).then(osConfigAllowsStart, () => false);
     const [filesOutcome, configured] = await Promise.all([files, os]);
     return { files: filesOutcome, configured, ranSetup: true };
   });
@@ -516,7 +519,13 @@ export function deactivate(): void {
 async function autoStart(extensionPath: string, refresh: () => void): Promise<void> {
   if (!isSupportedPlatform() || !isInstalled()) return;
   if (autoStartSuppressed()) return;
-  if (isRunning()) return;
+  if (isRunning()) {
+    // Up already — an external database always is — but the MCP server it had
+    // may not be. Under the lock, so two windows do not both fork one.
+    await withSetupLock(() => resumeMcpServing(extensionPath));
+    refresh();
+    return;
+  }
   if (!(await isSharedMemoryConfigured())) return;
 
   await withSetupLock(async () => {
