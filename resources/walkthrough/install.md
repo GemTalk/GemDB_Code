@@ -1,33 +1,41 @@
-## Setup runs by itself
+## The automated GemDB setup
 
-The first time GemDB activates, it:
+GemDB Code sets up GemDB on your computer running VS Code. The setup includes managing the download,
+storing the database under `~/GemDB` and making any required shared-memory changes.
 
-1. Starts downloading the database engine (about 145 MB on macOS, 450 MB on Linux).
-2. Asks permission for one operating-system change — while that downloads.
+The first time GemDB Code activates, it:
+
+1. Starts downloading the database engine (about 145 MB on macOS, about 450 MB on Linux).
+2. Checks the operating system's shared-memory limit while the engine downloads, and prompts you
+   only if it needs raising.
 3. Unpacks the engine and creates one database under `~/GemDB`.
-4. Starts the database, so it's ready before you are.
+4. Starts the database and installs Python into it: Grail, GemTalk Systems' implementation of Python
+   for GemDB. This takes a few minutes and shows its progress in a notification.
 
-That's about **700 MB on disk** on macOS, and **1.4 GB** on Linux, when it settles. Python support is already in
-the database GemDB creates — there's no separate install step to wait through.
+When the setup finishes, GemDB Code uses about **700 MB on disk** on macOS and about **1.4 GB** on
+Linux.
 
-### The one thing it asks for
+### Raise the shared-memory limit if needed
 
-The database keeps its working set in **shared memory**, and both macOS and
-Linux ship with a limit well below the 1 GB it needs. GemDB opens a terminal
-and runs a small script with `sudo`, so you'll be asked for your password.
+The database keeps the objects it is working with in a cache in **shared memory**, so that every
+session (each GemDB Shell, notebook and AI agent) can read them quickly without going to disk. The
+operating system limits how much shared memory a program can use, and GemDB needs that limit to be
+at least 1 GB. Most Linux systems already allow enough; macOS usually does not.
 
-GemDB never sees that password — the prompt is your own terminal's. It's asked
-once per machine, and it's the only change GemDB makes outside `~/GemDB`.
+If the limit is too low, GemDB Code prompts you for permission to raise it. When you choose
+**Configure**, GemDB Code opens a terminal and runs a small script with `sudo`.
 
-It's asked *while the download runs* rather than after, for two reasons: you're
-waiting anyway, and you're still here. Asked two minutes later, it tends to
-arrive after you've moved on to something else.
+GemDB Code never sees your password: you type it into a terminal on your computer. The change is
+needed only once, and it stays in place after you restart, so GemDB Code can start the database
+without prompting you again. On Linux, the same prompt also recommends keeping the database running
+after you log out.
 
-If you'd rather not, nothing is broken: the panel keeps showing what's needed,
-and GemDB asks again the first time you actually run Python.
+The prompt appears while the engine downloads so you can approve it while you are waiting.
 
-### Cancelling
+If you choose **Cancel**, nothing is broken: the GemDB Code sidebar shows what is needed, and GemDB
+Code prompts you again the next time the database starts.
 
-Cancelling the download is remembered — GemDB won't ask again. The
-partly-downloaded file is kept, so picking it up later only fetches what's
-left.
+### Canceling
+
+You can cancel the download. Canceling keeps what has already been downloaded, and **Set Up GemDB**
+in the GemDB Code sidebar picks up from there.
