@@ -1,4 +1,5 @@
 import * as http from 'http';
+import * as net from 'net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { __setSetting } from '../__mocks__/vscode';
 import { mcpPort } from '../config';
@@ -46,10 +47,27 @@ const haveExtent = haveTestExtent();
 
 let fixture: Fixture | undefined;
 
+/** A port nothing on this machine is listening on, as of the moment it is asked. */
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address() as net.AddressInfo;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
 beforeAll(async () => {
   if (!havePayload || !haveExtent) return;
   fixture = makeFixture();
   if (!fixture) return;
+  // The root path and lock directory already keep this database apart from a
+  // developer's real one; the port is the last thing they would share. On the
+  // default, a GemDB with MCP on holds it, this router cannot bind, and every
+  // request reaches theirs instead.
+  __setSetting('gemdb.mcp.port', await freePort());
   createDatabaseWithPython(fixture);
   // Grail's files on disk, because the router's worker gems inherit the
   // NetLDI's environment and resolve Python modules through GRAIL_DIR.
@@ -134,9 +152,65 @@ function mcpRequest(
   });
 }
 
-/** How many sessions the stone has, as any session can ask. */
-function sessionCount(): number {
-  return Number.parseInt(execute('System currentSessions size printString'), 10);
+/**
+ * The serials of the router's gems: its own session (slot 2, the gem's pid, is
+ * the router) and every worker it opened (slot 21, the RPC client's pid, is
+ * the router). A serial, unlike a session id, is never handed out again, so
+ * these name the same gems for good. Counting sessions instead raced CI: a
+ * count taken just after a stop still included the previous router's gems on
+ * their way out, and a freed session id can go to a newcomer at once.
+ *
+ * `descriptionOfSession:` answers zeros for a session that has gone between
+ * `currentSessions` and the lookup, hence the slot 10 check.
+ */
+function routerGems(routerPid: number): number[] {
+  const rows = execute(
+    [
+      '| ws |',
+      'ws := WriteStream on: String new.',
+      'System currentSessions do: [:id | | d |',
+      '  d := System descriptionOfSession: id.',
+      `  ((d at: 10) ~= 0 and: [(d at: 2) = ${routerPid} or: [(d at: 21) = ${routerPid}]])`,
+      '    ifTrue: [ws print: (d at: 9); space]].',
+      'ws contents',
+    ].join('\n'),
+  );
+  return rows.split(/\s+/).filter(Boolean).map(Number);
+}
+
+/** Which of these serials still belong to a logged-in session. */
+function stillLoggedIn(serials: number[]): number[] {
+  if (serials.length === 0) return [];
+  const rows = execute(
+    [
+      '| ws |',
+      'ws := WriteStream on: String new.',
+      `#(${serials.join(' ')}) do: [:serial |`,
+      '  ((System descriptionOfSessionSerialNum: serial) at: 10) = 0',
+      '    ifFalse: [ws print: serial; space]].',
+      'ws contents',
+    ].join('\n'),
+  );
+  return rows.split(/\s+/).filter(Boolean).map(Number);
+}
+
+/**
+ * Wait for gems to exit, which they do asynchronously once their client has
+ * gone. Measured at well under a second; ten is headroom for a loaded runner.
+ */
+async function waitUntilGone(serials: number[]): Promise<number[]> {
+  let left = stillLoggedIn(serials);
+  for (let attempt = 0; attempt < 40 && left.length > 0; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    left = stillLoggedIn(serials);
+  }
+  return left;
+}
+
+function routerPid(): number {
+  const pid = readRouterState()?.pid;
+  expect(pid).toBeGreaterThan(0);
+  return pid!;
 }
 
 function canMakeFixture(): boolean {
@@ -241,10 +315,8 @@ describe.skipIf(!havePayload || !haveExtent || !canMakeFixture())(
     });
 
     it('gives each client its own session, and takes it back with the router', async () => {
-      // The baseline is not zero and not one: the stone's own gems hold
-      // sessions too (`SymbolGem` and `GcReclaim`, measured), and so does this
-      // test. What matters is the delta, and that it comes back.
-      const withRouterAndOneClient = sessionCount();
+      const pid = routerPid();
+      expect(routerGems(pid)).toHaveLength(2); // the router and the first client's worker
 
       // A connected client is a worker gem of its own — the isolation that
       // keeps two agents out of each other's uncommitted work, and the reason
@@ -252,7 +324,8 @@ describe.skipIf(!havePayload || !haveExtent || !canMakeFixture())(
       const second = await mcpRequest('initialize', {}, { id: 5 });
       expect(second.sessionId).toBeTruthy();
       expect(second.sessionId).not.toBe(clientSession);
-      expect(sessionCount()).toBe(withRouterAndOneClient + 1);
+      const gems = routerGems(pid);
+      expect(gems).toHaveLength(3);
 
       // And the claim stopMcpServer rests on: a worker gem's client process IS
       // the router — measured, 2026-09-07, `System descriptionOfSession:` slot
@@ -262,18 +335,10 @@ describe.skipIf(!havePayload || !haveExtent || !canMakeFixture())(
       // after an agent had connected would be refused by stopstone over gems
       // nothing could name, and each connected client would cost a session of
       // the ten until the stone was force-stopped.
-      const baseline = withRouterAndOneClient - 2; // less the router and its first worker
       await stopMcpServer();
       expect(await isPortOpen(mcpPort())).toBe(false);
       expect(readRouterState()).toBeUndefined();
-
-      // Gems exit asynchronously once their client is gone, so give the stone
-      // a moment to notice before counting. Measured at well under a second;
-      // ten is headroom for a loaded CI runner.
-      for (let attempt = 0; attempt < 40 && sessionCount() > baseline; attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
-      expect(sessionCount()).toBe(baseline);
+      expect(await waitUntilGone(gems)).toEqual([]);
     }, 180_000);
 
     it('starts again after being stopped', async () => {
@@ -281,6 +346,23 @@ describe.skipIf(!havePayload || !haveExtent || !canMakeFixture())(
       const reply = await mcpRequest('initialize', {}, { id: 6 });
       expect(reply.status, reply.raw).toBe(200);
     }, 120_000);
+
+    // What a change of external database settings leaves GemDB with: a
+    // recorded session id from the previous database, which must not be sent
+    // to this one. The signal alone has to end the router and its workers.
+    it('stops by signal alone, without ending its session from inside', async () => {
+      await stopMcpServer();
+      expect(await startMcpServer()).toBe(true);
+      const reply = await mcpRequest('initialize', {}, { id: 10 });
+      expect(reply.status, reply.raw).toBe(200);
+      const gems = routerGems(routerPid());
+      expect(gems).toHaveLength(2); // the router and this client's worker
+
+      await stopMcpServer({ bySession: false });
+      expect(await isPortOpen(mcpPort())).toBe(false);
+      expect(readRouterState()).toBeUndefined();
+      expect(await waitUntilGone(gems)).toEqual([]);
+    }, 180_000);
 
     // `gemdb.mcp.readOnly` promises something specific, and the way it could
     // fail is the way a user cannot check: a router that forked read-WRITE

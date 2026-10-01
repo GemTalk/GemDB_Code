@@ -230,10 +230,25 @@ the router's session — so each worker is an RPC gem whose client process *is*
 the router. Ending the router leaves them without a client and the engine
 terminates them; sessions 5, 6 and 7 above were all gone within four seconds.
 That is why `stopMcpServer` names one gem and no more, and
-`mcp.test.ts` asserts the session count returns to its baseline after a client
-has connected, so the day it stops being true is the day a test goes red rather
-than the day a user cannot stop their database. The baseline is
-not zero: `SymbolGem` and `GcReclaim` hold sessions of their own.
+`mcp.test.ts` finds the router's gems by those two slots after a client has
+connected and asserts every one of them is gone after the stop, so the day it
+stops being true is the day a test goes red rather than the day a user cannot
+stop their database.
+
+The test names gems by **serial** (slot 9), not by counting sessions and not
+by session id. It used to count, and that raced on CI's macOS runner on
+2026-10-01: `stopMcpServer` returns once the port closes, the previous
+router's gems exit a moment later, and a count taken in between was one too
+high, so the test saw the count fall *below* its baseline. A session id is no
+better, because the stone hands a freed id to the next login. A serial is
+never reused. The test relies on two things the image's own comments say and
+4.0.0.a4 does (measured 2026-10-01, the same run). `descriptionOfSession:`
+answers an Array of zeros for a session that has gone, not an error, so slot
+10 (the session id) is 0. And `descriptionOfSessionSerialNum:` answers the
+same way for a serial that has logged out. It does not answer nil;
+`GsSession sessionWithSerialNumber:` is the one that does. On that run slot
+21 still named the router, too: the test found two gems with one client
+connected and three with two.
 
 The stop itself is `System stopSession:` on the recorded session id from a
 *linked* topaz login — clean, needs no NetLDI (already down by then in
@@ -243,6 +258,16 @@ pid belonging to something else is left alone. GemDB records both the pid and
 the session id at fork time in `<rootPath>/mcp-router.json`, which is *outside*
 `mcp/` because staging replaces that directory wholesale and a running router
 must survive an update.
+
+One caller skips the clean stop and goes straight to the signal:
+`stopMcpServer({ bySession: false })`, when a `gemdb.externalDatabase.*`
+setting that names a database changes. The record survives that change,
+because the root path has not moved, but the session id in it belongs to the
+previous database. `topazLogin()` now reaches the new one, where that id is
+someone else's session or nobody's. The signal alone is enough. Measured
+2026-10-01, `mcp.test.ts` again: after SIGTERM to a router with one client
+connected, neither the router's serial nor its worker's was still logged in,
+so the worker followed the router down here too.
 
 ## Registering it with clients
 
