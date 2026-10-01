@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as http from 'http';
 import * as net from 'net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -15,7 +16,7 @@ import {
   startMcpServer,
   stopMcpServer,
 } from '../mcp';
-import { mcpInstalled, mcpStagedOnDisk } from '../paths';
+import { mcpInstalled, mcpRouterStatePath, mcpStagedOnDisk } from '../paths';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
 import { execute, logoutAll } from '../session';
 import { createDatabaseWithPython, Fixture, haveTestExtent, makeFixture } from './fixture';
@@ -246,13 +247,18 @@ describe.skipIf(!havePayload || !haveExtent || !canMakeFixture())(
       expect(await startMcpServer()).toBe(true);
       expect(await isPortOpen(mcpPort())).toBe(true);
 
-      // The pid and session id are what `stopMcpServer` names instead of
-      // hunting for whatever holds the port, so a fork that recorded neither
-      // is a fork GemDB cannot stop cleanly.
+      // The pid and serial are what `stopMcpServer` names instead of hunting
+      // for whatever holds the port, so a fork that recorded neither is a fork
+      // GemDB cannot stop cleanly. The serial is read, not reported, so check
+      // it is the router's: the session it names is the recorded id.
       const state = readRouterState();
       expect(state?.port).toBe(mcpPort());
       expect(state?.pid).toBeGreaterThan(0);
       expect(state?.sessionId).toBeGreaterThan(0);
+      expect(state?.serial).toBeGreaterThan(0);
+      expect(
+        execute(`((System descriptionOfSessionSerialNum: ${state?.serial}) at: 10) printString`),
+      ).toBe(String(state?.sessionId));
 
       // And GemDB knows it is its own, which is what keeps it from killing a
       // stranger's process on the way down.
@@ -377,6 +383,49 @@ describe.skipIf(!havePayload || !haveExtent || !canMakeFixture())(
     // this session because: 'This UserProfile is read-only and may not
     // commit.'" Both halves matter — the identity is what GemDB configures,
     // and the refusal is what it is FOR.
+    // A record outlives a router that went some other way, and the stone
+    // gives its session id to the next login. This test's own session stands
+    // in for that newcomer: the record names it, and the stop must leave it
+    // alone and end the router by signal instead. Once with a serial, and once
+    // as a record from before GemDB kept one, which is looked up by id.
+    it.each([
+      ['as the router left it', true],
+      ['as a GemDB from before serials left it', false],
+    ])(
+      'leaves alone a session that has taken the router’s place, with the record %s',
+      async (_how, withSerial) => {
+        expect(await startMcpServer()).toBe(true);
+        const state = readRouterState()!;
+        const gems = routerGems(routerPid());
+        expect(gems).toHaveLength(1); // the router, with no client yet
+
+        const mine = Number(execute('System session printString'));
+        const mySerial = Number(
+          execute('((System descriptionOfSession: System session) at: 9) printString'),
+        );
+        fs.writeFileSync(
+          mcpRouterStatePath(),
+          JSON.stringify({
+            ...state,
+            sessionId: mine,
+            serial: withSerial ? mySerial : undefined,
+          }),
+        );
+
+        await stopMcpServer();
+        expect(await isPortOpen(mcpPort())).toBe(false);
+        expect(readRouterState()).toBeUndefined();
+        expect(await waitUntilGone(gems)).toEqual([]);
+        // Still logged in, and still the same session: had the stop sent it
+        // stopSession:, the next execute would have failed or logged in anew.
+        expect(execute('System session printString')).toBe(String(mine));
+        expect(execute('((System descriptionOfSession: System session) at: 9) printString')).toBe(
+          String(mySerial),
+        );
+      },
+      180_000,
+    );
+
     it('runs agent sessions as a user that cannot commit when read-only is on', async () => {
       __setSetting('gemdb.mcp.readOnly', true);
       try {

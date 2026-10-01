@@ -250,14 +250,43 @@ same way for a serial that has logged out. It does not answer nil;
 21 still named the router, too: the test found two gems with one client
 connected and three with two.
 
-The stop itself is `System stopSession:` on the recorded session id from a
-*linked* topaz login — clean, needs no NetLDI (already down by then in
-`runStop`'s ordering) and no `lsof`. A signal to the recorded host pid is the
-fallback if the port is still open, guarded by a `ps comm` check so a recycled
-pid belonging to something else is left alone. GemDB records both the pid and
-the session id at fork time in `<rootPath>/mcp-router.json`, which is *outside*
-`mcp/` because staging replaces that directory wholesale and a running router
-must survive an update.
+The stop itself is `System stopSession:` from a *linked* topaz login — clean,
+needs no NetLDI (already down by then in `runStop`'s ordering) and no `lsof`.
+A signal to the recorded host pid is the fallback if the port is still open,
+guarded by a `ps comm` check so a recycled pid belonging to something else is
+left alone. GemDB records the pid, the session id and the session serial at
+fork time in `<rootPath>/mcp-router.json`, which is *outside* `mcp/` because
+staging replaces that directory wholesale and a running router must survive an
+update.
+
+The clean stop finds the router by **serial**, and stops it only if slot 2
+still names the recorded pid. It used to send `System stopSession:` the
+recorded id, which is right only while the router holds that id. Once the
+router has gone some other way (a crash, a force-stopped stone, a kill from a
+shell), the record outlives it, and the stone hands a freed id to the next
+login. The next "Stop GemDB" would then have stopped that session, most likely
+a notebook's. `forkOnPort:` reports the id and the pid but not the serial, so
+the start script reads slot 9 for the id it reported, in the same topaz run,
+while the child is certainly logged in.
+
+Two cases have no serial, and both fall back to looking the session up by id
+under the same pid check: a record written by a GemDB from before the serial
+was kept (a running router outlives an extension update), and an account
+without SessionAccess, for which `descriptionOfSession:` raises for any
+session but its own (the pid is missing in that case too, and `listeningPid`
+supplies it). The check stops nothing it cannot identify. Where it declines,
+the signal does the stopping.
+
+There is no public stop by serial. `System stopSession:` converts the id to a
+serial with `GsSession serialOfSession:` at the moment of the call and hands
+it to the private `_stopSession:kind:timeout:`. `GsSession
+sessionWithSerialNumber:` and its `stop` are public, but they answer nil for a
+session whose UserProfile slot is nil, which the comments say includes a
+session "in login or processing". The router never stops processing, so
+relying on them would mean measuring what that phrase covers first; this
+route did not need it. The check reads the current id from the serial and
+sends that to `stopSession:`, microseconds apart in one topaz `run`, which
+leaves no realistic time for the id to change hands.
 
 One caller skips the clean stop and goes straight to the signal:
 `stopMcpServer({ bySession: false })`, when a `gemdb.externalDatabase.*`
