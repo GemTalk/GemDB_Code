@@ -102,7 +102,7 @@ export class GemDbNotebookController {
    * runs one evaluation at a time, so there is no concurrency to be had — and
    * running them in order is what makes a notebook reproducible anyway. VS
    * Code does not wait for one run request before sending the next (Run on
-   * another cell while one is paused at breakpoint()), so each notebook's
+   * another cell while one is paused in the debugger), so each notebook's
    * requests queue behind each other, as Jupyter's do.
    *
    * A cell whose code fails does not stop the ones after it. A cell the *user*
@@ -155,7 +155,7 @@ export class GemDbNotebookController {
     execution.executionOrder = ++this.executionOrder;
     execution.start(Date.now());
     // The previous run's output goes now, not when this run first prints: a
-    // cell paused at breakpoint() has printed nothing yet, and leaving the
+    // cell paused in the debugger has printed nothing yet, and leaving the
     // last run's error under it reads as this run's.
     execution.replaceOutput([]);
 

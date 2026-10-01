@@ -214,24 +214,27 @@ sys.modules["__main__"]') @env1:__dict__]
  * Answers `pythonStackQuery`'s records, each with one more field — the
  * registry position of that frame's locals, or 0 — and then a final record
  * with the globals' position. One walk, so a frame and its locals cannot be
- * mismatched.
+ * mismatched. `atStepPoint` is for a stop at a red dot (see `pythonStackQuery`).
  */
 export function pausedStackQuery(
   processOop: bigint,
   scopeKey: string | MainModule | undefined,
+  atStepPoint = false,
 ): string {
-  return pythonStackQuery(processOop, {
-    temps: 'reg scopes scope',
-    setup: `reg := OrderedCollection new.
+  return pythonStackQuery(
+    processOop,
+    {
+      temps: 'reg scopes scope',
+      setup: `reg := OrderedCollection new.
 SessionTemps current at: #'${REGISTRY}' put: reg.`,
-    perFrame: `out nextPut: field.
+      perFrame: `out nextPut: field.
     [| locals |
       locals := [PyFrame ___pyLocalsFromFrameContentsList___: (p at: 5)]
         on: Error do: [:e | e return: nil].
       (locals notNil and: [locals size > 0])
         ifTrue: [reg add: { #gemdbScope. locals }. out print: reg size]
         ifFalse: [out nextPutAll: '0']] value.`,
-    after: `scope := nil.
+      after: `scope := nil.
 ${
   scopeKey === undefined
     ? ''
@@ -244,7 +247,9 @@ scopes notNil ifTrue: [scope := scopes at: '${escapeString(scopeKey)}' ifAbsent:
   ifTrue: [reg add: { #gemdbScope. scope }. out print: reg size]
   ifFalse: [out nextPutAll: '0'].
 out nextPut: record.`,
-  });
+    },
+    atStepPoint,
+  );
 }
 
 /** Parse `pausedStackQuery`'s answer: the frames, each with its locals ref, and the globals ref. */

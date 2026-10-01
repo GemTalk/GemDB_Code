@@ -10,6 +10,7 @@ import {
   sessionFor,
   sessionForIfOpen,
 } from './session';
+import { escapeString } from './smalltalkText';
 
 /**
  * Running Python inside the database.
@@ -25,10 +26,8 @@ import {
  * so what a value looks like here is what it looks like there and in CPython.
  */
 
-/** Escape a string for inclusion in a Smalltalk string literal. */
-export function escapeString(value: string): string {
-  return value.replace(/'/g, "''");
-}
+/** Re-exported for the query builders that have always imported it from here. */
+export { escapeString };
 
 const GRAIL_MISSING =
   'Python support is not installed in this database. ' +
@@ -147,6 +146,7 @@ export async function runPythonOnce(source: string, onOutput?: OutputSink): Prom
         onOutput !== undefined,
       ),
       onOutput,
+      { redDots: true },
     ),
   );
 }
@@ -169,6 +169,7 @@ export async function runPythonInSession(
     session.executeAsync(
       buildQuery(evaluateInScope(scopeId), source, onOutput !== undefined),
       onOutput,
+      { redDots: true },
     ),
   );
 }
@@ -195,6 +196,7 @@ export async function runPythonFile(
         onOutput !== undefined,
       ),
       onOutput,
+      { redDots: true },
     ),
   );
 }
