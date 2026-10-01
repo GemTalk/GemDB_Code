@@ -53,8 +53,7 @@ Python kernel is built into the extension, so you do not need the Jupyter extens
 Python install.
 
 Click **New GemDB Notebook** (the notebook icon) at the top of the GemDB Code sidebar to open a
-notebook with a starter cell, ready to run. If VS Code prompts you to pick a kernel, choose **GemDB
-(Python in the database)**.
+notebook with a starter cell, ready to run.
 
 ```python
 # Python here runs inside your GemDB database.
@@ -244,11 +243,12 @@ only the first time you install GemDB Code. To open it again:
 
 ### The GemDB Code sidebar
 
-Click the **GemDB Code** icon in the activity bar to open the sidebar. Its rows show whether the
-database is **Running** or **Stopped**, the database engine version, the database, Python support,
-AI agent access, and shared memory. On Linux, a **Survives logout** row appears when `RemoveIPC=no`
-is not set. Click it to set it. Once a notebook in this window has started a session by running a
-cell, a **Sessions** row also appears; if you do not see it, click **Refresh** (↻). See
+Click the **GemDB Code** icon in the Activity Bar, on the far left of VS Code. The Primary Side Bar
+then shows the **GemDB** view, which this page calls the GemDB Code sidebar. Its rows show whether
+the database is **Running** or **Stopped**, the database engine version, the database, Python
+support, AI agent access, and shared memory. On Linux, a **Survives logout** row appears when
+`RemoveIPC=no` is not set. Click it to set it. Once a notebook in this window has started a session
+by running a cell, a **Sessions** row also appears; if you do not see it, click **Refresh** (↻). See
 [Sessions](#sessions).
 
 The buttons along the top of the sidebar are:
@@ -383,8 +383,9 @@ right of the editor, or **GemDB: Run Python File in GemDB** in the Command Palet
 
 ### Notebooks
 
-GemDB Notebooks are ordinary `.ipynb` files. To run one, select the kernel **GemDB (Python in the
-database)**.
+GemDB Notebooks are ordinary `.ipynb` files. A notebook you create with **New GemDB Notebook** uses
+the **GemDB (Python in the database)** kernel automatically. To run another `.ipynb` file in the
+database, select that kernel from the kernel picker at the top right.
 
 - Variables are shared between the cells of a notebook. Running **GemDB: Clear Notebook Variables**
   from the Command Palette clears them without restarting the database. Uncommitted changes stay in
@@ -616,7 +617,7 @@ databases remain separately maintained and controlled.
 Removing the extension from VS Code does not remove the database or anything under `~/GemDB`, and
 the database keeps running after VS Code closes. Uninstall in this order:
 
-1. **Open the GemDB Code sidebar.** Click the **GemDB Code** icon in the activity bar, on the far
+1. **Open the GemDB Code sidebar.** Click the **GemDB Code** icon in the Activity Bar, on the far
    left of VS Code.
 2. **Stop the database.** If the top row of the sidebar says **Running**, click **Stop GemDB** (■)
    at the top of the sidebar. Wait until the row says **Stopped**. GemDB Code will not remove its
@@ -630,7 +631,7 @@ the database keeps running after VS Code closes. Uninstall in this order:
    - **Cancel** closes the dialog.
 4. **Uninstall the extension.** Open the Extensions view, select **GemDB Code**, and click
    **Uninstall**. Then restart VS Code to finish removing it, as with any extension. After the
-   restart, the **GemDB Code** icon is gone from the activity bar and `gemdb` is no longer on the
+   restart, the **GemDB Code** icon is gone from the Activity Bar and `gemdb` is no longer on the
    PATH of VS Code's terminals.
 5. **Delete `~/GemDB`** to remove what is left: the `gemdb` command, logs and bookkeeping files, the
    Brain Freeze demo and any commits you made in it, and your database if you kept it. The engine's
