@@ -41,7 +41,7 @@ import {
   osConfigAllowsStart,
 } from './osConfig';
 import { diskSnapshot } from './paths';
-import { isSupportedPlatform, setContext } from './platform';
+import { isSupportedPlatform, setContext, setupFootprint } from './platform';
 import { isRunning, isRunningAsync } from './processes';
 import { renameOwner } from './pythonQueries';
 import { openRepl, runFile } from './repl';
@@ -421,8 +421,9 @@ async function prepareOnFirstRun(extensionPath: string, refresh: () => void): Pr
         ranSetup: false,
       };
     }
+    const { download, disk } = setupFootprint();
     log(
-      'First run: preparing GemDB. This downloads about 145 MB on macOS or 450 MB on Linux, and uses about 1.3 GB of disk.',
+      `First run: preparing GemDB. This downloads about ${download} and uses about ${disk} of disk.`,
     );
 
     // The download and the permission prompt run side by side, deliberately.

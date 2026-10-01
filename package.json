@@ -151,13 +151,23 @@
     "viewsWelcome": [
       {
         "view": "gemdbStatus",
-        "contents": "GemDB isn't set up yet.\n\nSetup downloads the database engine and creates your database. It picks up where it left off, so a cancelled download costs you nothing.\n[Set Up GemDB](command:gemdb.install)\n\nAbout 145 MB to download on macOS, about 450 MB on Linux, and about 1.3 GB on disk.",
-        "when": "gemdb.state == notInstalled && !gemdb.externalDatabase"
+        "contents": "GemDB isn't set up yet.\n\nSetup downloads the database engine and creates your database. It picks up where it left off, so a cancelled download costs you nothing.\n[Set Up GemDB](command:gemdb.install)\n\nAbout 145 MB to download, 700 MB on disk.",
+        "when": "gemdb.state == notInstalled && !gemdb.externalDatabase && !gemdb.settingUp && isMac"
+      },
+      {
+        "view": "gemdbStatus",
+        "contents": "GemDB isn't set up yet.\n\nSetup downloads the database engine and creates your database. It picks up where it left off, so a cancelled download costs you nothing.\n[Set Up GemDB](command:gemdb.install)\n\nAbout 450 MB to download, 1.4 GB on disk.",
+        "when": "gemdb.state == notInstalled && !gemdb.externalDatabase && !gemdb.settingUp && isLinux"
+      },
+      {
+        "view": "gemdbStatus",
+        "contents": "GemDB is being set up.\n\nThe notification shows how far it has got, and this view changes when it finishes.\n[Show Log](command:gemdb.showLog)",
+        "when": "gemdb.state == notInstalled && gemdb.settingUp"
       },
       {
         "view": "gemdbStatus",
         "contents": "GemDB is set to use this machine's database, which its administrator runs.\n\nSetup installs Python support into your account. It downloads nothing.\n[Set Up GemDB](command:gemdb.install)",
-        "when": "gemdb.state == notInstalled && gemdb.externalDatabase"
+        "when": "gemdb.state == notInstalled && gemdb.externalDatabase && !gemdb.settingUp"
       },
       {
         "view": "gemdbStatus",

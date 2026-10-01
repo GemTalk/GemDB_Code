@@ -51,7 +51,8 @@ import {
   stopNetldi,
   stopStone,
 } from './processes';
-import { isSupportedPlatform } from './platform';
+import { isSupportedPlatform, setContext } from './platform';
+import { withSetupLockWhenFree } from './lock';
 import { logoutAll } from './session';
 import { allowAutoStart } from './autoStart';
 import { readUnattendedSetupMarker, writeUnattendedSetupMarker } from './unattendedSetupMarker';
@@ -190,8 +191,37 @@ function paused(): void {
  *
  * This is the setup body shared by `prepare()`, `install()` and
  * `ensureRunning()` — previously three copies of the same try/cancel/catch.
+ *
+ * At most one runs at a time on this machine. Two at once download into the
+ * same `.part` file — one writing from the start, the other appending to a
+ * resume — and both fail at the size check, the first on a file larger than
+ * the archive and the second on one the first has already discarded (#68).
+ * In this window, a second caller waits for the first and gets its outcome:
+ * pressing Set Up GemDB or running a cell while the first-run setup is
+ * downloading is the ordinary way to get here twice. In another window, the
+ * setup lock keeps it waiting until this one is done, and then it finds
+ * nothing left to do.
+ *
+ * `gemdb.settingUp` is true for as long as one runs, so the welcome view can
+ * say so instead of offering a Set Up GemDB button that would only join it.
  */
-export async function runSetup(extensionPath: string, trigger: Trigger): Promise<SetupOutcome> {
+export function runSetup(extensionPath: string, trigger: Trigger): Promise<SetupOutcome> {
+  if (setupInFlight) {
+    log('Setup is already under way; waiting for it to finish.');
+    return setupInFlight;
+  }
+  setContext('gemdb.settingUp', true);
+  const run = runSetupOnce(extensionPath, trigger).finally(() => {
+    setupInFlight = undefined;
+    setContext('gemdb.settingUp', false);
+  });
+  setupInFlight = run;
+  return run;
+}
+
+let setupInFlight: Promise<SetupOutcome> | undefined;
+
+async function runSetupOnce(extensionPath: string, trigger: Trigger): Promise<SetupOutcome> {
   reportSetupStarted(trigger);
   const stopwatch = Stopwatch.start();
   const outcome = await vscode.window.withProgress(
@@ -201,8 +231,33 @@ export async function runSetup(extensionPath: string, trigger: Trigger): Promise
       cancellable: true,
     },
     async (progress, token): Promise<SetupOutcome> => {
+      let waited = false;
       try {
-        if (!(await prepareFiles(extensionPath, progress, token))) {
+        const prepared = await withSetupLockWhenFree(
+          async () => {
+            if (waited && isInstalled()) {
+              log('Another window finished setting GemDB up.');
+              return true;
+            }
+            return prepareFiles(extensionPath, progress, token);
+          },
+          {
+            onWaiting: () => {
+              waited = true;
+              progress.report({
+                message: 'Waiting for another VS Code window to finish setting GemDB up…',
+              });
+            },
+            stopWaiting: () => token.isCancellationRequested,
+          },
+        );
+        // Nothing to pause: the other window's setup carries on, and its own
+        // notification is the one that says how it is going.
+        if (prepared === undefined) {
+          log('Stopped waiting for the other window, which carries on setting GemDB up.');
+          return SETUP_OUTCOME.cancelled;
+        }
+        if (!prepared) {
           paused();
           return SETUP_OUTCOME.cancelled;
         }

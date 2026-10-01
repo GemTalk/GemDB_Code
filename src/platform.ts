@@ -61,6 +61,21 @@ export function archiveExtension(): 'dmg' | 'zip' {
   return process.platform === 'darwin' ? 'dmg' : 'zip';
 }
 
+/**
+ * What setup costs on this platform, as told to the user before it starts.
+ *
+ * Measured for 4.0.0.a4: the macOS disk image is 143 MB and its engine 378 MB
+ * once copied out; the Linux zips are 424 MB (arm64) and 449 MB (x86-64) and
+ * unpack to about 1.07 GB. The database with Python filed in and the staged
+ * Python payload add about 330 MB either way. The figures move with the engine
+ * pin, and the welcome view in package.json and the walkthrough repeat them.
+ */
+export function setupFootprint(): { download: string; disk: string } {
+  return process.platform === 'darwin'
+    ? { download: '145 MB', disk: '700 MB' }
+    : { download: '450 MB', disk: '1.4 GB' };
+}
+
 /** Shared-library extension for this platform. */
 export function sharedLibraryExtension(): 'dylib' | 'so' {
   return process.platform === 'darwin' ? 'dylib' : 'so';

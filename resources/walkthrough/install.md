@@ -12,7 +12,8 @@ The first time GemDB Code activates, it:
 4. Starts the database and installs Python into it: Grail, GemTalk Systems' implementation of Python
    for GemDB. This takes a few minutes and shows its progress in a notification.
 
-When the setup finishes, GemDB Code uses about **1.3 GB on disk**.
+When the setup finishes, GemDB Code uses about **700 MB on disk** on macOS and about **1.4 GB** on
+Linux.
 
 ### Raise the shared-memory limit if needed
 
