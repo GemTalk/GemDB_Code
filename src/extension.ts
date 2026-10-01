@@ -496,19 +496,10 @@ async function prepareOnFirstRun(extensionPath: string, refresh: () => void): Pr
     // other runs a script under sudo — so there is no ordering between them to
     // get wrong. Neither rejects: both report failure by returning.
     //
-    // The files outcome goes into the marker however it ended — either way
-    // this machine has been offered setup, and a cancel is a decision to be
-    // respected — so a later skip can say which it was. It is written the
-    // moment that step ends, not once both have: the permission step can wait
-    // on a sudo terminal indefinitely, and a cancelled or failed download has
-    // already offered Resume by then. An explicit setup the user completes
-    // meanwhile — Resume, Start, a cell — must find the marker, or `runSetup`
-    // skips its `completed` write and a write here afterwards would put
-    // `cancelled` or `failed` back over a finished install (#53).
-    const files = prepare(extensionPath).then((outcome) => {
-      writeUnattendedSetupMarker(outcome);
-      return outcome;
-    });
+    // `prepare` records the files outcome in the marker however it ended,
+    // before returning it, and nothing here writes it afterwards; see
+    // `runSetupOnce`.
+    const files = prepare(extensionPath);
     //
     // An external database's machine is configured by whoever runs it, so, as
     // in `ensureRunning`, GemDB neither checks shared memory nor asks. Nor on

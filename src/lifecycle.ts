@@ -280,15 +280,27 @@ async function runSetupOnce(extensionPath: string, trigger: Trigger): Promise<Se
   );
   reportSetupFinished(trigger, outcome, stopwatch.elapsedMs());
 
-  // A completed setup replaces whatever the unattended setup marker says
-  // (`cancelled`, `failed`, `uninstalled`), so it stops describing a state
-  // that is no longer true (#53). Only when a marker exists: no marker means
-  // the unattended setup has not had its turn, and completing an explicit
-  // setup must not change that. Failed and cancelled runs write nothing;
-  // `setupFinished` records them. The write comes after `setupFinished`
-  // because it throws when the marker was never initialised, and that must not
-  // drop the event.
-  if (outcome === SETUP_OUTCOME.completed && readUnattendedSetupMarker() !== 'none') {
+  // The marker writes come after `setupFinished` because a write throws when
+  // the marker was never initialised, and that must not drop the event.
+  //
+  // The unattended setup records how it ended, however it ended: either way
+  // this machine has been offered setup, and a cancel is a decision to be
+  // respected, so a later skip can say which it was. It is written here,
+  // before the outcome reaches anyone, so a caller that joined this setup — a
+  // cell run or Start during the first-run download — never sees it over
+  // while the marker still says otherwise; and nothing writes it afterwards,
+  // so an explicit setup that completes later is never overwritten by a stale
+  // `cancelled` or `failed` (#53, #70).
+  //
+  // A completed explicit setup replaces whatever the marker says (`cancelled`,
+  // `failed`, `uninstalled`), so it stops describing a state that is no longer
+  // true (#53). Only when a marker exists: no marker means the unattended
+  // setup has not had its turn, and completing an explicit setup must not
+  // change that. Failed and cancelled explicit runs write nothing;
+  // `setupFinished` records them.
+  if (trigger === TRIGGER.firstRun) {
+    writeUnattendedSetupMarker(outcome);
+  } else if (outcome === SETUP_OUTCOME.completed && readUnattendedSetupMarker() !== 'none') {
     writeUnattendedSetupMarker(SETUP_OUTCOME.completed);
   }
   return outcome;
@@ -339,13 +351,17 @@ export async function install(extensionPath: string): Promise<void> {
 /**
  * The unattended preparation run when the extension first activates.
  *
- * Does the inert work and stops. Returns how it ended, which the caller
- * records so it is never retried unasked — a cancel here is a decision, not a
- * hiccup, and the partly-downloaded archive is kept so that choosing to
- * continue later costs only the remaining bytes.
+ * Does the inert work and stops. Returns how it ended, and records that in the
+ * unattended setup marker — in `runSetupOnce`, or here for the one way it can
+ * fail without running — so it is never retried unasked. A cancel here is a
+ * decision, not a hiccup, and the partly-downloaded archive is kept so that
+ * choosing to continue later costs only the remaining bytes.
  */
 export async function prepare(extensionPath: string): Promise<SetupOutcome> {
-  if (!isSupportedPlatform() || !bundledGrailStamp(extensionPath)) return SETUP_OUTCOME.failed;
+  if (!isSupportedPlatform() || !bundledGrailStamp(extensionPath)) {
+    writeUnattendedSetupMarker(SETUP_OUTCOME.failed);
+    return SETUP_OUTCOME.failed;
+  }
 
   const outcome = await runSetup(extensionPath, TRIGGER.firstRun);
   if (outcome === SETUP_OUTCOME.completed) log('GemDB is ready to start.');

@@ -185,6 +185,36 @@ describe('runSetup', () => {
     expect(eventsNamed('setupStarted')).toHaveLength(1);
   });
 
+  // #70: the first run's marker is what stops a later activation from setting
+  // up again unasked, and what a stale `cancelled` or `failed` written after a
+  // working install would get wrong (#53). A caller that joined the first run
+  // must find it already written, whichever way the setup ended.
+  it.each([
+    ['completed', () => Promise.resolve('/engine')],
+    ['cancelled', () => Promise.reject(new Error('Download cancelled'))],
+  ])(
+    'hands a joining caller the outcome only once the first run has recorded it %s',
+    async (expected, endDownload) => {
+      let finishDownload: () => void = () => {};
+      installEngine.mockImplementation(
+        () =>
+          new Promise<string>((resolve, reject) => {
+            finishDownload = () => endDownload().then(resolve, reject);
+          }),
+      );
+
+      const first = runSetup('/ext', TRIGGER.firstRun);
+      const joined = runSetup('/ext', TRIGGER.notebook).then((outcome) => ({
+        outcome,
+        marker: readUnattendedSetupMarker(),
+      }));
+      finishDownload();
+
+      expect(await joined).toEqual({ outcome: expected, marker: expected });
+      expect(await first).toBe(expected);
+    },
+  );
+
   it('runs again once the setup under way has finished', async () => {
     installEngine.mockRejectedValueOnce(new Error('ECONNRESET'));
 
@@ -317,6 +347,18 @@ describe('runSetup', () => {
   });
 
   describe('the unattended setup marker', () => {
+    it.each([
+      ['completed', () => Promise.resolve('/engine')],
+      ['cancelled', () => Promise.reject(new Error('Download cancelled'))],
+      ['failed', () => Promise.reject(new Error('ECONNRESET'))],
+    ])('records the first-run setup ending %s', async (expected, download) => {
+      installEngine.mockImplementation(download);
+
+      await runSetup('/ext', TRIGGER.firstRun);
+
+      expect(readUnattendedSetupMarker()).toBe(expected);
+    });
+
     it('is replaced by a completed run', async () => {
       writeUnattendedSetupMarker('cancelled');
 

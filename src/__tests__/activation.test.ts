@@ -97,6 +97,7 @@ const { activate } = await import('../extension');
 // over the marker when an explicit setup completes.
 const { runSetup } = await vi.importActual<typeof import('../lifecycle')>('../lifecycle');
 const { TRIGGER } = await import('../telemetry');
+const { writeUnattendedSetupMarker } = await import('../unattendedSetupMarker');
 
 describe('activate()', () => {
   let originalPlatform: PropertyDescriptor | undefined;
@@ -313,10 +314,15 @@ describe('activate()', () => {
 
   describe('the first run marker', () => {
     it.each(['cancelled', 'failed'])(
-      'is written when the files step ends %s, so a setup completed while the OS step waits is kept',
+      'is not written over once the files step ends %s, so a setup completed while the OS step waits is kept',
       async (filesOutcome) => {
         isInstalled.mockReturnValue(false);
-        prepare.mockResolvedValue(filesOutcome);
+        // As the real `prepare` does, through `runSetup`: records the outcome
+        // before returning it.
+        prepare.mockImplementation(async () => {
+          writeUnattendedSetupMarker(filesOutcome as 'cancelled' | 'failed');
+          return filesOutcome;
+        });
         // The OS step waiting on a sudo terminal the user has not finished with.
         let releaseOs: (result: string) => void = () => {};
         ensureOsConfigured.mockReturnValue(
