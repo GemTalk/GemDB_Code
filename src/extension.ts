@@ -76,6 +76,12 @@ export function activate(context: vscode.ExtensionContext): void {
   initPendingReadme(context.globalStorageUri.fsPath);
   void showPromisedReadme();
 
+  // The walkthrough chooses its setup and stopping steps on this key, and it
+  // can open before the sidebar has ever rendered — which is the only other
+  // place the key is set. Unset reads as false, so without this an external
+  // database would be walked through downloading an engine it never fetches.
+  setContext('gemdb.externalDatabase', isExternalDatabase());
+
   const statusBar = new GemDbStatusBar();
   const status = new StatusViewProvider(extensionPath, () => statusBar.refresh());
   context.subscriptions.push(
@@ -289,6 +295,11 @@ export function activate(context: vscode.ExtensionContext): void {
         logoutAll();
         // And the `gemdb` on the PATH of new terminals is the old root's.
         if (isSupportedPlatform()) putCliOnPath(context.environmentVariableCollection);
+        status.refresh();
+      }
+
+      if (event.affectsConfiguration('gemdb.externalDatabase')) {
+        setContext('gemdb.externalDatabase', isExternalDatabase());
         status.refresh();
       }
 

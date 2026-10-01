@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of installing its own: it installs Python support into your account and runs the MCP
   server, and never downloads, creates, starts, stops or removes the database. The stone, NetLDI
   and account are settings, and the password is read from a file, so it never appears in
-  `settings.json`. See [docs/external-database.md](docs/external-database.md).
+  `settings.json`. The Get Started walkthrough describes that setup instead of a download, and
+  leaves out stopping the database (#79). See [docs/external-database.md](docs/external-database.md).
 
 ### Fixed
 
