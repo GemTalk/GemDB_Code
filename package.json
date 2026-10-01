@@ -84,6 +84,42 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "Run AI agents as a database user that cannot commit, so an agent can read and run code but nothing it does can be made permanent. Off by default: running Python in your database is most of why you would connect an agent to it. Enforced by GemStone rather than by hiding tools — the first time you turn this on, GemDB creates an `McpReadOnly` user in your database whose profile disables commits. It bounds what an agent can CHANGE, not what it can read or how much of the machine it can use. Changing this restarts the MCP server, which disconnects any connected agent."
+        },
+        "gemdb.externalDatabase.gemstone": {
+          "scope": "machine",
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Advanced: use a database that someone else installed and runs — a hosted or shared machine — instead of one GemDB Code installs. Set to that engine's product directory (its `GEMSTONE`). GemDB Code then downloads nothing, creates no database, and never starts, stops or removes the database: it only installs Python support into your account and connects. Leave empty for a database GemDB Code manages. The other `gemdb.externalDatabase.*` settings apply only when this is set."
+        },
+        "gemdb.externalDatabase.globalDirectory": {
+          "scope": "machine",
+          "type": "string",
+          "default": "/opt/gemstone",
+          "markdownDescription": "The external database's global directory (its `GEMSTONE_GLOBAL_DIR`), which holds the engine's `locks` directory. GemDB Code reads it to find the stone and NetLDI."
+        },
+        "gemdb.externalDatabase.stone": {
+          "scope": "machine",
+          "type": "string",
+          "default": "gs64stone",
+          "markdownDescription": "Name of the external database's stone."
+        },
+        "gemdb.externalDatabase.netldi": {
+          "scope": "machine",
+          "type": "string",
+          "default": "gs64ldi",
+          "markdownDescription": "Name of the external database's NetLDI. It must run in guest mode (`startnetldi -g`), as your operating-system account, so sessions need no host password — and with Python's variables (`GRAIL_DIR`, `PYTHON_PACKAGE_PATH`, `SHIM_LIB_PATH`) set to your GemDB Code root path's `grail` directory, because sessions inherit its environment."
+        },
+        "gemdb.externalDatabase.user": {
+          "scope": "machine",
+          "type": "string",
+          "default": "DataCurator",
+          "markdownDescription": "Database account GemDB Code logs in as on the external database. Python support is installed into this account."
+        },
+        "gemdb.externalDatabase.passwordFile": {
+          "scope": "machine",
+          "type": "string",
+          "default": "",
+          "markdownDescription": "File whose first line is the password for `gemdb.externalDatabase.user`, readable only by your operating-system account. A file rather than a setting, so the password never appears in `settings.json`. Leave empty for the stock password."
         }
       }
     },
@@ -116,7 +152,12 @@
       {
         "view": "gemdbStatus",
         "contents": "GemDB isn't set up yet.\n\nSetup downloads the database engine and creates your database. It picks up where it left off, so a cancelled download costs you nothing.\n[Set Up GemDB](command:gemdb.install)\n\nAbout 145 MB to download on macOS, about 450 MB on Linux, and about 1.3 GB on disk.",
-        "when": "gemdb.state == notInstalled"
+        "when": "gemdb.state == notInstalled && !gemdb.externalDatabase"
+      },
+      {
+        "view": "gemdbStatus",
+        "contents": "GemDB is set to use this machine's database, which its administrator runs.\n\nSetup installs Python support into your account. It downloads nothing.\n[Set Up GemDB](command:gemdb.install)",
+        "when": "gemdb.state == notInstalled && gemdb.externalDatabase"
       },
       {
         "view": "gemdbStatus",
@@ -228,12 +269,12 @@
       "view/title": [
         {
           "command": "gemdb.start",
-          "when": "view == gemdbStatus && gemdb.state == stopped",
+          "when": "view == gemdbStatus && gemdb.state == stopped && !gemdb.externalDatabase",
           "group": "navigation@1"
         },
         {
           "command": "gemdb.stop",
-          "when": "view == gemdbStatus && gemdb.state == running",
+          "when": "view == gemdbStatus && gemdb.state == running && !gemdb.externalDatabase",
           "group": "navigation@1"
         },
         {
@@ -273,7 +314,7 @@
         },
         {
           "command": "gemdb.uninstall",
-          "when": "view == gemdbStatus && gemdb.installed",
+          "when": "view == gemdbStatus && gemdb.installed && !gemdb.externalDatabase",
           "group": "9_danger@1"
         },
         {

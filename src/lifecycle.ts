@@ -1,6 +1,13 @@
 import * as fs from 'fs';
 import * as vscode from 'vscode';
-import { engineVersion, mcpEnabled, reinstallPythonOnUpdate, rootPath } from './config';
+import {
+  engineVersion,
+  externalDatabase,
+  isExternalDatabase,
+  mcpEnabled,
+  reinstallPythonOnUpdate,
+  rootPath,
+} from './config';
 import { writeCliScripts } from './cli';
 import {
   assertDatabaseMatchesEngine,
@@ -33,6 +40,7 @@ import {
   mcpPath,
 } from './paths';
 import {
+  ExternalDatabaseError,
   findNetldi,
   findStone,
   isListening,
@@ -46,6 +54,7 @@ import {
 import { isSupportedPlatform } from './platform';
 import { logoutAll } from './session';
 import { allowAutoStart } from './autoStart';
+import { readUnattendedSetupMarker, writeUnattendedSetupMarker } from './unattendedSetupMarker';
 import {
   DATABASE_OUTCOME,
   DatabaseOutcome,
@@ -78,9 +87,14 @@ function requireSupportedPlatform(): boolean {
  * in needs a running database, and starting one is the step GemDB will not take
  * without the user asking — so "the files are ready" and "Python works" are
  * genuinely different states. The gap is closed on first use, by `ensureRunning`.
+ *
+ * An external database is not on disk for GemDB to find — its extent is the
+ * administrator's, wherever they keep it — so for one, the engine and staged
+ * Grail are the whole of it.
  */
 export function isInstalled(): boolean {
-  return enginePath() !== undefined && databaseExists() && grailStagedOnDisk();
+  if (enginePath() === undefined || !grailStagedOnDisk()) return false;
+  return isExternalDatabase() || databaseExists();
 }
 
 /**
@@ -93,14 +107,35 @@ export function isInstalled(): boolean {
  *
  * Every step is skipped if already done, so a cancelled run resumes rather than
  * starting over.
+ *
+ * Returns false when a cancel was noticed once the engine step returned,
+ * whether or not the steps after it had anything left to do. That is the only
+ * point a cancel can be seen: nothing after it yields, so a Cancel pressed while
+ * the database is created or Grail staged is not delivered until the setup has
+ * already finished, and the setup ends completed.
  */
 async function prepareFiles(
   extensionPath: string,
   progress: Progress,
   token: vscode.CancellationToken,
-): Promise<void> {
+): Promise<boolean> {
+  // An external database's engine and extent already exist and are not
+  // GemDB's to download, check or create; staging Grail is all that is left.
+  // Nothing on this path yields, so there is no cancel to notice.
+  const external = externalDatabase();
+  if (external) {
+    if (!enginePath()) {
+      throw new Error(
+        `No database engine at ${external.gemstone}. Check gemdb.externalDatabase.gemstone.`,
+      );
+    }
+    progress.report({ message: 'Preparing Python support…' });
+    stageGrail(extensionPath);
+    return true;
+  }
+
   const engine = await installEngine(progress, token);
-  if (token.isCancellationRequested) return;
+  if (token.isCancellationRequested) return false;
 
   // Before anything is created or copied: a database an older engine wrote
   // cannot be used by this one, and the engine will not say so until a login
@@ -112,6 +147,7 @@ async function prepareFiles(
 
   progress.report({ message: 'Preparing Python support…' });
   stageGrail(extensionPath);
+  return true;
 }
 
 /** Guard against a build that forgot to run `npm run bundle:grail`. */
@@ -133,7 +169,7 @@ function requireGrailPayload(extensionPath: string): boolean {
  * dismisses the progress notification, and without something in its place
  * GemDB simply goes quiet — from the outside, indistinguishable from having
  * given up. Shown once, at the moment of the decision, which keeps it
- * consistent with the setup-attempted marker: a cancel is answered, not
+ * consistent with the unattended setup marker: a cancel is answered, not
  * re-asked on every activation.
  */
 function paused(): void {
@@ -166,8 +202,7 @@ export async function runSetup(extensionPath: string, trigger: Trigger): Promise
     },
     async (progress, token): Promise<SetupOutcome> => {
       try {
-        await prepareFiles(extensionPath, progress, token);
-        if (token.isCancellationRequested) {
+        if (!(await prepareFiles(extensionPath, progress, token))) {
           paused();
           return SETUP_OUTCOME.cancelled;
         }
@@ -186,6 +221,18 @@ export async function runSetup(extensionPath: string, trigger: Trigger): Promise
     },
   );
   reportSetupFinished(trigger, outcome, stopwatch.elapsedMs());
+
+  // A completed setup replaces whatever the unattended setup marker says
+  // (`cancelled`, `failed`, `uninstalled`), so it stops describing a state
+  // that is no longer true (#53). Only when a marker exists: no marker means
+  // the unattended setup has not had its turn, and completing an explicit
+  // setup must not change that. Failed and cancelled runs write nothing;
+  // `setupFinished` records them. The write comes after `setupFinished`
+  // because it throws when the marker was never initialised, and that must not
+  // drop the event.
+  if (outcome === SETUP_OUTCOME.completed && readUnattendedSetupMarker() !== 'none') {
+    writeUnattendedSetupMarker(SETUP_OUTCOME.completed);
+  }
   return outcome;
 }
 
@@ -335,8 +382,12 @@ export async function ensureRunning(extensionPath: string, trigger: Trigger): Pr
   }
 
   // Declining and saying yes to a script that did not take are different
-  // answers, and `databaseStarted` has to keep them apart.
-  const osResult = await ensureOsConfigured(extensionPath, trigger);
+  // answers, and `databaseStarted` has to keep them apart. An external
+  // database's machine is configured by whoever runs it, so GemDB neither
+  // checks nor asks.
+  const osResult = isExternalDatabase()
+    ? OS_CONFIG_RESULT.alreadyConfigured
+    : await ensureOsConfigured(extensionPath, trigger);
   if (!osConfigAllowsStart(osResult)) {
     return failed(
       osResult === OS_CONFIG_RESULT.declined
@@ -457,6 +508,26 @@ export async function ensureMcpRunning(extensionPath: string): Promise<boolean> 
   return isMcpRunning();
 }
 
+/**
+ * Bring the MCP server back for a database that is already running.
+ *
+ * `ensureRunning` starts the router with the database, but activation calls it
+ * only for a database that is down — and an external database is never down
+ * from here, any more than one another window started. The router does not
+ * survive the stone, so after a reboot it would stay away until the first line
+ * of Python, and a client configured with the bare URL (Claude Code, through
+ * `claude mcp add`) would find nothing listening. VS Code's own clients go
+ * through `ensureMcpRunning` and never see the difference.
+ *
+ * Starts only the router: the database is running, so nothing on the
+ * `ensureRunning` path is outstanding but this.
+ */
+export async function resumeMcpServing(extensionPath: string): Promise<boolean> {
+  if (!mcpEnabled() || !isInstalled() || !isRunning()) return false;
+  if (await isMcpRunning()) return true;
+  return ensureMcpServing(extensionPath);
+}
+
 /** Start whichever of the two processes is not already up. */
 async function startProcesses(
   progress?: vscode.Progress<{ message?: string }>,
@@ -464,6 +535,21 @@ async function startProcesses(
   const running = listProcesses();
   let startedStone = false;
   let startedNetldi = false;
+
+  // Nothing to start for an external database — only whether it is up, said
+  // in terms of what to do about it.
+  const external = externalDatabase();
+  if (external) {
+    if (!findStone(running) || !findNetldi(running)) {
+      throw new ExternalDatabaseError(
+        `The database is not running: GemDB expects stone ${external.stone} and NetLDI ` +
+          `${external.netldi}, which this machine's administrator runs. Ask them to start it.`,
+      );
+    }
+    log('The database is running.');
+    return { startedStone, startedNetldi };
+  }
+
   if (!findStone(running)) {
     // Checked here as well as in `prepareFiles`, because an extension update
     // reaches this line without going through preparation at all: the engine
@@ -574,6 +660,12 @@ export async function runStop(world: StopWorld): Promise<void> {
 
 /** Stop the database, overriding logged-in sessions only if the user says so. */
 export async function stop(): Promise<void> {
+  if (isExternalDatabase()) {
+    void vscode.window.showInformationMessage(
+      "This database is run by this machine's administrator, so GemDB does not stop it.",
+    );
+    return;
+  }
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: 'Stopping GemDB' },
     async () => {
@@ -661,6 +753,16 @@ export async function reinstallGrail(extensionPath: string): Promise<void> {
  * Resolves true once removal has begun, whether or not every step succeeded.
  */
 export async function uninstall(): Promise<boolean> {
+  // The engine and the database belong to the administrator. Removing only
+  // GemDB's staged copies would leave a database GemDB then reinstalls into on
+  // next use, so there is nothing useful to offer here.
+  if (isExternalDatabase()) {
+    void vscode.window.showInformationMessage(
+      "This database is run by this machine's administrator, so GemDB does not remove it. " +
+        'Clear gemdb.externalDatabase.gemstone to go back to a database GemDB manages.',
+    );
+    return false;
+  }
   const choice = await vscode.window.showWarningMessage(
     'Remove GemDB?',
     {

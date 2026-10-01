@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { __commands, __resetSettings, __setSetting, env } from '../__mocks__/vscode';
+import { engineDirName, extentPath } from '../paths';
 import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 
 // `activate()` is synchronous, but everything after its two exits — the
@@ -15,12 +16,14 @@ import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 // `__telemetry`.
 const isInstalled = vi.fn(() => true);
 const uninstall = vi.fn(async () => true);
+const prepare = vi.fn(async (): Promise<string> => 'failed');
 vi.mock('../lifecycle', () => ({
   isInstalled: () => isInstalled(),
   ensureMcpRunning: async () => false,
   ensureRunning: async () => false,
+  resumeMcpServing: async () => false,
   install: async () => {},
-  prepare: async () => 'failed',
+  prepare: () => prepare(),
   reinstallGrail: async () => {},
   start: async () => {},
   stop: async () => {},
@@ -38,17 +41,38 @@ vi.mock('../processes', () => ({
   isListening: () => true,
   listProcesses: () => [],
 }));
+const ensureOsConfigured = vi.fn(async (): Promise<string> => 'alreadyConfigured');
 vi.mock('../osConfig', async (importOriginal) => ({
   osConfigAllowsStart: (await importOriginal<typeof import('../osConfig')>()).osConfigAllowsStart,
   configureSharedMemory: async () => {},
   configureRemoveIpc: async () => {},
-  ensureOsConfigured: async () => 'alreadyConfigured',
+  ensureOsConfigured: () => ensureOsConfigured(),
   isSharedMemoryConfigured: async () => false,
   isRemoveIpcConfigured: () => false,
   sharedMemoryLabel: async () => '',
 }));
 
+// Only what the real `runSetup` touches, for the first run marker tests that
+// complete an explicit setup through it: no download, no database, no copy.
+vi.mock('../engine', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../engine')>()),
+  installEngine: async () => '/engine',
+}));
+vi.mock('../database', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../database')>()),
+  assertDatabaseMatchesEngine: () => {},
+  createDatabase: () => true,
+}));
+vi.mock('../grail', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../grail')>()),
+  stageGrail: () => {},
+}));
+
 const { activate } = await import('../extension');
+// The real one, past the `lifecycle` mock above: it is what writes `completed`
+// over the marker when an explicit setup completes.
+const { runSetup } = await vi.importActual<typeof import('../lifecycle')>('../lifecycle');
+const { TRIGGER } = await import('../telemetry');
 
 describe('activate()', () => {
   let originalPlatform: PropertyDescriptor | undefined;
@@ -63,6 +87,8 @@ describe('activate()', () => {
     originalArch = Object.getOwnPropertyDescriptor(process, 'arch');
     isInstalled.mockReset().mockReturnValue(true);
     uninstall.mockReset().mockResolvedValue(true);
+    prepare.mockReset().mockResolvedValue('failed');
+    ensureOsConfigured.mockReset().mockResolvedValue('alreadyConfigured');
     isRunning.mockReset().mockReturnValue(false);
     Object.defineProperty(process, 'platform', { value: 'darwin' });
     Object.defineProperty(process, 'arch', { value: 'arm64' });
@@ -150,6 +176,17 @@ describe('activate()', () => {
       }));
     }
 
+    // What `diskSnapshot` adds to a marker-based skip, as sent: strings, so
+    // the booleans arrive as 'true' and 'false'.
+    const DISK_PROPERTIES = ['databaseOnDisk', 'engineOnDisk', 'grailOnDisk'];
+    function diskSent(): Record<string, unknown>[] {
+      return eventsNamed('unattendedSetupSkipped').map((e) =>
+        Object.fromEntries(
+          Object.entries(e.properties).filter(([key]) => DISK_PROPERTIES.includes(key)),
+        ),
+      );
+    }
+
     it('stays silent on an installed machine, leaving that to activated', async () => {
       isInstalled.mockReturnValue(true);
       isRunning.mockReturnValue(false);
@@ -168,21 +205,7 @@ describe('activate()', () => {
       activate(fakeExtensionContext());
 
       expect(skipped()).toEqual([{ skipReason: 'remoteWindow' }]);
-    });
-
-    it.each([
-      ['cancelled', 'cancelledBefore'],
-      ['failed', 'failedBefore'],
-      ['completed', 'installedBefore'],
-      ['uninstalled', 'uninstalled'],
-    ])('reports %s recorded in the marker as %s', (recorded, skipReason) => {
-      isInstalled.mockReturnValue(false);
-      const context = fakeExtensionContext();
-      writeFileSync(join(context.globalStorageUri.fsPath, 'setup-attempted'), recorded);
-
-      activate(context);
-
-      expect(skipped()).toEqual([{ skipReason }]);
+      expect(diskSent()).toEqual([{}]);
     });
 
     it('reports a marker that records no outcome as attemptedBefore, and leaves it', async () => {
@@ -200,6 +223,30 @@ describe('activate()', () => {
       expect(readFileSync(marker, 'utf8')).toBe(legacy);
     });
 
+    it.each([
+      ['cancelled', 'cancelledBefore'],
+      ['failed', 'failedBefore'],
+      ['completed', 'installedBefore'],
+      ['uninstalled', 'uninstalled'],
+      [new Date().toISOString(), 'attemptedBefore'],
+    ])('reports %s recorded in the marker as %s, with what is on disk', (recorded, skipReason) => {
+      isInstalled.mockReturnValue(false);
+      const context = fakeExtensionContext();
+      writeFileSync(join(context.globalStorageUri.fsPath, 'setup-attempted'), recorded);
+      // A database and an engine this build does not pin, and no Grail: each
+      // property reads differently from an empty root path's.
+      mkdirSync(join(extentPath(), '..'), { recursive: true });
+      writeFileSync(extentPath(), '');
+      mkdirSync(join(rootPathValue, engineDirName('0.0.1')));
+
+      activate(context);
+
+      expect(skipped()).toEqual([{ skipReason }]);
+      expect(diskSent()).toEqual([
+        { databaseOnDisk: 'true', engineOnDisk: 'other', grailOnDisk: 'false' },
+      ]);
+    });
+
     it('reports lockHeld when another window already owns the setup lock', async () => {
       isInstalled.mockReturnValue(false);
       mkdirSync(join(rootPathValue, '.gemdb-locks'), { recursive: true });
@@ -212,6 +259,7 @@ describe('activate()', () => {
       activate(fakeExtensionContext());
 
       await expect.poll(skipped).toEqual([{ skipReason: 'lockHeld' }]);
+      expect(diskSent()).toEqual([{}]);
     });
 
     it('reports installedByOtherWindow when the lock re-check finds it already done', async () => {
@@ -227,10 +275,64 @@ describe('activate()', () => {
         .mockReturnValueOnce(false) // prepareOnFirstRun's outer check
         .mockReturnValue(true); // the re-check inside the lock
 
-      activate(fakeExtensionContext());
+      const context = fakeExtensionContext();
+
+      activate(context);
 
       await expect.poll(skipped).toEqual([{ skipReason: 'installedByOtherWindow' }]);
+      expect(diskSent()).toEqual([{}]);
+      // Recorded like any other first run, from the outcome it saw.
+      const marker = join(context.globalStorageUri.fsPath, 'setup-attempted');
+      expect(readFileSync(marker, 'utf8')).toBe('completed');
     });
+  });
+
+  describe('the first run marker', () => {
+    it.each(['cancelled', 'failed'])(
+      'is written when the files step ends %s, so a setup completed while the OS step waits is kept',
+      async (filesOutcome) => {
+        isInstalled.mockReturnValue(false);
+        prepare.mockResolvedValue(filesOutcome);
+        // The OS step waiting on a sudo terminal the user has not finished with.
+        let releaseOs: (result: string) => void = () => {};
+        ensureOsConfigured.mockReturnValue(
+          new Promise((resolve) => {
+            releaseOs = resolve;
+          }),
+        );
+        const context = fakeExtensionContext();
+        const marker = join(context.globalStorageUri.fsPath, 'setup-attempted');
+        const lock = join(rootPathValue, '.gemdb-setup.lock');
+
+        activate(context);
+        await expect.poll(() => prepare.mock.calls.length).toBe(1);
+        await new Promise((resolve) => setImmediate(resolve));
+
+        // Meanwhile the user presses Resume and that setup completes.
+        expect(await runSetup('/ext', TRIGGER.installCommand)).toBe('completed');
+
+        releaseOs('declined');
+        await expect.poll(() => existsSync(lock)).toBe(false);
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(readFileSync(marker, 'utf8')).toBe('completed');
+      },
+    );
+  });
+
+  // Its machine is configured by whoever runs it. A sudo prompt for shared
+  // memory on a machine GemDB does not run the database on is never right.
+  it('never asks about shared memory on first run for an external database', async () => {
+    __setSetting('gemdb.externalDatabase.gemstone', '/opt/gemstone/product');
+    isInstalled.mockReturnValue(false);
+    prepare.mockResolvedValue('completed');
+    const lock = join(rootPathValue, '.gemdb-setup.lock');
+
+    activate(fakeExtensionContext());
+    await expect.poll(() => prepare.mock.calls.length).toBe(1);
+    await expect.poll(() => existsSync(lock)).toBe(false);
+
+    expect(ensureOsConfigured).not.toHaveBeenCalled();
   });
 
   describe('gemdb.uninstall', () => {

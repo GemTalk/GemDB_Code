@@ -1,7 +1,7 @@
 import { LineEditor } from './lineEditor';
 import { log } from './log';
 import { PyResult, isErrorResult } from './pythonQueries';
-import { InputAnswer, SessionError } from './session';
+import { InputAnswer, LibraryLoadError, SessionError } from './session';
 
 /**
  * The GemDB Shell: the REPL loop between a terminal and a database session.
@@ -59,8 +59,11 @@ export interface ReplSession {
 export interface ReplWorld {
   /** Show the user some text. `\r\n` line endings — the terminal is raw. */
   write(text: string): void;
-  /** The user asked to leave (exit() or Ctrl+D): tear the host down. */
-  close(): void;
+  /**
+   * Tear the host down: the user asked to leave (exit() or Ctrl+D), or — with
+   * a non-zero code — the shell cannot run here at all.
+   */
+  close(code?: number): void;
   /** Bring the database up, or explain why not; false suppresses the retry. */
   ensureRunning(): Promise<boolean>;
   /** Log a fresh session in; throws a `SessionError` saying why it cannot. */
@@ -89,7 +92,7 @@ export class PyRepl {
     } catch (e) {
       // The prompt appears even though the login failed, so the message has
       // somewhere to be read; the next Enter retries via ensureSession.
-      this.world.write(`${message(e)}\r\n`);
+      if (this.loginFailed(e)) return;
     }
     this.world.write(this.editor.beginLine());
   }
@@ -137,6 +140,8 @@ export class PyRepl {
             this.world.write(event.text);
             break;
           case 'submit':
+            // The rest of a paste waits its turn, ahead of anything typed later.
+            this.typeahead = event.rest + this.typeahead;
             this.finishRead({ line: event.line });
             return;
           case 'interrupt':
@@ -171,6 +176,7 @@ export class PyRepl {
           this.world.write(event.text);
           break;
         case 'submit':
+          this.typeahead = event.rest + this.typeahead;
           void this.onLine(event.line);
           return; // onLine repaints the prompt and replays type-ahead
         case 'interrupt':
@@ -255,9 +261,22 @@ export class PyRepl {
       this.session = this.world.login();
       return this.session;
     } catch (e) {
-      this.world.write(`${message(e)}\r\n`);
+      this.loginFailed(e);
       return undefined;
     }
+  }
+
+  /**
+   * Show why a login failed, and leave if no retry could succeed. The terminal
+   * keeps the message on screen: a shell that exits non-zero leaves its tab
+   * open with an exit notice. True when the shell is leaving.
+   */
+  private loginFailed(e: unknown): boolean {
+    this.world.write(`${message(e)}\r\n`);
+    if (!(e instanceof LibraryLoadError)) return false;
+    this.closed = true;
+    this.world.close(1);
+    return true;
   }
 
   private show(result: PyResult): void {

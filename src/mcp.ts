@@ -3,7 +3,7 @@ import * as net from 'net';
 import * as path from 'path';
 import { execFileSync, spawn } from 'child_process';
 import * as vscode from 'vscode';
-import { DB_PASSWORD, DB_USER, STONE_NAME, mcpPort, mcpReadOnly, rootPath } from './config';
+import { dbPassword, dbUser, mcpPort, mcpReadOnly, rootPath, stoneName } from './config';
 import { errorMessage, log, logStep } from './log';
 import { engineEnvironment } from './processes';
 import { grailPath, installedMcpStamp, mcpPath, mcpRouterStatePath, mcpStampPath } from './paths';
@@ -156,9 +156,9 @@ export function installMcp(
   const env = {
     ...process.env,
     ...engineEnvironment(),
-    GS_STONE: STONE_NAME,
-    GS_USER: DB_USER,
-    GS_PASS: DB_PASSWORD,
+    GS_STONE: stoneName(),
+    GS_USER: dbUser(),
+    GS_PASS: dbPassword(),
   };
 
   return new Promise((resolve, reject) => {
@@ -261,6 +261,26 @@ export function isPortOpen(port: number, timeoutMs = 250): Promise<boolean> {
   });
 }
 
+/**
+ * The pid of the process listening on 127.0.0.1:port, if `lsof` can say —
+ * the tool the payload's own stop-server.sh uses for the same question.
+ * Undefined when nothing listens, the listener is not ours to see, or there is
+ * no `lsof`; callers treat all three as "unknown".
+ */
+export function listeningPid(port: number): number | undefined {
+  try {
+    const out = execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const pid = Number(out.trim().split('\n')[0]);
+    return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+  } catch {
+    // lsof exits 1 when nothing matches, and is not on every machine.
+    return undefined;
+  }
+}
+
 /** True when a process with this pid exists and looks like a GemStone gem. */
 function looksLikeGem(pid: number): boolean {
   try {
@@ -356,9 +376,9 @@ function runTopaz(script: string, label: string): Promise<string> {
  */
 function topazLogin(): string {
   return [
-    `set gemstone !tcp@localhost#server!${STONE_NAME}`,
-    `set username ${DB_USER}`,
-    `set password ${DB_PASSWORD}`,
+    `set gemstone !tcp@localhost#server!${stoneName()}`,
+    `set username ${dbUser()}`,
+    `set password ${dbPassword()}`,
     'login',
     'iferr 1 stk',
   ].join('\n');
@@ -464,9 +484,9 @@ async function ensureReadOnlyUser(): Promise<boolean> {
       env: {
         ...process.env,
         ...engineEnvironment(),
-        GS_STONE: STONE_NAME,
-        GS_USER: DB_USER,
-        GS_PASS: DB_PASSWORD,
+        GS_STONE: stoneName(),
+        GS_USER: dbUser(),
+        GS_PASS: dbPassword(),
         MCP_RO_USER: READ_ONLY_USER,
       },
     });
@@ -570,7 +590,7 @@ export async function startMcpServer(): Promise<boolean> {
     `    at: 'grailDirectory' put: ${smalltalkString(grailPath())}; yourself);`,
     '  yourself).',
     ...(mcpReadOnly() ? [`r workerUserId: ${smalltalkString(READ_ONLY_USER)}.`] : []),
-    `r serverTitle: ${smalltalkString(`GemDB (${STONE_NAME})`)}.`,
+    `r serverTitle: ${smalltalkString(`GemDB (${stoneName()})`)}.`,
     `r forkOnPort: ${port}`,
     '%',
     'logout',
@@ -595,18 +615,31 @@ export async function startMcpServer(): Promise<boolean> {
     return false;
   }
 
-  writeRouterState({
+  const record: RouterState = {
     port,
     sessionId,
     pid: Number.isInteger(pid) ? pid : undefined,
     startedAt: new Date().toISOString(),
-  });
+  };
+  writeRouterState(record);
 
   // The fork returns as soon as the child is launched, so the listener may not
   // have bound yet. Wait for the port rather than reporting a server a client
   // would fail to reach a moment later.
   for (let attempt = 0; attempt < 20; attempt++) {
     if (await isPortOpen(port)) {
+      // `forkOnPort:` reads the pid from `System descriptionOfSession:`, which
+      // answers for another session only with the SessionAccess privilege. An
+      // ordinary account — what an external database gives a developer — gets
+      // nil, and a router recorded without a pid is indistinguishable from a
+      // stranger on the port: reported as "taken", and never stopped. The gem
+      // that has just bound the port is this one.
+      if (record.pid === undefined) {
+        const found = listeningPid(port);
+        if (found !== undefined && looksLikeGem(found)) {
+          writeRouterState({ ...record, pid: found });
+        }
+      }
       log(`The MCP server is listening on ${mcpUrl(port)}`);
       return true;
     }
