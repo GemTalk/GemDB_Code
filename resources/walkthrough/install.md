@@ -15,6 +15,14 @@ The first time GemDB Code activates, it:
 When the setup finishes, GemDB Code uses about **700 MB on disk** on macOS and about **1.4 GB** on
 Linux.
 
+### Where it goes
+
+GemDB Code keeps everything in one folder: `~/GemDB`, unless you set
+[`gemdb.rootPath`](command:workbench.action.openSettings?%22gemdb.rootPath%22) to another folder.
+The folder has to be on a local disk. The database engine can't open its files on an NFS mount,
+where many shared Linux machines keep home directories, so GemDB Code checks before it downloads
+anything. If the folder is on NFS, GemDB Code asks you to choose a local folder instead.
+
 ### Raise the shared-memory limit if needed
 
 The database keeps the objects it is working with in a cache in **shared memory**, so that every

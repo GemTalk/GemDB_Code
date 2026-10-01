@@ -123,7 +123,9 @@ for VSCodium and other compatible editors, from
   Linux, `sudo` is also needed for the optional `RemoveIPC=no` setting (see
   [Changes that need your permission](#changes-that-need-your-permission)).
 - Internet access to `dl.gemdb.com` for the one-time engine download.
-- About 2 GB of free disk space under `~/GemDB` during setup, plus room for your data.
+- About 2 GB of free disk space under `~/GemDB` during setup, plus room for your data, on a local
+  disk. If your home directory is on NFS, as it is on many shared Linux machines, see
+  [Where things live](#where-things-live).
 - At least 500 MB of free memory, and more as your data and the number of open notebooks grow.
 - On Linux, `unzip`. Most distributions include it; if yours does not, install it with your package
   manager (for example, `sudo apt install unzip`).
@@ -492,9 +494,16 @@ Everything GemDB Code creates is under one directory, `~/GemDB` by default (`gem
 | `brain-freeze/`                      | The Brain Freeze demo, if you installed it        |
 | `locks/`, `log/`, `mcp-router.json`  | Bookkeeping for the engine and the MCP server     |
 
-The default is `~/GemDB` rather than `~/Documents/GemDB` on purpose. `~/Documents` is commonly
-synced to iCloud Drive, and letting a sync daemon copy a live database out from under the engine
-corrupts it.
+The directory has to be on a local disk. The database engine refuses to open its files on an NFS
+mount, so on a machine whose home directories are NFS mounts, `~/GemDB` cannot hold the database.
+GemDB Code checks before setup downloads anything: if the directory is on NFS, it stops and offers
+**Choose a Local Folder…**, which sets `gemdb.rootPath` to a `GemDB` folder inside the one you pick
+and sets GemDB Code up there. To choose a location yourself, set `gemdb.rootPath` in your User
+settings before you set up.
+
+Avoid a folder that a sync service such as iCloud Drive, OneDrive or Dropbox copies, too. That is why
+the default is `~/GemDB` rather than `~/Documents/GemDB`: `~/Documents` is commonly synced, and
+letting a sync daemon copy a live database out from under the engine corrupts it.
 
 ### GemDB Code updates and associated data
 
@@ -528,7 +537,7 @@ them to other computers. The following table lists all of the settings and the d
 
 | Setting                                  | Default         | What it does                                                                       |
 | ---------------------------------------- | --------------- | ---------------------------------------------------------------------------------- |
-| `gemdb.rootPath`                         | `~/GemDB`       | Where GemDB Code keeps everything                                                  |
+| `gemdb.rootPath`                         | `~/GemDB`       | Where GemDB Code keeps everything; must be on a local disk                         |
 | `gemdb.engineVersion`                    | _(empty)_       | Advanced: override the pinned engine version                                       |
 | `gemdb.reinstallPythonOnUpdate`          | `true`          | Refresh Python support in your database when a GemDB Code update ships a newer one |
 | `gemdb.mcp.enabled`                      | `false`         | Run the MCP server, so AI agents can reach your database                           |

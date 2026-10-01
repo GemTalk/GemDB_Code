@@ -27,10 +27,13 @@ const createDatabase = vi.fn((_enginePath: string, _extensionPath?: string) => (
   created: true,
   preloaded: true,
 }));
+const assertDatabaseIsLocal = vi.fn(() => {});
 vi.mock('../database', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../database')>();
   return {
+    DatabaseOnNfsError: actual.DatabaseOnNfsError,
     DatabaseVersionError: actual.DatabaseVersionError,
+    assertDatabaseIsLocal: () => assertDatabaseIsLocal(),
     assertDatabaseMatchesEngine: () => {},
     createDatabase: (enginePath: string, extensionPath?: string) =>
       createDatabase(enginePath, extensionPath),
@@ -44,6 +47,7 @@ vi.mock('../grail', () => ({
 
 const { runSetup } = await import('../lifecycle');
 const { engineDirName } = await import('../paths');
+const { DatabaseOnNfsError } = await import('../database');
 // Constants on the act side, literals on the assert side: the expectations pin
 // the wire value, so renaming one must fail here rather than silently split a
 // series in App Insights.
@@ -83,6 +87,7 @@ describe('runSetup', () => {
     installEngine.mockReset().mockResolvedValue('/engine');
     createDatabase.mockReset().mockReturnValue({ created: true, preloaded: true });
     stageGrail.mockReset();
+    assertDatabaseIsLocal.mockReset();
 
     // `send()` in telemetry.ts is a no-op until `initTelemetry` has run —
     // exactly as in a real activation — so this test needs one too, with a
@@ -248,6 +253,21 @@ describe('runSetup', () => {
         String(process.ppid),
       );
     });
+  });
+
+  it('refuses a root path on NFS before downloading, and offers a local folder', async () => {
+    // #69: the stone will not open a database there, and used to say so only
+    // at the first start, after the whole setup had run.
+    assertDatabaseIsLocal.mockImplementation(() => {
+      throw new DatabaseOnNfsError('on NFS');
+    });
+    const showErrorMessage = vi.spyOn(vscode.window, 'showErrorMessage');
+
+    const outcome = await runSetup('/ext', TRIGGER.firstRun);
+
+    expect(outcome).toBe('failed');
+    expect(installEngine).not.toHaveBeenCalled();
+    expect(showErrorMessage).toHaveBeenCalledWith('on NFS', 'Choose a Local Folder…', 'Show Log');
   });
 
   it('is cancelled when a step throws "Download cancelled"', async () => {

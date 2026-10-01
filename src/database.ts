@@ -1,8 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
-import { STONE_NAME } from './config';
+import { STONE_NAME, rootPath } from './config';
 import { log, logStep } from './log';
+import { isOnNfs } from './networkFileSystem';
 import { databaseExists, databasePath, ensureRootPath, extentPath } from './paths';
 
 /**
@@ -195,5 +196,34 @@ export function assertDatabaseMatchesEngine(enginePath: string, engineVersion: s
       'There is no in-place upgrade — GemStone 4.0 ships no upgradeImage — so the ' +
       `database has to be recreated: delete ${databasePath()} and start GemDB again. ` +
       'Anything stored in it is lost, so copy out whatever you still need first.',
+  );
+}
+
+/** Raised when the database would be, or is, on a file system the stone refuses. */
+export class DatabaseOnNfsError extends Error {}
+
+/** True when the database directory is, or would be created, on NFS. */
+export function databaseOnNfs(): boolean {
+  return isOnNfs(databasePath());
+}
+
+/**
+ * Refuse to set up or start a database on NFS (#69).
+ *
+ * Checked in the same two places as `assertDatabaseMatchesEngine`, for the same
+ * reasons: before setup downloads anything, and before the stone starts,
+ * because a database created on NFS before this check existed reaches the
+ * start without going through setup. See `isOnNfs` for why it is asked at all.
+ */
+export function assertDatabaseIsLocal(): void {
+  if (databaseOnNfs()) throw databaseOnNfsError();
+}
+
+/** The one way to say it, whichever of the checks or the stone noticed. */
+export function databaseOnNfsError(): DatabaseOnNfsError {
+  return new DatabaseOnNfsError(
+    `GemDB keeps its database in ${rootPath()}, which is on an NFS mount, and the ` +
+      'database engine will not open its files there. Choose a folder on a local disk ' +
+      'for GemDB instead.',
   );
 }
