@@ -114,13 +114,13 @@ for VSCodium and other compatible editors, from
 - VS Code 1.101 or later. On a Mac, use the Apple Silicon build.
 - A supported platform (see [Platform support](#platform-support)). On Linux, a glibc-based
   distribution; musl-based distributions such as Alpine are not supported.
-- Permission to use `sudo` once if the operating system allows less than 1 GB of shared memory. This
-  is common on macOS and rare on Linux. The database does not start until the limit is raised. On
+- Permission to use `sudo` once if the operating system's shared-memory limit is below 1 GB. This is
+  common on macOS and rare on Linux. The database does not start until the limit is raised. On
   Linux, `sudo` is also needed for the optional `RemoveIPC=no` setting (see
   [Changes that need your permission](#changes-that-need-your-permission)).
 - Internet access to `dl.gemdb.com` for the one-time engine download.
 - About 2 GB of free disk space under `~/GemDB` during setup, plus room for your data.
-- About 500 MB of free memory while the database runs, and more for large workloads.
+- At least 500 MB of free memory, and more as your data and the number of open notebooks grow.
 - On Linux, `unzip`. Most distributions include it; if yours does not, install it with your package
   manager (for example, `sudo apt install unzip`).
 
@@ -182,7 +182,7 @@ to VS Code's terminals (removed when you disable the extension). For anything pe
 machine-wide, it prompts you and waits for your permission:
 
 - **Raising shared memory** needs `sudo` and changes the machine for all software. GemDB Code checks
-  whether the operating system allows at least 1 GB of shared memory when setup starts, while the
+  whether the operating system's shared-memory limit is at least 1 GB when setup starts, while the
   engine downloads, and again each time the database starts. If the shared-memory setting is
   insufficient, GemDB Code prompts you for permission to raise the limit. This is often needed on
   macOS; most Linux systems already allow enough. When you choose **Configure**, GemDB Code opens a
@@ -496,8 +496,8 @@ corrupts it.
 
 Each GemDB Code release is tied to a database engine version. If a new release also moves to a newer
 engine version, the database created by the earlier engine version cannot be opened by the newer
-one. When this happens, GemDB Code shows a message before it starts the database, naming the directory to remove.
-Removing that directory deletes everything stored in the database.
+one. When this happens, GemDB Code shows a message before it starts the database, naming the
+directory to remove. Removing that directory deletes everything stored in the database.
 
 For this reason, you should not expect to keep access to your data after an update that changes the
 engine version. VS Code updates extensions automatically, so such an update can arrive without you
