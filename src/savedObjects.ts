@@ -369,7 +369,7 @@ export function inspectMarkdown(
 
 /**
  * Which notebook the title bar's Commit and Abort act on, when no row says:
- * the one paused at breakpoint() (where the user is looking), else the one in
+ * the one paused in the debugger (where the user is looking), else the one in
  * the active editor, else the only one connected. Undefined means ask among
  * `connected`; an empty `connected` means there is nothing to act on.
  */

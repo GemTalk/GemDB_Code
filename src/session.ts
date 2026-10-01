@@ -446,7 +446,7 @@ const PAUSED_QUERY_BUDGET_MS = 2000;
  * painting during a long computation and, crucially, `interrupt()` can still be
  * delivered. A synchronous call cannot be interrupted from the same process,
  * because the thread that would send the break is the one that is blocked.
- * What the debugger reads while an evaluation is paused at breakpoint() goes
+ * What the debugger reads while an evaluation is paused in the debugger goes
  * through `queryWhilePaused`, nonblocking for the same reason.
  */
 export class GciSession {
@@ -461,7 +461,7 @@ export class GciSession {
    * loop end the evaluation at its next forwarder stop with GciTsClearStack.
    */
   private breakPending = false;
-  /** Resolves the pending breakpoint() pause as a stop, when one is pending. */
+  /** Resolves the pending pause — a breakpoint() or a red dot — as a stop, when one is pending. */
   private pendingHaltCancel: (() => void) | undefined;
   /** The queries run while paused, chained so only one is ever in flight. */
   private pausedQueries: Promise<void> = Promise.resolve();
@@ -1017,7 +1017,7 @@ export class GciSession {
   }
 
   /**
-   * Hand a breakpoint() pause to the handler, with the same interrupt path
+   * Hand a pause — a breakpoint() or a red dot — to the handler, with the same interrupt path
    * `awaitAnswer` gives input(): `interrupt()` or `logout()` during the pause
    * resolves it as a stop and tells the handler to take its debugger down.
    * A handler that throws stops the evaluation rather than leaving it paused.

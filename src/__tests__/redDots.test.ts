@@ -27,7 +27,7 @@ describe('arming a run', () => {
 
   it('converts a paused process only after its new breaks are set', () => {
     const query = armQuery(new Map([['/w/m.py', [3]]]), 77n);
-    const convert = query.indexOf('(Object _objectForOop: 77) convertToPortableStack]');
+    const convert = query.indexOf('(Object _objectForOop: 77) convertToPortableStack.');
 
     // Converting first leaves the new breaks silently ignored (measured).
     expect(convert).toBeGreaterThan(query.lastIndexOf('setBreakAtStepPoint: 1]'));

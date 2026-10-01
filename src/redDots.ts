@@ -138,9 +138,11 @@ out contents encodeAsUTF8`;
  * Smalltalk that arms a run: it clears every method breakpoint in the session,
  * then breaks on each dotted line of every module loaded or committed
  * (`ARM_LOADED`), and sets the two import hooks. With no dots it only clears.
- * Answers what it armed (`parseArmed`). Every step after the clear is guarded,
- * so one that fails — a hook Grail renamed — costs only itself, not the dots
- * already cleared.
+ * Answers what it armed (`parseArmed`). Every step after the clear but one is
+ * guarded, so one that fails — a hook Grail renamed — costs only itself, not
+ * the dots already cleared. The exception is converting a paused process:
+ * without it the breaks will not fire, so its failure fails the query, and
+ * the editor shows the dots unverified rather than armed.
  *
  * `paused` is the process of a run paused now. A break set while paused
  * fires later in the run only if the process is converted to portable code
@@ -164,7 +166,7 @@ il isNil ifFalse: [
       on: Error do: [:e | e return: nil]]].`
     : ''
 }
-${paused === undefined ? '' : `[(Object _objectForOop: ${paused}) convertToPortableStack] on: Error do: [:e | e return: nil].`}
+${paused === undefined ? '' : `(Object _objectForOop: ${paused}) convertToPortableStack.`}
 ${REPORT}`;
 }
 
