@@ -461,7 +461,9 @@ async function prepareOnFirstRun(
         ranSetup: false,
       };
     }
-    log('First run: preparing GemDB. This downloads about 210 MB and uses about 820 MB of disk.');
+    log(
+      'First run: preparing GemDB. This downloads about 145 MB on macOS or 450 MB on Linux, and uses about 1.3 GB of disk.',
+    );
 
     // The download and the permission prompt run side by side, deliberately.
     //
