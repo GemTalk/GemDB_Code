@@ -679,8 +679,9 @@ export async function startMcpServer(): Promise<boolean> {
  * seconds of the router. It matters that this holds: the idle reaper is a
  * GsProcess inside the router, so it dies with it, and an orphaned worker
  * would hold one of the ten sessions until the stone was force-stopped.
- * `mcp.test.ts` in the integration suite is what keeps it honest — it asserts
- * the session count returns to its baseline after a client has connected.
+ * `mcp.test.ts` in the integration suite is what keeps it honest — it finds
+ * the router's gems by those two slots, by serial, and asserts every one of
+ * them is gone after a client has connected.
  *
  * `bySession: false` skips the first route, for a router that logged in to a
  * database GemDB's settings no longer name. Its recorded session id belongs
