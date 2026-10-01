@@ -6,6 +6,8 @@ stored as they are, and every commit is an ACID (atomic, consistent, isolated, d
 Create objects, commit transactions, and explore your data without leaving your editor. The guided
 walkthrough takes you from install to your first commit.
 
+GemDB Code is in beta and is not intended for production use.
+
 GemDB Code runs one GemDB database under `~/GemDB`, with no server to install and no credentials to
 manage. After the setup finishes, you can start testing out the GemDB Shell or a GemDB Notebook, or
 move on and explore [the Brain Freeze demo](#the-brain-freeze-demo).
@@ -117,7 +119,8 @@ for VSCodium and other compatible editors, from
   Linux, `sudo` is also needed for the optional `RemoveIPC=no` setting (see
   [Changes that need your permission](#changes-that-need-your-permission)).
 - Internet access to `dl.gemdb.com` for the one-time engine download.
-- About 1.5 GB of free disk space under `~/GemDB` during setup, plus room for your data.
+- About 2 GB of free disk space under `~/GemDB` during setup, plus room for your data.
+- About 500 MB of free memory while the database runs, and more for large workloads.
 - On Linux, `unzip`. Most distributions include it; if yours does not, install it with your package
   manager (for example, `sudo apt install unzip`).
 
@@ -493,8 +496,7 @@ corrupts it.
 
 Each GemDB Code release is tied to a database engine version. If a new release also moves to a newer
 engine version, the database created by the earlier engine version cannot be opened by the newer
-one. There is no in-place upgrade, and there is not yet a way to export your data. When this
-happens, GemDB Code shows a message before it starts the database, naming the directory to remove.
+one. When this happens, GemDB Code shows a message before it starts the database, naming the directory to remove.
 Removing that directory deletes everything stored in the database.
 
 For this reason, you should not expect to keep access to your data after an update that changes the
