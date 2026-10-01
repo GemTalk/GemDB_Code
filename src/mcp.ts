@@ -205,8 +205,14 @@ export function mcpUrl(port = mcpPort()): string {
 /** What GemDB recorded about the router it forked. */
 export interface RouterState {
   port: number;
-  /** The gem's GemStone session id, for `System stopSession:`. */
+  /** The gem's GemStone session id, as `forkOnPort:` reported it. */
   sessionId?: number;
+  /**
+   * The gem's session serial, which unlike the id is never reused: what
+   * `stopMcpServer` finds the router by. Absent in a record written before
+   * GemDB kept it, and for an account without SessionAccess.
+   */
+  serial?: number;
   /** The gem's host process id, for a signal when the clean stop does not land. */
   pid?: number;
   startedAt: string;
@@ -304,7 +310,14 @@ export type McpServerState =
   /** Nothing is listening on the port. */
   | { running: false; port: number; foreign: false }
   /** Our router, as recorded when GemDB forked it. */
-  | { running: true; port: number; foreign: false; pid?: number; sessionId?: number }
+  | {
+      running: true;
+      port: number;
+      foreign: false;
+      pid?: number;
+      sessionId?: number;
+      serial?: number;
+    }
   /** Something is listening, but it is not a router GemDB started. */
   | { running: true; port: number; foreign: true };
 
@@ -320,7 +333,14 @@ export async function mcpServerState(port = mcpPort()): Promise<McpServerState> 
   if (!(await isPortOpen(port))) return { running: false, port, foreign: false };
   const state = readRouterState();
   if (state?.port === port && state.pid !== undefined && looksLikeGem(state.pid)) {
-    return { running: true, port, foreign: false, pid: state.pid, sessionId: state.sessionId };
+    return {
+      running: true,
+      port,
+      foreign: false,
+      pid: state.pid,
+      sessionId: state.sessionId,
+      serial: state.serial,
+    };
   }
   // A router GemDB forked before the state file was lost — or an update that
   // cleared it — is indistinguishable from a stranger, so it is reported as
@@ -564,7 +584,7 @@ export async function startMcpServer(): Promise<boolean> {
   const script = [
     topazLogin(),
     'run',
-    '| r |',
+    '| r status i j sid serial |',
     'r := McpRouter new.',
     // The Python tools, which are the whole reason an agent is pointed at
     // GemDB rather than at a Smalltalk image.
@@ -591,7 +611,20 @@ export async function startMcpServer(): Promise<boolean> {
     '  yourself).',
     ...(mcpReadOnly() ? [`r workerUserId: ${smalltalkString(READ_ONLY_USER)}.`] : []),
     `r serverTitle: ${smalltalkString(`GemDB (${stoneName()})`)}.`,
-    `r forkOnPort: ${port}`,
+    `status := r forkOnPort: ${port}.`,
+    // The child's serial, which `forkOnPort:` does not report. Its session id
+    // is handed to the next login once the router has gone, and `stopMcpServer`
+    // must not stop whoever has it by then; a serial is never reused. Read
+    // here, while the child is certainly logged in, from the id in the status
+    // line (`gem session 7 (host pid …` or `gem session 7, listening …`). Nil
+    // without SessionAccess, as the pid is, and the record then has no serial.
+    "i := status indexOfSubCollection: 'gem session ' startingAt: 1.",
+    'i > 0 ifTrue: [',
+    '  i := j := i + 12.',
+    '  [j <= status size and: [(status at: j) isDigit]] whileTrue: [j := j + 1].',
+    '  j > i ifTrue: [sid := Integer fromString: (status copyFrom: i to: j - 1)]].',
+    'serial := sid ifNotNil: [[(System descriptionOfSession: sid) at: 9] on: Error do: [:e | nil]].',
+    "serial ifNil: [status] ifNotNil: [status , ' (session serial ' , serial printString , ')']",
     '%',
     'logout',
     'exit',
@@ -600,6 +633,9 @@ export async function startMcpServer(): Promise<boolean> {
   const output = await runTopaz(script, 'Start the MCP server');
   const sessionId = Number(/gem session (\d+)/.exec(output)?.[1]);
   const pid = Number(/host pid (\d+)/.exec(output)?.[1]);
+  // Zero when the child logged out before the lookup — a router that could
+  // not bind, which the port wait below reports.
+  const serial = Number(/session serial (\d+)/.exec(output)?.[1]);
 
   // `forkOnPort:` answers a status line naming the gem it launched, so no
   // session id means no gem — a login that failed, or a class that is not
@@ -618,6 +654,7 @@ export async function startMcpServer(): Promise<boolean> {
   const record: RouterState = {
     port,
     sessionId,
+    serial: serial > 0 ? serial : undefined,
     pid: Number.isInteger(pid) ? pid : undefined,
     startedAt: new Date().toISOString(),
   };
@@ -664,7 +701,12 @@ export async function startMcpServer(): Promise<boolean> {
  *
  *   `System stopSession:` on the recorded gem, from a linked topaz session.
  *   The clean one — the engine ends the gem, and it needs no NetLDI (already
- *   stopped by then, in `runStop`'s ordering) and no `lsof`.
+ *   stopped by then, in `runStop`'s ordering) and no `lsof`. The gem is found
+ *   by its serial, and stopped only if it still runs as the recorded pid. A
+ *   recorded session id alone is not enough: once the router has gone, the
+ *   stone gives that id to the next login, and a stale record would stop a
+ *   notebook's session. A record from before GemDB kept the serial is looked
+ *   up by id, under the same pid check.
  *
  *   A signal to the recorded host pid, if the port is still open afterwards.
  *   Guarded by `looksLikeGem`, so a recycled pid belonging to something else
@@ -704,18 +746,35 @@ export async function stopMcpServer({ bySession = true } = {}): Promise<void> {
   }
 
   logStep('Stopping the MCP server');
-  if (bySession && state.sessionId !== undefined) {
+  const lookup =
+    state.serial !== undefined
+      ? `System descriptionOfSessionSerialNum: ${state.serial}`
+      : state.sessionId !== undefined
+        ? `System descriptionOfSession: ${state.sessionId}`
+        : undefined;
+  if (bySession && lookup !== undefined && state.pid !== undefined) {
+    // Stops the session only if it is still the router's gem: logged in
+    // (slot 10, its current id, is 0 once it has gone) and running as the
+    // recorded pid (slot 2). The answer is assembled at run time because topaz
+    // echoes the script, and a literal would match the echo.
+    const script = [
+      '| d |',
+      `d := [${lookup}] on: Error do: [:e | nil].`,
+      `(d notNil and: [(d at: 10) ~= 0 and: [(d at: 2) = ${state.pid}]])`,
+      "  ifTrue: [System stopSession: (d at: 10). 'stopped router session ' , (d at: 10) printString]",
+      "  ifFalse: ['the record names no session of the router''s']",
+    ].join('\n');
+    let stopped = false;
     try {
-      await runTopaz(
-        [topazLogin(), 'run', `System stopSession: ${state.sessionId}`, '%', 'logout', 'exit'].join(
-          '\n',
-        ),
+      const output = await runTopaz(
+        [topazLogin(), 'run', script, '%', 'logout', 'exit'].join('\n'),
         'Stop the MCP server',
       );
+      stopped = /stopped router session \d+/.test(output);
     } catch (e) {
       log(`Could not stop the MCP server's session cleanly: ${errorMessage(e)}`);
     }
-    for (let attempt = 0; attempt < 12 && (await isPortOpen(port)); attempt++) {
+    for (let attempt = 0; stopped && attempt < 12 && (await isPortOpen(port)); attempt++) {
       await delay(250);
     }
   }
