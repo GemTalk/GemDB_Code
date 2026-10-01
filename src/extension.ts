@@ -18,7 +18,7 @@ import {
   readUnattendedSetupMarker,
   writeUnattendedSetupMarker,
 } from './unattendedSetupMarker';
-import { mcpEnabled, mcpReadOnly } from './config';
+import { isExternalDatabase, mcpEnabled, mcpReadOnly } from './config';
 import { cliDirPath, putCliOnPath } from './cli';
 import { onDidAttemptGrailInstall } from './grail';
 import { withSetupLock } from './lock';
@@ -453,10 +453,12 @@ async function prepareOnFirstRun(extensionPath: string, refresh: () => void): Pr
       writeUnattendedSetupMarker(outcome);
       return outcome;
     });
-    const os = ensureOsConfigured(extensionPath, TRIGGER.firstRun).then(
-      osConfigAllowsStart,
-      () => false,
-    );
+    //
+    // An external database's machine is configured by whoever runs it, so, as
+    // in `ensureRunning`, GemDB neither checks shared memory nor asks.
+    const os = isExternalDatabase()
+      ? Promise.resolve(true)
+      : ensureOsConfigured(extensionPath, TRIGGER.firstRun).then(osConfigAllowsStart, () => false);
     const [filesOutcome, configured] = await Promise.all([files, os]);
     return { files: filesOutcome, configured, ranSetup: true };
   });

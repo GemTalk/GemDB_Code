@@ -21,6 +21,7 @@ vi.mock('../lifecycle', () => ({
   isInstalled: () => isInstalled(),
   ensureMcpRunning: async () => false,
   ensureRunning: async () => false,
+  resumeMcpServing: async () => false,
   install: async () => {},
   prepare: () => prepare(),
   reinstallGrail: async () => {},
@@ -317,6 +318,21 @@ describe('activate()', () => {
         expect(readFileSync(marker, 'utf8')).toBe('completed');
       },
     );
+  });
+
+  // Its machine is configured by whoever runs it. A sudo prompt for shared
+  // memory on a machine GemDB does not run the database on is never right.
+  it('never asks about shared memory on first run for an external database', async () => {
+    __setSetting('gemdb.externalDatabase.gemstone', '/opt/gemstone/product');
+    isInstalled.mockReturnValue(false);
+    prepare.mockResolvedValue('completed');
+    const lock = join(rootPathValue, '.gemdb-setup.lock');
+
+    activate(fakeExtensionContext());
+    await expect.poll(() => prepare.mock.calls.length).toBe(1);
+    await expect.poll(() => existsSync(lock)).toBe(false);
+
+    expect(ensureOsConfigured).not.toHaveBeenCalled();
   });
 
   describe('gemdb.uninstall', () => {
