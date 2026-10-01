@@ -151,7 +151,7 @@
     "viewsWelcome": [
       {
         "view": "gemdbStatus",
-        "contents": "GemDB isn't set up yet.\n\nSetup downloads the database engine and creates your database. It picks up where it left off, so a cancelled download costs you nothing.\n[Set Up GemDB](command:gemdb.install)\n\nAbout 210 MB to download, 820 MB on disk.",
+        "contents": "GemDB isn't set up yet.\n\nSetup downloads the database engine and creates your database. It picks up where it left off, so a cancelled download costs you nothing.\n[Set Up GemDB](command:gemdb.install)\n\nAbout 145 MB to download on macOS, about 450 MB on Linux, and about 1.3 GB on disk.",
         "when": "gemdb.state == notInstalled && !gemdb.externalDatabase"
       },
       {
