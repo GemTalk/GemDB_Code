@@ -1,4 +1,4 @@
-import { FIELD, RECORD, STEP_POINT_LINE } from './haltStack';
+import { DOT_LINE, FIELD, RECORD, STEP_POINT_LINE } from './haltStack';
 
 /**
  * Red-dot breakpoints in `.py` files.
@@ -46,7 +46,14 @@ const CLASS_HOOK = '___resetClassAttrOverlay___:';
  * - `armMethod` sets a break on the first step point of each dotted line in
  *   the method and each of its blocks, and notes the line in `armed`. Step
  *   points at offset 1 are the method's prologue and are skipped, so a dot on
- *   a `def` line does not stop every call.
+ *   a module function's `def` line does not stop every call. So are step
+ *   points on whitespace — a block's return at the line break after its
+ *   statement — which are not an entry into the line: a `for` body met one
+ *   on every pass after the statement's own (measured), a second stop each time.
+ *   One extra stop remains: a `for` body's first line stops once before the
+ *   first pass too, where the loop's setup runs a copy of that step point.
+ *   Nothing static tells the copy from the per-pass one — preferring the
+ *   innermost block picked paths that never run, and the dot never fired.
  * - `armClass` arms every Python method of a class whose file has a dot.
  *
  * With `dryRun`, nothing is set: `armed` says what arming would set.
@@ -61,11 +68,17 @@ ${entries}
 armed := Dictionary new.
 out := WriteStream on: Unicode7 new.
 ${STEP_POINT_LINE}
-armMethod := [:meth :file :want | | infos seen |
+armMethod := [:meth :file :want | | infos seen src ir |
   infos := meth _allDebugInfoWithMeths: 2.
   seen := Set new.
-  1 to: infos size do: [:sp | | line key |
-    line := [lineAt value: meth value: sp] on: Error do: [:e | e return: nil].
+  ir := BaseException ___isIRPythonMethod___: meth.
+  src := meth sourceString.
+  1 to: infos size do: [:sp | | line key own off |
+    own := (infos at: sp) at: 1.
+    line := [lineAt value: meth value: own value: sp] on: Error do: [:e | e return: nil].
+    off := own _sourceOffsetsAt: sp.
+    (ir and: [off between: 1 and: src size]) ifTrue: [
+      (src at: off) isSeparator ifTrue: [line := nil]].
     (line notNil and: [want includes: line]) ifTrue: [
       key := { (infos at: sp) at: 1. line }.
       (seen includes: key) ifFalse: [
@@ -89,6 +102,9 @@ armModule := [:mod | | file |
       on: Error do: [:e | e return: nil]]].
 `;
 }
+
+/** SessionTemps key of the last red-dot stop: `{depth. frames. line}`, frames top first as `{method. ip}`. */
+const LAST_STOP = 'GemDbLastRedDot';
 
 /** Temps every query here declares. */
 const TEMPS = 'dots armed lineAt armMethod fileOf armClass armModule il out';
@@ -118,6 +134,7 @@ export function armQuery(dots: DotsByFile, paused?: bigint): string {
   const any = [...dots.values()].some((lines) => lines.length > 0);
   return `| ${TEMPS} |
 GsNMethod clearAllBreaks.
+${paused === undefined ? `SessionTemps current removeKey: #'${LAST_STOP}' ifAbsent: [].` : ''}
 ${prelude(dots)}
 ${
   any
@@ -150,8 +167,20 @@ ${REPORT}`;
 /**
  * Smalltalk run at a 6005 stop of the suspended process `processOop`: if the
  * stop is one of the import hooks, arm what that import just built and answer
- * `hook` and what was armed; otherwise the stop is a red dot, and it answers
- * `dot`.
+ * `hook` and what was armed. Otherwise the stop is a red dot: `repeat` when it
+ * is the same entry into a line as the last stop, else `dot`.
+ *
+ * One Python line is spread over a method and its blocks — a loop body, the
+ * machinery of `+=` — and each holds a break on it, so one pass through the
+ * line meets several (measured: four per pass of a `for` body). A stop is the
+ * same entry as the last stop, repeat or not, when it is deeper on the same
+ * stack, at the same line, and the frame that stopped last has run nothing but
+ * that line since: every frame below it unchanged, and no step point of
+ * another line between its old ip and its new one. A loop's next pass
+ * re-enters at the same depth as its last, so it stops again. Comparing with
+ * the last stop of any kind is what makes that hold: a `for` line's own
+ * method stops once as the loop starts, and every pass runs deeper beneath it
+ * (measured).
  *
  * At the module hook the module's class is a temp of the caller,
  * `loadModuleFromPath:name:`, found by name rather than position. The module
@@ -160,13 +189,13 @@ ${REPORT}`;
  * query hung until soft-broken).
  */
 export function hookStopQuery(processOop: bigint, dots: DotsByFile): string {
-  return `| ${TEMPS} proc top sel fc names at |
+  return `| ${TEMPS} proc top sel fc names at dotLineOf |
 proc := Object _objectForOop: ${processOop}.
 top := (proc _frameContentsAt: 1) at: 1.
 sel := top selector.
 il := System myUserProfile symbolList objectNamed: #'importlib'.
 (il notNil and: [top inClass == il class and: [sel == #'${MODULE_HOOK}' or: [sel == #'${CLASS_HOOK}']]])
-  ifFalse: [^ 'dot' encodeAsUTF8].
+  ifFalse: [^ ([${repeatCheck()}] on: Error do: [:e | e return: 'dot']) encodeAsUTF8].
 ${prelude(dots)}
 sel == #'${CLASS_HOOK}'
   ifTrue: [armClass value: ((proc _frameContentsAt: 1) at: 11)]
@@ -177,6 +206,43 @@ sel == #'${CLASS_HOOK}'
     at > 0 ifTrue: [armClass value: (fc at: 10 + at)]].
 out nextPutAll: 'hook'; nextPut: (Character codePoint: 30).
 ${REPORT}`;
+}
+
+/**
+ * Smalltalk, the body of a block, answering `repeat` or `dot` for a red-dot
+ * stop of `proc` and recording it as the last stop (see `hookStopQuery`).
+ */
+function repeatCheck(): string {
+  return `| depth frames line last same pd pFrames |
+${STEP_POINT_LINE}
+${DOT_LINE}
+depth := proc stackDepth.
+frames := (1 to: depth) collect: [:lvl | | f |
+  f := proc _frameContentsAt: lvl.
+  f isNil ifTrue: [{nil. 0}] ifFalse: [{f at: 1. f at: 2}]].
+line := dotLineOf value: proc.
+last := SessionTemps current at: #'${LAST_STOP}' otherwise: nil.
+same := last notNil and: [line notNil and: [line = (last at: 3) and: [depth > (last at: 1)]]].
+same ifTrue: [
+  pd := last at: 1.
+  pFrames := last at: 2.
+  "Bottom-aligned: position b from the bottom is level pd - b + 1 then, depth - b + 1 now."
+  1 to: pd do: [:b | | was now |
+    was := pFrames at: pd - b + 1.
+    now := frames at: depth - b + 1.
+    ((was at: 1) == (now at: 1) and: [b < pd ifTrue: [(was at: 2) = (now at: 2)] ifFalse: [(now at: 2) >= (was at: 2)]])
+      ifFalse: [same := false]].
+  same ifTrue: [| m home p q |
+    m := (pFrames at: 1) at: 1.
+    p := (pFrames at: 1) at: 2.
+    q := (frames at: depth - pd + 1) at: 2.
+    home := m homeMethod.
+    (home _allDebugInfoWithMeths: 2) doWithIndex: [:info :i | | other |
+      ((info at: 1) == m and: [(info at: 2) > p and: [(info at: 2) < q]]) ifTrue: [
+        other := lineAt value: home value: m value: i.
+        (other notNil and: [other ~= line]) ifTrue: [same := false]]]]].
+SessionTemps current at: #'${LAST_STOP}' put: {depth. frames. line}.
+same ifTrue: ['repeat'] ifFalse: ['dot']`;
 }
 
 /** What `armQuery` armed, or a hook stop after its `hook` record: the lines that now hold a break, by file. */

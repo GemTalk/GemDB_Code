@@ -648,7 +648,7 @@ export class GciSession {
         oop === OOP_ILLEGAL &&
         (err.number === CLIENT_FORWARDER_SEND || err.number === HALT || err.number === BREAKPOINT)
       ) {
-        // One of the import hooks red dots set: arm what the import built, and go on.
+        // An import hook, or the same line again (`redDots.ts`): go on.
         if (
           err.number === BREAKPOINT &&
           !this.breakPending &&
@@ -955,13 +955,15 @@ export class GciSession {
   }
 
   /**
-   * Whether a breakpoint stop is one of the import hooks (`redDots.ts`), arming
-   * what that import built if so. A query that fails counts as a red dot, so
-   * the user sees the stop rather than the run silently going on.
+   * Whether a breakpoint stop is GemDB's to resume without the user: one of
+   * the import hooks (`redDots.ts`), arming what that import built, or a
+   * second break on a line the run just stopped at. A query that fails counts
+   * as a red dot, so the user sees the stop rather than the run silently going on.
    */
   private async answerHookStop(process: bigint): Promise<boolean> {
     try {
       const raw = await this.runPausedQuery(hookStopQuery(process, this.redDots));
+      if (raw === 'repeat') return true;
       if (!raw.startsWith('hook')) return false;
       const armed = parseArmed(raw);
       if (armed.size > 0) log(`Red dots armed on import (${this.label}): ${describeArmed(armed)}`);

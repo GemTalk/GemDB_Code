@@ -5,6 +5,12 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { fileOwner } from '../fileOwner';
 import { stageGrail } from '../grail';
 import { parsePythonStack, pythonStackQuery } from '../haltStack';
+import {
+  childrenQuery,
+  parseChildren,
+  parsePausedStack,
+  pausedStackQuery,
+} from '../pauseVariables';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
 import { runPython, runPythonFile } from '../pythonQueries';
 import { DotsByFile } from '../redDots';
@@ -57,6 +63,33 @@ const MAIN = [
   'print("done", a, b, c)', //           8
 ].join('\n');
 
+/** Loops, a nested def, and a comment that looks like the header Grail ends a method with. */
+const LOOPS = [
+  'def total(xs):', //                   1
+  '    # line 99 file elsewhere.py', //  2
+  '    t = 0', //                        3
+  '    for x in xs:', //                 4
+  '        t += x', //                   5
+  '    def inner(y):', //                6
+  '        return y + 1', //             7
+  '    return inner(t)', //              8
+].join('\n');
+
+/** A script that pauses at breakpoint() before importing a module. */
+const PAUSE_FIRST = ['breakpoint()', 'import later', 'later.go()'].join('\n');
+const LATER = ['def go():', '    n = 1', '    return n'].join('\n');
+
+/** A class whose __repr__ the Variables view runs while paused. */
+const SHOWN = [
+  'class Shown:',
+  '    def __repr__(self):',
+  '        text = "Shown()"',
+  '        return text',
+].join('\n');
+
+/** A module committed in one session and warm-bound, its body not re-run, in another. */
+const WARM = ['def twice(x):', '    y = x * 2', '    return y'].join('\n');
+
 let fixture: Fixture | undefined;
 let dir = '';
 
@@ -64,6 +97,11 @@ beforeAll(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gemdb-reddots-'));
   fs.writeFileSync(path.join(dir, 'helper.py'), HELPER);
   fs.writeFileSync(path.join(dir, 'main.py'), MAIN);
+  fs.writeFileSync(path.join(dir, 'loops.py'), LOOPS);
+  fs.writeFileSync(path.join(dir, 'pause_first.py'), PAUSE_FIRST);
+  fs.writeFileSync(path.join(dir, 'later.py'), LATER);
+  fs.writeFileSync(path.join(dir, 'shown.py'), SHOWN);
+  fs.writeFileSync(path.join(dir, 'warm.py'), WARM);
   if (!haveExtent) return;
   fixture = makeFixture();
   if (!fixture) return;
@@ -258,5 +296,127 @@ describe.skipIf(!haveExtent || !canMakeFixture())('red dots', () => {
     expect(stops.map((s) => s.top)).toEqual(['step@3 main.py']);
     expect(result.stopped).toBe(true);
     expect(printed.join('')).toBe('');
+  });
+
+  it('stops on each pass of a loop (and once before it) and inside a nested def, past a comment like Grail’s header', async () => {
+    const owner: SessionOwner = {
+      key: 'file:///loops.ipynb',
+      kind: 'notebook',
+      label: 'loops.ipynb',
+    };
+    await runPython(`import sys\nsys.path.insert(0, ${JSON.stringify(dir)})\nimport loops`, owner);
+    dotting({ 'loops.py': [3, 5, 7] });
+    const stops = recording();
+
+    const result = await runPython('loops.total([1, 2, 3])', owner);
+    closeSessionFor(owner.key);
+
+    // The comment's "# line 99" must not be taken for the header Grail
+    // appends, or every line would read 98 off. The body stops once per pass
+    // and once more just before the first: the loop's setup runs a copy of
+    // the body's first step point, and nothing in the method tells that copy
+    // from the one each pass runs (measured; see armMethod in redDots.ts).
+    expect(stops.map((s) => s.top)).toEqual([
+      'total@3 loops.py',
+      'total@5 loops.py',
+      'total@5 loops.py',
+      'total@5 loops.py',
+      'total@5 loops.py',
+      'inner@7 loops.py',
+    ]);
+    expect(result.value).toBe('7');
+  });
+
+  it('stops no more at a dot removed while paused', async () => {
+    const owner: SessionOwner = fileOwner(file('main.py'));
+    dotting({ 'helper.py': [2] });
+    const stops = recording(async (request): Promise<HaltAnswer> => {
+      await request.rearm(new Map());
+      return 'continue';
+    });
+
+    const result = await runPythonFile(file('main.py'), owner, () => {});
+    closeSessionFor(owner.key);
+
+    // double() runs at the import and again from line 5; only the first stops.
+    expect(stops.map((s) => s.top)).toEqual(['double@2 helper.py']);
+    expect(result.value).toBe('');
+  });
+
+  it('stops at a dot added while paused in a module the run imports afterwards', async () => {
+    const owner: SessionOwner = fileOwner(file('pause_first.py'));
+    // A dot somewhere arms nothing here, so the pause comes from breakpoint().
+    dotting({});
+    const stops = recording(async (request, index): Promise<HaltAnswer> => {
+      if (index === 0) await request.rearm(new Map([[file('later.py'), [2]]]));
+      return 'continue';
+    });
+
+    const result = await runPythonFile(file('pause_first.py'), owner, () => {});
+    closeSessionFor(owner.key);
+
+    // later.py is compiled after the pause, so only the import hooks the
+    // re-arm set — with the new dots — can put this break in.
+    // The script's own <module> frame is Grail's to place (it reads 0 here).
+    expect(stops.map((s) => `${s.reason} ${s.top.replace(/@\d+ /, ' ')}`)).toEqual([
+      'breakpoint() <module> pause_first.py',
+      'red dot go later.py',
+    ]);
+    expect(stops[1].top).toBe('go@2 later.py');
+    expect(result.value).toBe('');
+  });
+
+  it('runs a __repr__ the Variables view asks for while paused straight past a dot in it', async () => {
+    const owner: SessionOwner = {
+      key: 'file:///shown.ipynb',
+      kind: 'notebook',
+      label: 'shown.ipynb',
+    };
+    await runPython(`import sys\nsys.path.insert(0, ${JSON.stringify(dir)})\nimport shown`, owner);
+    dotting({ 'shown.py': [3] });
+    const reasons: string[] = [];
+    let rows: string[] = [];
+    setHaltHandler(async (request) => {
+      reasons.push(request.reason);
+      const { globals } = parsePausedStack(
+        await request.query(pausedStackQuery(request.process, owner.key)),
+      );
+      rows = parseChildren(await request.query(childrenQuery(globals, 0, 50))).map(
+        (v) => `${v.name}=${v.value}`,
+      );
+      return 'continue';
+    });
+
+    const result = await runPython('s = shown.Shown()\nbreakpoint()\n42', owner);
+    closeSessionFor(owner.key);
+
+    // Queries run with flags 0, so the dot inside __repr__ does not fire there.
+    expect(reasons).toEqual(['breakpoint()']);
+    expect(rows).toContain('s=Shown()');
+    expect(result.value).toBe('42');
+  });
+
+  it('arms a module another session committed, which an import binds without running its body', async () => {
+    const importWarm = `import sys\nsys.path.insert(0, ${JSON.stringify(dir)})\nimport warm`;
+    const writer: SessionOwner = {
+      key: 'file:///writer.ipynb',
+      kind: 'notebook',
+      label: 'writer.ipynb',
+    };
+    await runPython(`${importWarm}\nimport gemdb\ngemdb.commit()`, writer);
+    closeSessionFor(writer.key);
+
+    const reader: SessionOwner = {
+      key: 'file:///reader.ipynb',
+      kind: 'notebook',
+      label: 'reader.ipynb',
+    };
+    dotting({ 'warm.py': [2] });
+    const stops = recording();
+    const result = await runPython(`${importWarm}\nwarm.twice(4)`, reader);
+    closeSessionFor(reader.key);
+
+    expect(stops.map((s) => s.top)).toEqual(['twice@2 warm.py']);
+    expect(result.value).toBe('8');
   });
 });

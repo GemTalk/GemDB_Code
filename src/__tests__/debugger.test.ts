@@ -665,6 +665,61 @@ describe('the debug adapter', () => {
     expect(reply?.body).toEqual({ breakpoints: [{ verified: true, line: 4 }] });
   });
 
+  it('answers back-to-back setBreakpoints in order, each building on the last', async () => {
+    const seen: Array<Array<[string, number[]]>> = [];
+    const rearm = vi.fn(async (dots: DotsByFile) => {
+      seen.push([...dots] as Array<[string, number[]]>);
+      return new Map([...dots].map(([f, l]) => [f, [...l]]));
+    });
+    const { request, sent } = adapterFor({ answer: () => {}, rearm });
+    request('initialize');
+    request('launch', { gemdbPause: '1' });
+
+    // VS Code sends one request per file as the session starts, without waiting.
+    request('setBreakpoints', { source: { path: '/w/a.py' }, breakpoints: [{ line: 1 }] });
+    request('setBreakpoints', { source: { path: '/w/b.py' }, breakpoints: [{ line: 2 }] });
+    await settle();
+    await settle();
+
+    expect(seen).toEqual([
+      [['/w/a.py', [1]]],
+      [
+        ['/w/a.py', [1]],
+        ['/w/b.py', [2]],
+      ],
+    ]);
+    const replies = sent.filter((m) => m.command === 'setBreakpoints').map((m) => m.body);
+    expect(replies).toEqual([
+      { breakpoints: [{ verified: true, line: 1 }] },
+      { breakpoints: [{ verified: true, line: 2 }] },
+    ]);
+  });
+
+  it('answers unverified, and goes on answering, when re-arming fails', async () => {
+    const rearm = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('session gone'))
+      .mockResolvedValueOnce(new Map([['/w/m.py', [3]]]));
+    const { request, sent } = adapterFor({ answer: () => {}, rearm });
+    request('initialize');
+    request('launch', { gemdbPause: '1' });
+
+    request('setBreakpoints', { source: { path: '/w/m.py' }, breakpoints: [{ line: 2 }] });
+    request('setBreakpoints', { source: { path: '/w/m.py' }, breakpoints: [{ line: 3 }] });
+    await settle();
+    await settle();
+
+    const replies = sent.filter((m) => m.command === 'setBreakpoints').map((m) => m.body);
+    expect(replies).toEqual([
+      {
+        breakpoints: [
+          { verified: false, line: 2, message: expect.stringMatching(/no code for this line yet/) },
+        ],
+      },
+      { breakpoints: [{ verified: true, line: 3 }] },
+    ]);
+  });
+
   it('sets no red dot on a saved stack, which has no run to stop', async () => {
     const { request, response } = adapterFor({ answer: () => {}, saved: true });
     request('initialize');
@@ -862,7 +917,7 @@ describe('opening the debugger at a breakpoint()', () => {
       description: 'Paused on breakpoint',
     });
     // The innermost frame's line comes from its step point, not Grail's ip lookup.
-    expect(request.queries[0]).toContain('first := true.');
+    expect(request.queries[0]).toContain('dotLine := true ifTrue:');
     await expect(answered).resolves.toBe('continue');
     registration.dispose();
   });
