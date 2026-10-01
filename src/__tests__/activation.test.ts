@@ -73,6 +73,7 @@ const { activate } = await import('../extension');
 // over the marker when an explicit setup completes.
 const { runSetup } = await vi.importActual<typeof import('../lifecycle')>('../lifecycle');
 const { TRIGGER } = await import('../telemetry');
+const { writeUnattendedSetupMarker } = await import('../unattendedSetupMarker');
 
 describe('activate()', () => {
   let originalPlatform: PropertyDescriptor | undefined;
@@ -289,10 +290,15 @@ describe('activate()', () => {
 
   describe('the first run marker', () => {
     it.each(['cancelled', 'failed'])(
-      'is written when the files step ends %s, so a setup completed while the OS step waits is kept',
+      'is not written over once the files step ends %s, so a setup completed while the OS step waits is kept',
       async (filesOutcome) => {
         isInstalled.mockReturnValue(false);
-        prepare.mockResolvedValue(filesOutcome);
+        // As the real `prepare` does, through `runSetup`: records the outcome
+        // before returning it.
+        prepare.mockImplementation(async () => {
+          writeUnattendedSetupMarker(filesOutcome as 'cancelled' | 'failed');
+          return filesOutcome;
+        });
         // The OS step waiting on a sudo terminal the user has not finished with.
         let releaseOs: (result: string) => void = () => {};
         ensureOsConfigured.mockReturnValue(
@@ -318,6 +324,22 @@ describe('activate()', () => {
         expect(readFileSync(marker, 'utf8')).toBe('completed');
       },
     );
+  });
+
+  // #70: the lock keeps two setups apart, and the shared-memory step is not
+  // one. Held across it, another window's Install, Start or notebook cell
+  // waited behind a sudo prompt nobody might be answering.
+  it('releases the setup lock when the files step ends, without waiting for the shared-memory prompt', async () => {
+    isInstalled.mockReturnValue(false);
+    prepare.mockResolvedValue('completed');
+    ensureOsConfigured.mockReturnValue(new Promise(() => {}));
+    const lock = join(rootPathValue, '.gemdb-setup.lock');
+
+    activate(fakeExtensionContext());
+    await expect.poll(() => prepare.mock.calls.length).toBe(1);
+
+    await expect.poll(() => existsSync(lock)).toBe(false);
+    expect(ensureOsConfigured).toHaveBeenCalledTimes(1);
   });
 
   // Its machine is configured by whoever runs it. A sudo prompt for shared

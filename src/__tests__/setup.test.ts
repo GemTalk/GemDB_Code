@@ -28,13 +28,14 @@ const createDatabase = vi.fn((_enginePath: string, _extensionPath?: string) => (
   preloaded: true,
 }));
 const assertDatabaseIsLocal = vi.fn(() => {});
+const assertDatabaseMatchesEngine = vi.fn(() => {});
 vi.mock('../database', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../database')>();
   return {
     DatabaseOnNfsError: actual.DatabaseOnNfsError,
     DatabaseVersionError: actual.DatabaseVersionError,
     assertDatabaseIsLocal: () => assertDatabaseIsLocal(),
-    assertDatabaseMatchesEngine: () => {},
+    assertDatabaseMatchesEngine: () => assertDatabaseMatchesEngine(),
     createDatabase: (enginePath: string, extensionPath?: string) =>
       createDatabase(enginePath, extensionPath),
   };
@@ -47,7 +48,7 @@ vi.mock('../grail', () => ({
 
 const { runSetup } = await import('../lifecycle');
 const { engineDirName } = await import('../paths');
-const { DatabaseOnNfsError } = await import('../database');
+const { DatabaseOnNfsError, DatabaseVersionError } = await import('../database');
 // Constants on the act side, literals on the assert side: the expectations pin
 // the wire value, so renaming one must fail here rather than silently split a
 // series in App Insights.
@@ -88,6 +89,7 @@ describe('runSetup', () => {
     createDatabase.mockReset().mockReturnValue({ created: true, preloaded: true });
     stageGrail.mockReset();
     assertDatabaseIsLocal.mockReset();
+    assertDatabaseMatchesEngine.mockReset();
 
     // `send()` in telemetry.ts is a no-op until `initTelemetry` has run —
     // exactly as in a real activation — so this test needs one too, with a
@@ -183,6 +185,36 @@ describe('runSetup', () => {
     expect(eventsNamed('setupStarted')).toHaveLength(1);
   });
 
+  // #70: the first run's marker is what stops a later activation from setting
+  // up again unasked, and what a stale `cancelled` or `failed` written after a
+  // working install would get wrong (#53). A caller that joined the first run
+  // must find it already written, whichever way the setup ended.
+  it.each([
+    ['completed', () => Promise.resolve('/engine')],
+    ['cancelled', () => Promise.reject(new Error('Download cancelled'))],
+  ])(
+    'hands a joining caller the outcome only once the first run has recorded it %s',
+    async (expected, endDownload) => {
+      let finishDownload: () => void = () => {};
+      installEngine.mockImplementation(
+        () =>
+          new Promise<string>((resolve, reject) => {
+            finishDownload = () => endDownload().then(resolve, reject);
+          }),
+      );
+
+      const first = runSetup('/ext', TRIGGER.firstRun);
+      const joined = runSetup('/ext', TRIGGER.notebook).then((outcome) => ({
+        outcome,
+        marker: readUnattendedSetupMarker(),
+      }));
+      finishDownload();
+
+      expect(await joined).toEqual({ outcome: expected, marker: expected });
+      expect(await first).toBe(expected);
+    },
+  );
+
   it('runs again once the setup under way has finished', async () => {
     installEngine.mockRejectedValueOnce(new Error('ECONNRESET'));
 
@@ -211,14 +243,36 @@ describe('runSetup', () => {
       vi.useFakeTimers({ toFake: ['setTimeout'] });
     });
 
-    it('waits for it, and downloads nothing once it has finished', async () => {
+    it('waits for it, then runs the steps itself over what it left on disk', async () => {
+      // The real `installEngine` returns an engine already on disk without
+      // downloading, as every step skips what is done; the mock stands in.
       const outcome = runSetup('/ext', TRIGGER.installCommand);
+      await vi.advanceTimersByTimeAsync(3000);
+      const downloadsWhileWaiting = installEngine.mock.calls.length;
+      finishSetupInAnotherWindow();
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(downloadsWhileWaiting).toBe(0);
+      expect(await outcome).toBe('completed');
+      expect(installEngine).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not take its files on disk for a setup that finished', async () => {
+      // #70: after an engine pin move the new engine, the old database and
+      // the staged Python are all there, and the other window's setup failed
+      // on the database's version. Waiting must not turn that into completed.
+      writeUnattendedSetupMarker('cancelled');
+      assertDatabaseMatchesEngine.mockImplementation(() => {
+        throw new DatabaseVersionError('made by an older engine');
+      });
+
+      const outcome = runSetup('/ext', TRIGGER.notebook);
       await vi.advanceTimersByTimeAsync(3000);
       finishSetupInAnotherWindow();
       await vi.advanceTimersByTimeAsync(1000);
 
-      expect(await outcome).toBe('completed');
-      expect(installEngine).not.toHaveBeenCalled();
+      expect(await outcome).toBe('failed');
+      expect(readUnattendedSetupMarker()).toBe('cancelled');
     });
 
     it('waits for it, and sets up here if it stopped short', async () => {
@@ -291,6 +345,18 @@ describe('runSetup', () => {
   });
 
   describe('the unattended setup marker', () => {
+    it.each([
+      ['completed', () => Promise.resolve('/engine')],
+      ['cancelled', () => Promise.reject(new Error('Download cancelled'))],
+      ['failed', () => Promise.reject(new Error('ECONNRESET'))],
+    ])('records the first-run setup ending %s', async (expected, download) => {
+      installEngine.mockImplementation(download);
+
+      await runSetup('/ext', TRIGGER.firstRun);
+
+      expect(readUnattendedSetupMarker()).toBe(expected);
+    });
+
     it('is replaced by a completed run', async () => {
       writeUnattendedSetupMarker('cancelled');
 
