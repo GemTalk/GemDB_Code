@@ -230,19 +230,73 @@ the router's session — so each worker is an RPC gem whose client process *is*
 the router. Ending the router leaves them without a client and the engine
 terminates them; sessions 5, 6 and 7 above were all gone within four seconds.
 That is why `stopMcpServer` names one gem and no more, and
-`mcp.test.ts` asserts the session count returns to its baseline after a client
-has connected, so the day it stops being true is the day a test goes red rather
-than the day a user cannot stop their database. The baseline is
-not zero: `SymbolGem` and `GcReclaim` hold sessions of their own.
+`mcp.test.ts` finds the router's gems by those two slots after a client has
+connected and asserts every one of them is gone after the stop, so the day it
+stops being true is the day a test goes red rather than the day a user cannot
+stop their database.
 
-The stop itself is `System stopSession:` on the recorded session id from a
-*linked* topaz login — clean, needs no NetLDI (already down by then in
-`runStop`'s ordering) and no `lsof`. A signal to the recorded host pid is the
-fallback if the port is still open, guarded by a `ps comm` check so a recycled
-pid belonging to something else is left alone. GemDB records both the pid and
-the session id at fork time in `<rootPath>/mcp-router.json`, which is *outside*
-`mcp/` because staging replaces that directory wholesale and a running router
-must survive an update.
+The test names gems by **serial** (slot 9), not by counting sessions and not
+by session id. It used to count, and that raced on CI's macOS runner on
+2026-10-01: `stopMcpServer` returns once the port closes, the previous
+router's gems exit a moment later, and a count taken in between was one too
+high, so the test saw the count fall *below* its baseline. A session id is no
+better, because the stone hands a freed id to the next login. A serial is
+never reused. The test relies on two things the image's own comments say and
+4.0.0.a4 does (measured 2026-10-01, the same run). `descriptionOfSession:`
+answers an Array of zeros for a session that has gone, not an error, so slot
+10 (the session id) is 0. And `descriptionOfSessionSerialNum:` answers the
+same way for a serial that has logged out. It does not answer nil;
+`GsSession sessionWithSerialNumber:` is the one that does. On that run slot
+21 still named the router, too: the test found two gems with one client
+connected and three with two.
+
+The stop itself is `System stopSession:` from a *linked* topaz login — clean,
+needs no NetLDI (already down by then in `runStop`'s ordering) and no `lsof`.
+A signal to the recorded host pid is the fallback if the port is still open,
+guarded by a `ps comm` check so a recycled pid belonging to something else is
+left alone. GemDB records the pid, the session id and the session serial at
+fork time in `<rootPath>/mcp-router.json`, which is *outside* `mcp/` because
+staging replaces that directory wholesale and a running router must survive an
+update.
+
+The clean stop finds the router by **serial**, and stops it only if slot 2
+still names the recorded pid. It used to send `System stopSession:` the
+recorded id, which is right only while the router holds that id. Once the
+router has gone some other way (a crash, a force-stopped stone, a kill from a
+shell), the record outlives it, and the stone hands a freed id to the next
+login. The next "Stop GemDB" would then have stopped that session, most likely
+a notebook's. `forkOnPort:` reports the id and the pid but not the serial, so
+the start script reads slot 9 for the id it reported, in the same topaz run,
+while the child is certainly logged in.
+
+Two cases have no serial, and both fall back to looking the session up by id
+under the same pid check: a record written by a GemDB from before the serial
+was kept (a running router outlives an extension update), and an account
+without SessionAccess, for which `descriptionOfSession:` raises for any
+session but its own (the pid is missing in that case too, and `listeningPid`
+supplies it). The check stops nothing it cannot identify. Where it declines,
+the signal does the stopping.
+
+There is no public stop by serial. `System stopSession:` converts the id to a
+serial with `GsSession serialOfSession:` at the moment of the call and hands
+it to the private `_stopSession:kind:timeout:`. `GsSession
+sessionWithSerialNumber:` and its `stop` are public, but they answer nil for a
+session whose UserProfile slot is nil, which the comments say includes a
+session "in login or processing". The router never stops processing, so
+relying on them would mean measuring what that phrase covers first; this
+route did not need it. The check reads the current id from the serial and
+sends that to `stopSession:`, microseconds apart in one topaz `run`, which
+leaves no realistic time for the id to change hands.
+
+One caller skips the clean stop and goes straight to the signal:
+`stopMcpServer({ bySession: false })`, when a `gemdb.externalDatabase.*`
+setting that names a database changes. The record survives that change,
+because the root path has not moved, but the session id in it belongs to the
+previous database. `topazLogin()` now reaches the new one, where that id is
+someone else's session or nobody's. The signal alone is enough. Measured
+2026-10-01, `mcp.test.ts` again: after SIGTERM to a router with one client
+connected, neither the router's serial nor its worker's was still logged in,
+so the worker followed the router down here too.
 
 ## Registering it with clients
 

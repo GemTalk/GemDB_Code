@@ -74,6 +74,24 @@ vi.mock('../grail', async (importOriginal) => ({
   stageGrail: () => {},
 }));
 
+// A change of database settings ends what was bound to the old database.
+// These record that it happened; what each one does is tested where it lives.
+const logoutAll = vi.fn();
+vi.mock('../session', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../session')>()),
+  logoutAll: () => logoutAll(),
+}));
+const stopMcpServer = vi.fn(async (_options?: { bySession?: boolean }) => {});
+vi.mock('../mcp', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../mcp')>()),
+  stopMcpServer: (options?: { bySession?: boolean }) => stopMcpServer(options),
+}));
+const ensureCliCurrent = vi.fn(() => true);
+vi.mock('../cli', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../cli')>()),
+  ensureCliCurrent: () => ensureCliCurrent(),
+}));
+
 const { activate } = await import('../extension');
 // The real one, past the `lifecycle` mock above: it is what writes `completed`
 // over the marker when an explicit setup completes.
@@ -376,6 +394,65 @@ describe('activate()', () => {
       const afterClearing = published.at(-1);
 
       expect([afterSetting, afterClearing]).toEqual([true, false]);
+    });
+  });
+
+  describe('when the external database settings change', () => {
+    beforeEach(() => {
+      __setSetting('gemdb.externalDatabase.gemstone', '/opt/gemstone/product');
+      logoutAll.mockReset();
+      stopMcpServer.mockReset();
+      ensureCliCurrent.mockReset().mockReturnValue(true);
+    });
+
+    it.each([
+      ['engine', 'gemdb.externalDatabase.gemstone', '/opt/gemstone/other'],
+      ['lock directory', 'gemdb.externalDatabase.globalDirectory', '/srv/gemstone'],
+      ['stone', 'gemdb.externalDatabase.stone', 'other'],
+      ['NetLDI', 'gemdb.externalDatabase.netldi', 'otherldi'],
+      ['account', 'gemdb.externalDatabase.user', 'someoneElse'],
+    ])('leaves the previous database when its %s changes', (_label, key, value) => {
+      activate(fakeExtensionContext());
+
+      __changeSetting(key, value);
+
+      expect(logoutAll).toHaveBeenCalledOnce();
+      expect(stopMcpServer).toHaveBeenCalledOnce();
+      expect(ensureCliCurrent).toHaveBeenCalledOnce();
+    });
+
+    it('stops the MCP server without sending the new database its old session id', () => {
+      activate(fakeExtensionContext());
+
+      __changeSetting('gemdb.externalDatabase.stone', 'other');
+
+      expect(stopMcpServer).toHaveBeenCalledWith({ bySession: false });
+    });
+
+    it('keeps sessions open when only the password file changes', () => {
+      activate(fakeExtensionContext());
+
+      __changeSetting('gemdb.externalDatabase.passwordFile', '/home/dev/.gemdb-password');
+
+      expect(logoutAll).not.toHaveBeenCalled();
+      expect(stopMcpServer).not.toHaveBeenCalled();
+    });
+
+    it('rewrites the gemdb command when only the password file changes', () => {
+      activate(fakeExtensionContext());
+
+      __changeSetting('gemdb.externalDatabase.passwordFile', '/home/dev/.gemdb-password');
+
+      expect(ensureCliCurrent).toHaveBeenCalledOnce();
+    });
+
+    it('leaves sessions alone when an unrelated setting changes', () => {
+      activate(fakeExtensionContext());
+
+      __changeSetting('gemdb.mcp.enabled', true);
+
+      expect(logoutAll).not.toHaveBeenCalled();
+      expect(ensureCliCurrent).not.toHaveBeenCalled();
     });
   });
 

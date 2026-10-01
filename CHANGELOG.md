@@ -12,10 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Use a database someone else runs.** Set `gemdb.externalDatabase.gemstone` to an engine an
   administrator installed — on a hosted or shared machine — and GemDB Code connects to their stone
   instead of installing its own: it installs Python support into your account and runs the MCP
-  server, and never downloads, creates, starts, stops or removes the database. The stone, NetLDI
-  and account are settings, and the password is read from a file, so it never appears in
+  server, and never downloads, creates, starts, stops or removes the database. The stone, NetLDI and
+  account are settings, and the password is read from a file, so it never appears in
   `settings.json`. The Get Started walkthrough describes that setup instead of a download, and
-  leaves out stopping the database (#79). See [docs/external-database.md](docs/external-database.md).
+  leaves out stopping the database (#79). Changing these settings while the editor is open logs
+  every notebook out of the previous database and stops the MCP server running against it (#81). See
+  [docs/external-database.md](docs/external-database.md).
 
 - **`breakpoint()` in a notebook cell opens the debugger.** The cell pauses, VS Code's Run and Debug
   view shows the Python call stack — methods named with their class, frames from other cells and
@@ -63,6 +65,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Stopping the MCP server no longer risks ending someone else's session.** GemDB stopped the
+  server by the session number it was given at start. If the server had already gone some other
+  way, such as a crash or a force-stopped database, the next login could be handed that number, and
+  the next **Stop GemDB** would have ended that session, most likely a notebook's. GemDB now also
+  records the server's session serial, which the database never reuses. It stops the session only
+  if it is still the server's own, and otherwise stops the server process directly.
 - **Setup no longer fails when it is asked for twice.** Pressing **Set Up GemDB**, or running a
   cell, while the first-run setup was still downloading started a second download into the same
   file, and both failed — one with "The download ended early (452662077 of 449106447 bytes)" (#68).

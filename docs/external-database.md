@@ -44,6 +44,15 @@ setting, so it never appears in `settings.json`, and a password changed on the
 server is picked up without touching the editor. Make it readable by the
 developer's account only (`chmod 600`).
 
+Changing any of the others while the editor is open moves GemDB Code to the
+database they now name: every notebook's session is logged out, the MCP server
+is stopped, and the `gemdb` command is rewritten. The MCP server is stopped by
+signalling its gem rather than with `System stopSession:`, because the session
+id GemDB Code recorded belongs to the previous database. Changing only
+`passwordFile` logs nobody out, since it changes the next login rather than
+any session already open, but it does rewrite the `gemdb` command, which
+carries the password.
+
 The engine version is read from the product's `version.txt`, because it names
 the GCI library GemDB Code loads.
 
