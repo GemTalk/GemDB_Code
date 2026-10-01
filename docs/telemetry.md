@@ -121,9 +121,10 @@ ends. A cancel followed by a Resume counts as two attempts.
 Setup runs once at a time per machine (#68). Asking for it while it is already
 running in the same window — Set Up GemDB pressed during the first-run
 download, say — joins the run under way and sends nothing of its own. Asking
-for it while another window is running it waits for that window, and is
-reported like any other attempt: `completed` if the other window finished, with
-the wait counted in `durationMs`, or `cancelled` if the user stopped waiting.
+for it while another window is running it waits for that window, then runs the
+setup steps itself, which skip what that window finished. It is reported like
+any other attempt, with its own outcome and the wait counted in `durationMs`,
+or `cancelled` if the user stopped waiting (#70).
 
 A `setupStarted` with no `setupFinished` after it means the user closed VS Code
 during the download, which is the drop-out this pair measures.

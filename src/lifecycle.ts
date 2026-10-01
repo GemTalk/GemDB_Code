@@ -207,8 +207,11 @@ function paused(): void {
  * In this window, a second caller waits for the first and gets its outcome:
  * pressing Set Up GemDB or running a cell while the first-run setup is
  * downloading is the ordinary way to get here twice. In another window, the
- * setup lock keeps it waiting until this one is done, and then it finds
- * nothing left to do.
+ * setup lock keeps it waiting until this one is done, and then it runs the
+ * steps itself: each skips what is already on disk, and the checks between
+ * them still run. Files on disk are not taken for a finished setup — after an
+ * engine pin move they are all there, and the setup that left them failed on
+ * the database's version (#70).
  *
  * `gemdb.settingUp` is true for as long as one runs, so the welcome view can
  * say so instead of offering a Set Up GemDB button that would only join it.
@@ -239,19 +242,11 @@ async function runSetupOnce(extensionPath: string, trigger: Trigger): Promise<Se
       cancellable: true,
     },
     async (progress, token): Promise<SetupOutcome> => {
-      let waited = false;
       try {
         const prepared = await withSetupLockWhenFree(
-          async () => {
-            if (waited && isInstalled()) {
-              log('Another window finished setting GemDB up.');
-              return true;
-            }
-            return prepareFiles(extensionPath, progress, token);
-          },
+          () => prepareFiles(extensionPath, progress, token),
           {
             onWaiting: () => {
-              waited = true;
               progress.report({
                 message: 'Waiting for another VS Code window to finish setting GemDB up…',
               });
