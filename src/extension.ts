@@ -41,7 +41,7 @@ import {
   osConfigAllowsStart,
 } from './osConfig';
 import { diskSnapshot } from './paths';
-import { isSupportedPlatform, setContext } from './platform';
+import { isSupportedPlatform, setContext, setupFootprint } from './platform';
 import { isRunning, isRunningAsync } from './processes';
 import { renameOwner } from './pythonQueries';
 import { openRepl, runFile } from './repl';
@@ -421,7 +421,10 @@ async function prepareOnFirstRun(extensionPath: string, refresh: () => void): Pr
         ranSetup: false,
       };
     }
-    log('First run: preparing GemDB. This downloads about 210 MB and uses about 820 MB of disk.');
+    const { download, disk } = setupFootprint();
+    log(
+      `First run: preparing GemDB. This downloads about ${download} and uses about ${disk} of disk.`,
+    );
 
     // The download and the permission prompt run side by side, deliberately.
     //

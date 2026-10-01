@@ -128,7 +128,8 @@ export function removeEngine(version = engineVersion()): void {
  * Fetch a URL to a file, resuming a previous attempt if one was interrupted.
  *
  * Exported for the tests in `src/__tests__/download.test.ts`, which drive it
- * against a local server rather than the 210 MB the extension really fetches.
+ * against a local server rather than the hundreds of megabytes the extension
+ * really fetches.
  * Everything interesting here is a reply the real server almost never sends —
  * a range request ignored, a 416, a truncated body — so a fixture is the only
  * practical way to see those paths run.
@@ -242,11 +243,21 @@ export function downloadFile(
           // A truncated download would otherwise be renamed into place and
           // fail much later, during extraction, with nothing pointing back
           // here. Checking the size makes that failure land where it belongs.
+          //
+          // Too large is checked too, and said differently: it means something
+          // else wrote to the partial file as well — two setups at once was
+          // how it happened (#68) — and "ended early" over a byte count larger
+          // than the total reads as nonsense.
           const finalSize = partialSize();
           if (total > 0 && finalSize !== total) {
             discardPartial();
             reject(
-              new Error(`The download ended early (${finalSize} of ${total} bytes). Try again.`),
+              new Error(
+                finalSize < total
+                  ? `The download ended early (${finalSize} of ${total} bytes). Try again.`
+                  : `The download came out larger than expected (${finalSize} bytes, not ` +
+                      `${total}). Try again.`,
+              ),
             );
             return;
           }
@@ -287,9 +298,9 @@ export function downloadFile(
 /**
  * Extraction runs out of process and is awaited, never `execFileSync`.
  *
- * This is the longest step after the download — copying about 900 MB out of
- * the image — and running it synchronously blocks the extension host for its
- * whole duration.
+ * This is the longest step after the download — copying about 380 MB out of
+ * the disk image, or unpacking about 1 GB from the zip — and running it
+ * synchronously blocks the extension host for its whole duration.
  * That freezes every other extension sharing the host, stops the progress
  * messages below from telling anyone anything, and makes Cancel unclickable,
  * because flipping a CancellationToken needs an event loop that is free to run.

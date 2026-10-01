@@ -2,12 +2,12 @@
 
 The first time GemDB activates, it:
 
-1. Starts downloading the database engine (about 210 MB).
+1. Starts downloading the database engine (about 145 MB on macOS, 450 MB on Linux).
 2. Asks permission for one operating-system change — while that downloads.
 3. Unpacks the engine and creates one database under `~/GemDB`.
 4. Starts the database, so it's ready before you are.
 
-That's about **820 MB on disk** when it settles. Python support is already in
+That's about **700 MB on disk** on macOS, and **1.4 GB** on Linux, when it settles. Python support is already in
 the database GemDB creates — there's no separate install step to wait through.
 
 ### The one thing it asks for

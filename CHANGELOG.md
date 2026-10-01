@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Setup no longer fails when it is asked for twice.** Pressing **Set Up GemDB**, or running a
+  cell, while the first-run setup was still downloading started a second download into the same
+  file, and both failed — one with "The download ended early (452662077 of 449106447 bytes)" (#68).
+  A second request now waits for the setup already under way, in this window or another, and the
+  sidebar says setup is running instead of offering the button again.
+- **Setup says what it will cost on this machine.** The sidebar, the walkthrough and the log said
+  about 210 MB to download and 820 MB on disk everywhere. It is about 145 MB and 700 MB on macOS,
+  and about 450 MB and 1.4 GB on Linux.
 - **The MCP server comes back when the database is already running.** Opening a window started
   it only along with the database, so a router that a reboot or a restarted stone took away stayed
   down until the first line of Python — and Claude Code, which connects to the address directly,

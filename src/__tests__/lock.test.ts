@@ -1,9 +1,9 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { __resetSettings, __setSetting } from '../__mocks__/vscode';
-import { STONE_LOCK_NAME, withSetupLock, withStoneLock } from '../lock';
+import { STONE_LOCK_NAME, withSetupLock, withSetupLockWhenFree, withStoneLock } from '../lock';
 
 // Setup runs unattended when the extension activates, and activation happens in
 // every open window — so this lock is what stands between one download and two
@@ -100,6 +100,66 @@ describe('withSetupLock', () => {
     expect(overlapped).toBe(false);
     expect(results.filter((r) => r === 'worked')).toHaveLength(1);
     expect(results.filter((r) => r === undefined)).toHaveLength(1);
+  });
+});
+
+/**
+ * The waiting form, for a setup someone asked for. Stepping aside would leave
+ * them with nothing, and going ahead is two downloads into one file (#68).
+ */
+describe('withSetupLockWhenFree', () => {
+  const neverStop = { onWaiting: () => {}, stopWaiting: () => false, pollMs: 5 };
+
+  it('runs at once when nothing holds the lock, and releases it afterwards', async () => {
+    let waited = false;
+
+    const result = await withSetupLockWhenFree(async () => 'done', {
+      ...neverStop,
+      onWaiting: () => (waited = true),
+    });
+
+    expect(result).toBe('done');
+    expect(waited).toBe(false);
+    expect(fs.existsSync(lockFile())).toBe(false);
+  });
+
+  it('waits for another process to release the lock, then runs', async () => {
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(lockFile(), String(process.ppid));
+    const onWaiting = vi.fn();
+    setTimeout(() => fs.unlinkSync(lockFile()), 30);
+
+    const result = await withSetupLockWhenFree(async () => 'ran', { ...neverStop, onWaiting });
+
+    expect(result).toBe('ran');
+    expect(onWaiting).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up without running when told to stop waiting', async () => {
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(lockFile(), String(process.ppid));
+    let ran = false;
+
+    const result = await withSetupLockWhenFree(
+      async () => {
+        ran = true;
+      },
+      { ...neverStop, stopWaiting: () => true },
+    );
+
+    expect(result).toBeUndefined();
+    expect(ran).toBe(false);
+    expect(fs.readFileSync(lockFile(), 'utf8')).toBe(String(process.ppid));
+  });
+
+  it('runs straight through for a caller in this process that already holds the lock', async () => {
+    // The first-run setup takes the lock and then reaches the setup body that
+    // waits for it; waiting there would be waiting on itself.
+    const result = await withSetupLock(() =>
+      withSetupLockWhenFree(async () => 'nested', { ...neverStop, stopWaiting: () => true }),
+    );
+
+    expect(result).toBe('nested');
   });
 });
 

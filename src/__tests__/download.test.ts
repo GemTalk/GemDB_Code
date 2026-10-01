@@ -12,8 +12,9 @@ import { downloadFile } from '../engine';
  * Everything worth testing here is a reply the real engine catalog almost never
  * sends: a range request answered with the whole file, a 416, a body that stops
  * early. Waiting to meet those in the wild means meeting them on a user's
- * machine, and the real download is 210 MB — so the fixture is a local server
- * serving a few dozen bytes, and the whole file runs in milliseconds.
+ * machine, and the real download is hundreds of megabytes — so the fixture is a
+ * local server serving a few dozen bytes, and the whole file runs in
+ * milliseconds.
  */
 
 const BODY = Buffer.from('0123456789abcdefghijklmnopqrstuvwxyz');
@@ -137,6 +138,27 @@ describe('downloadFile', () => {
 
     // The point of the check: a truncated archive must never reach the target,
     // where the next run would take it for a complete download.
+    expect(fs.existsSync(target)).toBe(false);
+  });
+
+  it('says a file grew past the advertised size, rather than that it ended early', async () => {
+    // What a second writer to the partial file produces — two setups at once
+    // (#68). The server pauses halfway so the intruder can append its bytes.
+    const half = BODY.length / 2;
+    handler = (_req, res) => {
+      res.writeHead(200, { 'content-length': String(BODY.length) });
+      res.write(BODY.subarray(0, half));
+      const appendOnceWritten = setInterval(() => {
+        if (!fs.existsSync(`${target}.part`) || fs.statSync(`${target}.part`).size < half) return;
+        clearInterval(appendOnceWritten);
+        fs.appendFileSync(`${target}.part`, Buffer.alloc(BODY.length));
+        res.end(BODY.subarray(half));
+      }, 5);
+    };
+
+    const download = downloadFile(baseUrl, target, progress, token);
+
+    await expect(download).rejects.toThrow(/larger than expected/);
     expect(fs.existsSync(target)).toBe(false);
   });
 

@@ -1,5 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { __resetSettings } from '../__mocks__/vscode';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as vscode from 'vscode';
+import { __resetSettings, __setSetting } from '../__mocks__/vscode';
 import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 
 // `runSetup` is the shared body of `prepare()`, `install()` and
@@ -39,6 +43,7 @@ vi.mock('../grail', () => ({
 }));
 
 const { runSetup } = await import('../lifecycle');
+const { engineDirName } = await import('../paths');
 // Constants on the act side, literals on the assert side: the expectations pin
 // the wire value, so renaming one must fail here rather than silently split a
 // series in App Insights.
@@ -46,9 +51,35 @@ const { TRIGGER, initTelemetry } = await import('../telemetry');
 const { initUnattendedSetupMarker, readUnattendedSetupMarker, writeUnattendedSetupMarker } =
   await import('../unattendedSetupMarker');
 
+let root: string;
+
+/** What another VS Code window's setup looks like from here: its claim on the lock. */
+function holdLockForAnotherWindow(): void {
+  // Our parent is alive, and is not us — the same stand-in lock.test.ts uses.
+  fs.writeFileSync(path.join(root, '.gemdb-setup.lock'), String(process.ppid));
+}
+
+function releaseLockFromAnotherWindow(): void {
+  fs.unlinkSync(path.join(root, '.gemdb-setup.lock'));
+}
+
+/** Leave on disk what a finished setup leaves, as another window would. */
+function finishSetupInAnotherWindow(): void {
+  fs.mkdirSync(path.join(root, engineDirName()));
+  fs.mkdirSync(path.join(root, 'db', 'data'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'db', 'data', 'extent0.dbf'), '');
+  fs.mkdirSync(path.join(root, 'grail'));
+  fs.writeFileSync(path.join(root, 'grail', 'GRAIL_VERSION'), 'test');
+  releaseLockFromAnotherWindow();
+}
+
 describe('runSetup', () => {
   beforeEach(() => {
     __resetSettings();
+    // Setup takes the machine-wide setup lock, which lives in the root path —
+    // never the real one, where a running GemDB window could be holding it.
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'gemdb-setup-'));
+    __setSetting('gemdb.rootPath', root);
     installEngine.mockReset().mockResolvedValue('/engine');
     createDatabase.mockReset().mockReturnValue({ created: true, preloaded: true });
     stageGrail.mockReset();
@@ -59,6 +90,12 @@ describe('runSetup', () => {
     const context = fakeExtensionContext();
     initTelemetry(context, false);
     initUnattendedSetupMarker(context.globalStorageUri.fsPath);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    fs.rmSync(root, { recursive: true, force: true });
   });
 
   it('completes when every step succeeds', async () => {
@@ -119,6 +156,98 @@ describe('runSetup', () => {
     expect(outcome).toBe('completed');
     expect(stageGrail).toHaveBeenCalledWith('/ext');
     expect(readUnattendedSetupMarker()).toBe('completed');
+  });
+
+  it('joins a setup already under way rather than starting a second download', async () => {
+    // #68: the first-run setup was downloading when Set Up GemDB was pressed,
+    // and two downloads into one `.part` file failed them both.
+    let finishDownload: (enginePath: string) => void = () => {};
+    installEngine.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          finishDownload = resolve;
+        }),
+    );
+
+    const first = runSetup('/ext', TRIGGER.firstRun);
+    const second = runSetup('/ext', TRIGGER.installCommand);
+    finishDownload('/engine');
+
+    expect(await Promise.all([first, second])).toEqual(['completed', 'completed']);
+    expect(installEngine).toHaveBeenCalledTimes(1);
+    expect(eventsNamed('setupStarted')).toHaveLength(1);
+  });
+
+  it('runs again once the setup under way has finished', async () => {
+    installEngine.mockRejectedValueOnce(new Error('ECONNRESET'));
+
+    const first = await runSetup('/ext', TRIGGER.firstRun);
+    const second = await runSetup('/ext', TRIGGER.installCommand);
+
+    expect([first, second]).toEqual(['failed', 'completed']);
+    expect(installEngine).toHaveBeenCalledTimes(2);
+  });
+
+  it('tells the welcome view a setup is under way for as long as it runs', async () => {
+    const settingUp: unknown[] = [];
+    const registration = vscode.commands.registerCommand('setContext', (key, value) => {
+      if (key === 'gemdb.settingUp') settingUp.push(value);
+    });
+
+    await runSetup('/ext', TRIGGER.installCommand);
+    registration.dispose();
+
+    expect(settingUp).toEqual([true, false]);
+  });
+
+  describe('while another window is setting up', () => {
+    beforeEach(() => {
+      holdLockForAnotherWindow();
+      vi.useFakeTimers({ toFake: ['setTimeout'] });
+    });
+
+    it('waits for it, and downloads nothing once it has finished', async () => {
+      const outcome = runSetup('/ext', TRIGGER.installCommand);
+      await vi.advanceTimersByTimeAsync(3000);
+      finishSetupInAnotherWindow();
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(await outcome).toBe('completed');
+      expect(installEngine).not.toHaveBeenCalled();
+    });
+
+    it('waits for it, and sets up here if it stopped short', async () => {
+      const outcome = runSetup('/ext', TRIGGER.notebook);
+      await vi.advanceTimersByTimeAsync(3000);
+      const downloadsWhileWaiting = installEngine.mock.calls.length;
+      releaseLockFromAnotherWindow();
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(downloadsWhileWaiting).toBe(0);
+      expect(await outcome).toBe('completed');
+      expect(installEngine).toHaveBeenCalledTimes(1);
+    });
+
+    it('stops waiting when cancelled, and leaves that window to carry on', async () => {
+      const token = {
+        isCancellationRequested: false,
+        onCancellationRequested: () => ({ dispose: () => {} }),
+      };
+      vi.spyOn(vscode.window, 'withProgress').mockImplementation(
+        (_options, task) => task({ report: () => {} }, token as vscode.CancellationToken) as never,
+      );
+
+      const outcome = runSetup('/ext', TRIGGER.notebook);
+      await vi.advanceTimersByTimeAsync(1000);
+      token.isCancellationRequested = true;
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(await outcome).toBe('cancelled');
+      expect(installEngine).not.toHaveBeenCalled();
+      expect(fs.readFileSync(path.join(root, '.gemdb-setup.lock'), 'utf8')).toBe(
+        String(process.ppid),
+      );
+    });
   });
 
   it('is cancelled when a step throws "Download cancelled"', async () => {
