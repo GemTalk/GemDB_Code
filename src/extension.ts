@@ -19,7 +19,7 @@ import {
   writeUnattendedSetupMarker,
 } from './unattendedSetupMarker';
 import { isExternalDatabase, mcpEnabled, mcpReadOnly } from './config';
-import { cliDirPath, putCliOnPath } from './cli';
+import { cliDirPath, ensureCliCurrent, putCliOnPath } from './cli';
 import { onDidAttemptGrailInstall } from './grail';
 import { withSetupLock } from './lock';
 import { disposeLog, log, showLog } from './log';
@@ -62,6 +62,16 @@ import {
   reportActivation,
   reportUnattendedSetupSkipped,
 } from './telemetry';
+
+/**
+ * The settings that choose which database GemDB logs in to, so changing one
+ * leaves every session on the old database. `passwordFile` is not one of
+ * them: it is read again at every login, so a new file changes the next
+ * login and leaves the sessions already open alone.
+ */
+const EXTERNAL_DATABASE_SETTINGS = ['gemstone', 'globalDirectory', 'stone', 'netldi', 'user'].map(
+  (key) => `gemdb.externalDatabase.${key}`,
+);
 
 export function activate(context: vscode.ExtensionContext): void {
   const stopwatch = Stopwatch.start();
@@ -317,6 +327,20 @@ export function activate(context: vscode.ExtensionContext): void {
 
       if (event.affectsConfiguration('gemdb.externalDatabase')) {
         setContext('gemdb.externalDatabase', isExternalDatabase());
+        if (EXTERNAL_DATABASE_SETTINGS.some((key) => event.affectsConfiguration(key))) {
+          log('The database setting changed. Logging out of the previous database.');
+          // Every notebook's session is bound to the previous database.
+          logoutAll();
+          // The router's record lives under the root path, which has not
+          // moved, so it is still read; stopping it by session would send
+          // that database's session id to this one.
+          void stopMcpServer({ bySession: false }).then(() => status.refresh());
+        }
+        // `bin/gemdb` is the same path with the previous settings, and the
+        // password, written into it, so a new terminal's `gemdb` would still
+        // reach the old database. The password file is why this is outside
+        // the check above: a new one changes no session, but it changes this.
+        if (isSupportedPlatform() && isInstalled()) ensureCliCurrent(extensionPath);
         status.refresh();
       }
 

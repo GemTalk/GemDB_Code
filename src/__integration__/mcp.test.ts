@@ -282,6 +282,26 @@ describe.skipIf(!havePayload || !haveExtent || !canMakeFixture())(
       expect(reply.status, reply.raw).toBe(200);
     }, 120_000);
 
+    // What a change of external database settings leaves GemDB with: a
+    // recorded session id from the previous database, which must not be sent
+    // to this one. The signal alone has to end the router and its workers.
+    it('stops by signal alone, without ending its session from inside', async () => {
+      await stopMcpServer();
+      const baseline = sessionCount();
+      expect(await startMcpServer()).toBe(true);
+      const reply = await mcpRequest('initialize', {}, { id: 10 });
+      expect(reply.status, reply.raw).toBe(200);
+
+      await stopMcpServer({ bySession: false });
+      for (let attempt = 0; attempt < 40 && sessionCount() > baseline; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+
+      expect(await isPortOpen(mcpPort())).toBe(false);
+      expect(readRouterState()).toBeUndefined();
+      expect(sessionCount()).toBe(baseline);
+    }, 180_000);
+
     // `gemdb.mcp.readOnly` promises something specific, and the way it could
     // fail is the way a user cannot check: a router that forked read-WRITE
     // while the setting said read-only answers every tool call exactly as it

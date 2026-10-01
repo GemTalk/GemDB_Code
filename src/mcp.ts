@@ -681,8 +681,13 @@ export async function startMcpServer(): Promise<boolean> {
  * would hold one of the ten sessions until the stone was force-stopped.
  * `mcp.test.ts` in the integration suite is what keeps it honest — it asserts
  * the session count returns to its baseline after a client has connected.
+ *
+ * `bySession: false` skips the first route, for a router that logged in to a
+ * database GemDB's settings no longer name. Its recorded session id belongs
+ * to that database, and `topazLogin()` now reaches the new one, where the
+ * same id is someone else's session or nobody's.
  */
-export async function stopMcpServer(): Promise<void> {
+export async function stopMcpServer({ bySession = true } = {}): Promise<void> {
   const port = mcpPort();
   const state = await mcpServerState(port);
   if (!state.running) {
@@ -698,7 +703,7 @@ export async function stopMcpServer(): Promise<void> {
   }
 
   logStep('Stopping the MCP server');
-  if (state.sessionId !== undefined) {
+  if (bySession && state.sessionId !== undefined) {
     try {
       await runTopaz(
         [topazLogin(), 'run', `System stopSession: ${state.sessionId}`, '%', 'logout', 'exit'].join(

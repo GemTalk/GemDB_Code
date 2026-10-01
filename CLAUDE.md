@@ -124,7 +124,8 @@ extension starts a kernel per notebook.
 
 Three consequences are easy to miss. **Anything that invalidates the database
 must log out _every_ session**, not the extension's own — `logoutAll()`, which
-is why installing Grail, uninstalling, and a root-path change all call it; a
+is why installing Grail, uninstalling, a root-path change, and a change to the
+`gemdb.externalDatabase.*` settings that name a database all call it; a
 notebook left logged in would keep a view of a database that no longer exists.
 **Anything that runs in a notebook's scope must run in that notebook's
 session**: the scope dictionary lives in that session's SessionTemps, so

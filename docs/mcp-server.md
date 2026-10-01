@@ -244,6 +244,16 @@ the session id at fork time in `<rootPath>/mcp-router.json`, which is *outside*
 `mcp/` because staging replaces that directory wholesale and a running router
 must survive an update.
 
+One caller skips the clean stop and goes straight to the signal:
+`stopMcpServer({ bySession: false })`, when a `gemdb.externalDatabase.*`
+setting that names a database changes. The record survives that change,
+because the root path has not moved, but the session id in it belongs to the
+previous database. `topazLogin()` now reaches the new one, where that id is
+someone else's session or nobody's. The signal alone is enough. Measured
+2026-10-01, `mcp.test.ts` again: after SIGTERM to a router with one client
+connected, the session count was back to its baseline, so the worker
+followed the router down here too.
+
 ## Registering it with clients
 
 Two problems with two different answers, and the asymmetry is the automation
