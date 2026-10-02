@@ -711,8 +711,18 @@ async function startProcesses(
   }
   if (!findNetldi(running)) {
     progress?.report({ message: 'Starting the session listener…' });
-    await startNetldi();
-    startedNetldi = true;
+    try {
+      await startNetldi();
+      startedNetldi = true;
+    } catch (e) {
+      // The check above and the start are not atomic, and other starts are
+      // not rare: the auto-start after first-run setup, a second window, a
+      // `gemdb` in a terminal. One that wins in between makes startnetldi
+      // refuse ("Server 'gemdbldi' is already running"), and Start reported
+      // a failure while everything it was asked for was true.
+      if (!findNetldi()) throw e;
+      log('Another process started the session listener.');
+    }
   } else {
     log('The session listener is already running.');
   }

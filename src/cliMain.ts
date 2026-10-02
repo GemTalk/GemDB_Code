@@ -33,7 +33,13 @@ async function ensureDatabase(): Promise<boolean> {
       process.stderr.write('gemdb: starting the database…\r\n');
       await startStone();
     }
-    if (!findNetldi()) await startNetldi();
+    if (!findNetldi()) {
+      // Raced like lifecycle.ts's start: another process may start the
+      // listener between the check and this call, and then it is up.
+      await startNetldi().catch((e: unknown) => {
+        if (!findNetldi()) throw e;
+      });
+    }
     return true;
   } catch (e) {
     // Raw mode may be on by now, so bare `\n` would stairstep the message.

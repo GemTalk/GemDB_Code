@@ -126,6 +126,32 @@ describe('databaseStarted', () => {
     expect(eventsNamed('databaseStarted')).toHaveLength(1);
   });
 
+  it('counts a listener another process started in the meantime as started', async () => {
+    // Pressing Start while the auto-start after first-run setup is still
+    // under way: both see no listener, the other wins, and startnetldi
+    // refuses with "already running". What Start was asked for is true.
+    let listenerUp = false;
+    findNetldi.mockImplementation(() => listenerUp);
+    startNetldi.mockImplementationOnce(async () => {
+      listenerUp = true;
+      throw new Error('Start session listener failed (exit code 1).');
+    });
+
+    expect(await ensureRunning('/ext', TRIGGER.startCommand)).toBe(true);
+    expect(eventsNamed('databaseStarted').map((e) => e.properties?.outcome)).not.toContain(
+      'startFailed',
+    );
+  });
+
+  it('still fails a listener start that leaves no listener running', async () => {
+    findNetldi.mockReturnValue(false);
+    startNetldi.mockImplementationOnce(async () => {
+      throw new Error('Start session listener failed (exit code 1).');
+    });
+
+    expect(await ensureRunning('/ext', TRIGGER.startCommand)).toBe(false);
+  });
+
   it('reports a script that did not take as osConfigFailed, not a decline', async () => {
     // The user said yes and the sudo script ran, but shared memory is still
     // short — a mistyped password, a cancelled script. Counting that as a
