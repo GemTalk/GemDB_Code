@@ -671,6 +671,25 @@ export async function resumeMcpServing(extensionPath: string): Promise<boolean> 
   return ensureMcpServing(extensionPath);
 }
 
+/**
+ * What activation does for a database that is already running.
+ *
+ * Usually only the MCP server is outstanding, and `resumeMcpServing` brings it
+ * back. But a fresh install can be running with Python support never filed in:
+ * a `gemdb` command in the seconds between first-run setup and the auto-start
+ * starts the stone itself, and only `ensureRunning` files Grail in. Left to
+ * `resumeMcpServing`, `gemdb` then never ran Python until the user pressed
+ * Start or ran a cell. An external database is left to its administrator, as
+ * everywhere else on the unasked path.
+ */
+export async function resumeRunning(extensionPath: string): Promise<boolean> {
+  if (!isExternalDatabase() && isInstalled() && !grailInstalled()) {
+    log('The database is running without Python support; installing it.');
+    return ensureRunning(extensionPath, TRIGGER.autoStart);
+  }
+  return resumeMcpServing(extensionPath);
+}
+
 /** Start whichever of the two processes is not already up. */
 async function startProcesses(
   progress?: vscode.Progress<{ message?: string }>,

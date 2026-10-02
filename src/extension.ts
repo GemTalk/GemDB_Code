@@ -6,7 +6,7 @@ import {
   isInstalled,
   prepare,
   reinstallGrail,
-  resumeMcpServing,
+  resumeRunning,
   start,
   stop,
   uninstall,
@@ -585,8 +585,10 @@ async function autoStart(extensionPath: string, refresh: () => void): Promise<vo
   if (autoStartSuppressed()) return;
   if (isRunning()) {
     // Up already — an external database always is — but the MCP server it had
-    // may not be. Under the lock, so two windows do not both fork one.
-    await withSetupLock(() => resumeMcpServing(extensionPath));
+    // may not be, and on a fresh install that a `gemdb` command started,
+    // neither is Python support (see resumeRunning). Under the lock, so two
+    // windows do not both fork one.
+    await withSetupLock(() => resumeRunning(extensionPath));
     refresh();
     return;
   }

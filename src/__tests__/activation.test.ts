@@ -28,6 +28,7 @@ vi.mock('../lifecycle', () => ({
   ensureMcpRunning: async () => false,
   ensureRunning: async () => false,
   resumeMcpServing: async () => false,
+  resumeRunning: async () => false,
   install: async () => {},
   prepare: () => prepare(),
   reinstallGrail: async () => {},

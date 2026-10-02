@@ -11,12 +11,13 @@ import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 vi.mock('../cli', () => ({ writeCliScripts: () => {}, ensureCliCurrent: () => true }));
 
 const bundledGrailStamp = vi.fn(() => 'grail=0.1-1-gabc\n');
+const fileInGrail = vi.fn(async () => {});
 const grailNeedsUpdate = vi.fn(() => false);
 vi.mock('../grail', () => ({
   grailLabel: () => 'grail 0.1',
   grailNeedsUpdate: () => grailNeedsUpdate(),
   stageGrail: () => {},
-  fileInGrail: async () => {},
+  fileInGrail: () => fileInGrail(),
   bundledGrailStamp: () => bundledGrailStamp(),
 }));
 
@@ -69,7 +70,7 @@ vi.mock('../autoStart', () => ({
   suppressAutoStart: () => {},
 }));
 
-const { ensureRunning } = await import('../lifecycle');
+const { ensureRunning, resumeRunning } = await import('../lifecycle');
 // Constants on the act side, literals on the assert side: the expectations pin
 // the wire value, so renaming one must fail here rather than silently split a
 // series in App Insights.
@@ -114,6 +115,25 @@ describe('databaseStarted', () => {
       outcome: 'started',
       filedGrail: 'no',
     });
+  });
+
+  it('installs Python support into a running database that never had it', async () => {
+    // A `gemdb` command in the seconds between first-run setup and the
+    // auto-start starts the stone itself, without Grail. The auto-start finds
+    // it running; resuming only MCP left `gemdb` unable to run Python.
+    grailInstalled.mockReturnValue(false);
+    grailNeedsUpdate.mockReturnValue(true);
+    fileInGrail.mockClear();
+
+    expect(await resumeRunning('/ext')).toBe(true);
+    expect(fileInGrail).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a running database that has Python support to MCP alone', async () => {
+    fileInGrail.mockClear();
+
+    await resumeRunning('/ext');
+    expect(fileInGrail).not.toHaveBeenCalled();
   });
 
   it('sends started when the stone had to be started', async () => {
