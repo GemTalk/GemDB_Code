@@ -222,6 +222,58 @@ describe.skipIf(!ready || !canMakeFixture())('the gemdb command', () => {
     expect(ran.code).toBe(0);
   });
 
+  it('stops on Ctrl-C, after finally blocks, rather than at a topaz prompt', async () => {
+    // A real Ctrl-C needs a real terminal: the line discipline turns ^C into
+    // SIGINT for topaz, which sends the gem a soft break. expect(1) owns the
+    // pty, as in repl.test.ts. The script blocks in a primitive, where a web
+    // server spends its life, rather than spinning in Python.
+    fs.writeFileSync(
+      path.join(workDir, 'serve.py'),
+      'import time\nprint("serving", flush=True)\ntry:\n    while True:\n        time.sleep(0.2)\n' +
+        'finally:\n    print("cleaned up", flush=True)\n',
+    );
+    const scriptPath = path.join(workDir, 'interrupt.exp');
+    fs.writeFileSync(
+      scriptPath,
+      `set timeout 90
+spawn ${cliPath()} serve.py
+expect {
+  -ex "serving" {}
+  timeout { puts stderr "TIMEOUT waiting to serve"; exit 9 }
+}
+sleep 1
+send "\\003"
+expect {
+  -ex "topaz 1>" { puts stderr "STRANDED at a topaz prompt"; exit 7 }
+  timeout { puts stderr "TIMEOUT: still running after Ctrl-C"; exit 9 }
+  eof {}
+}
+catch wait result
+exit [lindex $result 3]
+`,
+    );
+    const ran = await new Promise<{ code: number; transcript: string }>((resolve) => {
+      execFile(
+        '/usr/bin/expect',
+        ['-f', scriptPath],
+        { cwd: workDir, timeout: 115_000 },
+        (error, stdout, stderr) => {
+          const code =
+            error && typeof (error as NodeJS.ErrnoException & { code?: unknown }).code === 'number'
+              ? ((error as unknown as { code: number }).code as number)
+              : error
+                ? 1
+                : 0;
+          resolve({ code, transcript: stdout + stderr });
+        },
+      );
+    });
+    expect(ran.transcript).toContain('cleaned up');
+    expect(ran.transcript).toContain('KeyboardInterrupt');
+    expect(ran.transcript).not.toContain('topaz 1>');
+    expect(ran.code).toBe(130);
+  });
+
   it('raises EOFError when stdin runs dry', async () => {
     const ran = await run(['-c', 'input()'], '');
     expect(ran.stderr).toContain('EOF');
