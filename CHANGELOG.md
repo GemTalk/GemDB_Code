@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Two windows, or a window and a `gemdb` command, no longer take the same lock at once.** Taking
+  over a lock left behind by a crash is now one process at a time, so two windows that both found
+  it stale cannot both go ahead and download into one file. A lock that has just been taken, with no
+  owner written into it yet, is no longer mistaken for debris and removed, which could let a second
+  stone start on the same database. Nothing removes a lock it does not own. A window that finds
+  another process starting the database now waits for it, for up to a minute, instead of carrying
+  on as if it were already running.
+
 ## [1.5.4] - 2026-10-01
 
 The engine is unchanged at GemStone 4.0.0.a4, so a database created by GemDB

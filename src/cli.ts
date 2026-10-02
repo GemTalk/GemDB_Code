@@ -461,6 +461,48 @@ fi
     : ''
 }if ! stone_is_up; then
   STONE_LOCK="$ROOT/.gemdb-stone.lock"
+  # mkdir and the pid write are two steps, here and in the extension, so a
+  # lock with no pid yet is one being taken right now. It is debris only once
+  # it is older than a few seconds. stat spells mtime differently on GNU and
+  # macOS; GNU is tried first because its -f means something else.
+  older_than_5s() {
+    local m; m=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null) || return 1
+    [ -n "$m" ] && [ $(( $(date +%s) - m )) -gt 5 ]
+  }
+  stone_lock_is_stale() {
+    [ -d "$STONE_LOCK" ] || return 1
+    local owner; owner=$(cat "$STONE_LOCK/pid" 2>/dev/null)
+    case "$owner" in
+      ''|*[!0-9]*) older_than_5s "$STONE_LOCK" ;;
+      *) ! kill -0 "$owner" 2>/dev/null ;;
+    esac
+  }
+  release_stone_lock() {
+    [ "$(cat "$STONE_LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$STONE_LOCK"
+  }
+  # A steal guard older than a few seconds is debris from a stealer that died
+  # inside it. Taking it over is the extension's scheme: move it to a name of
+  # our own and check it is the guard we judged old (same inode and mtime),
+  # since deleting it in place could delete a fresh one someone took
+  # meanwhile. A live one moved by mistake is replaced with mkdir, never by
+  # moving ours back: mv onto a directory moves into it, and rmdir could never
+  # clear the guard again. This closes the two-stealer race; three at once
+  # over a dead guard can still pair up, until Step 5's kernel locks.
+  inode_and_mtime() { stat -c '%i %Y' "$1" 2>/dev/null || stat -f '%i %m' "$1" 2>/dev/null; }
+  take_stale_guard() {
+    local guard="$STONE_LOCK.steal" seen tomb took=1
+    seen=$(inode_and_mtime "$guard") && [ -n "$seen" ] || return 1
+    [ $(( $(date +%s) - \${seen#* } )) -gt 5 ] || return 1
+    tomb="$guard.$$.$RANDOM"
+    mv "$guard" "$tomb" 2>/dev/null || return 1
+    if [ "$(inode_and_mtime "$tomb")" = "$seen" ]; then
+      mkdir "$guard" 2>/dev/null && took=0
+    else
+      mkdir "$guard" 2>/dev/null
+    fi
+    rm -rf "$tomb"
+    return "$took"
+  }
   held=""
   tries=0
   while [ "$tries" -lt 100 ]; do
@@ -471,11 +513,16 @@ fi
     fi
     # Held by someone. A lock whose owner is gone is debris from a crash and
     # must not block every later command; one whose owner is alive is a start
-    # already in flight, and waiting for it is the whole point.
-    owner=$(cat "$STONE_LOCK/pid" 2>/dev/null)
-    if [ -z "$owner" ] || ! kill -0 "$owner" 2>/dev/null; then
-      rm -rf "$STONE_LOCK"
-      continue
+    # already in flight, and waiting for it is the whole point. Stealing goes
+    # through the same .steal guard the extension takes, re-checked inside it,
+    # so two stealers cannot both remove a lock and the second remove the
+    # first one's fresh claim.
+    if stone_lock_is_stale; then
+      if mkdir "$STONE_LOCK.steal" 2>/dev/null || take_stale_guard; then
+        stone_lock_is_stale && rm -rf "$STONE_LOCK"
+        rmdir "$STONE_LOCK.steal" 2>/dev/null
+        continue
+      fi
     fi
     stone_is_up && break
     sleep 0.1
@@ -489,12 +536,12 @@ fi
     if ! stone_is_up; then
       echo "gemdb: starting the database…" >&2
       if ! "$GEMSTONE/bin/startstone" -l "$ROOT/db/log/$STONE.log" "$STONE" >/dev/null 2>&1; then
-        rm -rf "$STONE_LOCK"
+        release_stone_lock
         echo "gemdb: the database at $ROOT could not be started. See $ROOT/db/log/$STONE.log" >&2
         exit 1
       fi
     fi
-    rm -rf "$STONE_LOCK"
+    release_stone_lock
   elif ! stone_is_up; then
     echo "gemdb: the database is not running and another process has been starting it for" >&2
     echo "gemdb: ten seconds. See $ROOT/db/log/$STONE.log, or remove $STONE_LOCK if nothing is." >&2
