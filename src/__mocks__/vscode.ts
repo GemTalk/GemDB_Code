@@ -107,6 +107,7 @@ const FAKE_COMMON_PROPERTIES: Record<string, string> = { 'common.fake': 'yes' };
 
 /** Two-line insurance: nothing here reads `env` today, but `activate()` does. */
 export const env = {
+  machineId: 'fake-machine-id',
   remoteName: undefined as string | undefined,
   clipboard: {
     writeText: (text: string): Promise<void> => {
