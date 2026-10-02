@@ -345,6 +345,24 @@ changes. Commit or abort them first.
 
 Each session sees other sessions' commits after its own `refresh()`, `abort()` or `commit()`.
 
+### When you edit a module
+
+Your modules are compiled into the database the first time they are imported, and a commit keeps
+them there. When you change a file, the next session that imports it rebuilds it from the new
+source, and its next commit stores the new version. So the usual loop is: edit, then run or import
+the code in a fresh session (`gemdb <your-file>.py` or a new GemDB Shell), and commit.
+
+A few things to know:
+
+- **A session that is already running keeps the module it imported.** An open notebook, a GemDB
+  Shell, or a running app sees your edit only after `importlib.reload(module)` or a restart.
+- **Use `import package.module as name`, not `from package import module`,** for a module inside a
+  package you are editing. The `from` form can hand back the version already in the database
+  ([Grail #1223](https://github.com/GemTalk/Grail/issues/1223)).
+- **A function you delete from a file stays callable** after the rebuild
+  ([Grail #1219](https://github.com/GemTalk/Grail/issues/1219)). Don't rely on a removed name
+  being gone.
+
 ### The `gemdb` command
 
 Setup writes a shell command to `~/GemDB/bin/gemdb` that behaves like CPython's command line, backed
@@ -503,6 +521,26 @@ Keep the following in mind:
   commit. They can still read everything and run code, but nothing they do is saved. Switching it
   restarts the MCP server, which disconnects connected agents, and the first time you turn it on,
   GemDB Code adds an `McpReadOnly` user to your database.
+
+### Serving a web app
+
+You can serve a Flask app straight from the database: `gemdb app.py` runs it in a session of its
+own, and its routes read and write `gemdb.root` directly. Four things make it work today:
+
+- **Run single-threaded**: `app.run(threaded=False)`. Grail renders templates in green threads,
+  and the threaded server's per-request context does not reach them, so `url_for` in a template
+  fails.
+- **Close each connection after its response.** A single-threaded server waiting on a kept-alive
+  connection cannot accept the next one, so a second browser tab hangs everything
+  ([Grail #1227](https://github.com/GemTalk/Grail/issues/1227)). Pass a request handler that sets
+  `close_connection = True`, as the Brain Freeze demo's `CloseAfterResponseHandler` does.
+- **Commit before `app.run`.** Building the app compiles your code into the session, and committing
+  first keeps another session's commit from conflicting with it on every request.
+- **Take a fresh view at the start of each request**: `gemdb.commit()`, then `gemdb.refresh()`.
+  Without it, the app never sees what a notebook, an agent, or another script committed after it
+  started. Don't use `gemdb.abort()` for this: it can discard the app's own compiled code.
+
+The Brain Freeze demo below is a working app built this way.
 
 ### The Brain Freeze demo
 
