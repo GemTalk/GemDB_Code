@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A setup interrupted while unpacking the engine or creating the database no longer leaves an
+  install that looks finished.** Both are now built beside their final location and moved into
+  place only once complete, so closing the window part way through means the next start redoes that
+  step instead of failing later with a half-extracted engine or a truncated database. What an
+  interrupted run leaves behind is removed the next time setup runs.
+
 ## [1.5.4] - 2026-10-01
 
 The engine is unchanged at GemStone 4.0.0.a4, so a database created by GemDB

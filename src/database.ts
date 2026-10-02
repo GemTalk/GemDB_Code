@@ -16,17 +16,38 @@ import { databaseExists, databasePath, ensureRootPath, extentPath } from './path
  * engine's tooling expects to find.
  */
 export function createDatabase(enginePath: string): boolean {
+  // Before the check below, which a leftover never changes the answer to: a
+  // build a crash cut short is only ever found here, and nothing else would
+  // remove it. Called with the setup lock held (by prepareFiles), so no other
+  // window can be building into it at the time.
+  const staging = stagingPath();
+  if (fs.existsSync(staging)) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    log(`Removed ${staging}, left by a database creation that did not finish`);
+  }
+
   if (databaseExists()) {
     log(`Database already exists at ${databasePath()}`);
     return false;
   }
 
+  // Before the build, so a `db/` that cannot be replaced is refused before the
+  // extent copy rather than after it.
+  const dbPath = databasePath();
+  clearDatabaseDirWithoutExtent(dbPath);
+
   logStep('Creating the database');
   ensureRootPath();
 
-  const dbPath = databasePath();
+  // Built beside its final path and renamed onto it once complete, so the
+  // process dying part way through leaves `db.tmp` rather than a `db/` whose
+  // extent is truncated — which `databaseExists` would take for a finished
+  // database, and the stone would then refuse to open. Nothing is fsynced, so
+  // a power loss just after creation is not covered. The configuration names
+  // the FINAL paths throughout, because that is where the engine will read it
+  // from.
   for (const sub of ['conf', 'data', 'log', 'stat']) {
-    fs.mkdirSync(path.join(dbPath, sub), { recursive: true });
+    fs.mkdirSync(path.join(staging, sub), { recursive: true });
   }
 
   // conf/<stone>.conf — the knobs a developer might reasonably raise later.
@@ -34,7 +55,7 @@ export function createDatabase(enginePath: string): boolean {
   // engine install stays disposable: GemDB can delete and re-extract it on a
   // version change without touching the user's data.
   fs.writeFileSync(
-    path.join(dbPath, 'conf', `${STONE_NAME}.conf`),
+    path.join(staging, 'conf', `${STONE_NAME}.conf`),
     [
       '# GemDB stone configuration.',
       '# Raise SHR_PAGE_CACHE_SIZE_KB if you work with more data than fits here.',
@@ -50,7 +71,7 @@ export function createDatabase(enginePath: string): boolean {
   // object), so the stock 50 MB temporary-object cache is not enough; 500 MB
   // is the same figure Jasper settled on for large code loads.
   fs.writeFileSync(
-    path.join(dbPath, 'conf', 'gem.conf'),
+    path.join(staging, 'conf', 'gem.conf'),
     [
       '# GemDB session configuration.',
       '',
@@ -66,7 +87,7 @@ export function createDatabase(enginePath: string): boolean {
 
   // conf/system.conf — where the extent and transaction logs live.
   fs.writeFileSync(
-    path.join(dbPath, 'conf', 'system.conf'),
+    path.join(staging, 'conf', 'system.conf'),
     [
       '# GemDB system configuration. Edit conf/gemdb.conf or conf/gem.conf instead;',
       '# see conf/default.conf for every setting the engine understands.',
@@ -83,7 +104,7 @@ export function createDatabase(enginePath: string): boolean {
   // freshly-created database start at all.
   const keySource = path.join(enginePath, 'sys', 'community.starter.key');
   if (fs.existsSync(keySource)) {
-    fs.copyFileSync(keySource, path.join(dbPath, 'conf', 'gemdb.key'));
+    fs.copyFileSync(keySource, path.join(staging, 'conf', 'gemdb.key'));
   } else {
     log(`No starter key at ${keySource} — the database may refuse to start.`);
   }
@@ -92,7 +113,7 @@ export function createDatabase(enginePath: string): boolean {
   // developer can read them without going digging in the engine directory.
   const defaultConf = path.join(enginePath, 'data', 'system.conf');
   if (fs.existsSync(defaultConf)) {
-    fs.copyFileSync(defaultConf, path.join(dbPath, 'conf', 'default.conf'));
+    fs.copyFileSync(defaultConf, path.join(staging, 'conf', 'default.conf'));
   }
 
   const stock = path.join(enginePath, 'bin', 'extent0.dbf');
@@ -100,13 +121,81 @@ export function createDatabase(enginePath: string): boolean {
     throw new Error(`The engine at ${enginePath} has no initial extent at ${stock}.`);
   }
   log('Copying the initial extent…');
-  fs.copyFileSync(stock, extentPath());
+  const extent = path.join(staging, 'data', 'extent0.dbf');
+  fs.copyFileSync(stock, extent);
   // The extent ships read-only in the product tree; the engine must be able to
   // write to this copy.
-  fs.chmodSync(extentPath(), 0o644);
+  fs.chmodSync(extent, 0o644);
+
+  // `clearDatabaseDirWithoutExtent` has already removed any `db/` it could, so
+  // a rename that still finds one there is refused the same way.
+  try {
+    fs.renameSync(staging, dbPath);
+  } catch (e) {
+    try {
+      fs.rmSync(staging, { recursive: true, force: true });
+    } catch (cleanup) {
+      log(
+        `Could not remove ${staging}: ${cleanup instanceof Error ? cleanup.message : String(cleanup)}`,
+      );
+    }
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code !== 'ENOTEMPTY' && code !== 'EEXIST') throw e;
+    // Something created `db/` since it was cleared. If that is a database,
+    // it is the one to keep, not a reason to tell the user to delete it.
+    if (databaseExists()) {
+      log(`Database already exists at ${dbPath}`);
+      return false;
+    }
+    throw notADatabaseError(dbPath, fs.readdirSync(dbPath));
+  }
 
   log(`Database created at ${dbPath}`);
   return true;
+}
+
+/**
+ * Remove a `db/` that holds no extent, unless something in it is not GemDB's.
+ *
+ * GemDB keeps per-database records in `db/` (`.gemdb-grail-failed` today, the
+ * "filed in" stamps soon), and writes them there for an external database
+ * too, whose extent is elsewhere. Switching back to a local database then finds
+ * a `db/` with no extent in it. Those records describe the other database, so
+ * they are discarded rather than carried into the new one: a stamp saying Grail
+ * is filed in would be false of a fresh extent. Finder's `.DS_Store` and the
+ * `._*` files macOS writes on some volumes are discarded too. Anything else is
+ * not GemDB's to judge, so the directory is left alone and setup is refused.
+ */
+function clearDatabaseDirWithoutExtent(dbPath: string): void {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dbPath);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw e;
+  }
+  const foreign = entries.filter((name) => !isLeftByGemdbOrOs(name));
+  if (foreign.length > 0) throw notADatabaseError(dbPath, foreign);
+  fs.rmSync(dbPath, { recursive: true, force: true });
+  if (entries.length > 0)
+    log(`Removed ${dbPath}, which held no database, only ${entries.join(', ')}`);
+}
+
+function isLeftByGemdbOrOs(name: string): boolean {
+  return name.startsWith('.gemdb-') || name === '.DS_Store' || name.startsWith('._');
+}
+
+function notADatabaseError(dbPath: string, contents?: string[]): Error {
+  const holding = contents ? ` (it holds ${contents.join(', ')})` : '';
+  return new Error(
+    `${dbPath} already exists but holds no database${holding}. GemDB will not create one inside it: ` +
+      `move it aside or delete it, then start GemDB again.`,
+  );
+}
+
+/** Where `createDatabase` builds the database before renaming it into place. */
+function stagingPath(): string {
+  return `${databasePath()}.tmp`;
 }
 
 /** Delete the database directory, extent and all. */
