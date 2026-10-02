@@ -248,8 +248,11 @@ issue rather than rediscovered:
   `print(traceback.format_exc())`, not `traceback.print_exc()`: `sys.stderr` is
   None in a gem, so `print_exc()` raises inside the handler and drops the
   connection anyway. (Grail #848, #849.) Grail #1163, in every pin
-  from `372f558` on, makes `logging` accept `exc_info`. That is upstream's claim and
-  has not been re-measured here.
+  from `372f558` on, makes `logging` accept `exc_info`. Grail #1284, from
+  `9f8b116` on, goes further: a view that raises answers 500 instead of ending
+  the process, by way of a catchable `KeyError` from `%(key)s` formatting and a
+  real root logger. Both are upstream's claims and have not been re-measured
+  here.
 - **`gemdb file.py` does not put the script's directory on `sys.path`** the way
   `python3 file.py` does, and `sys.path` is otherwise empty, so a script cannot
   import the file next to it until it inserts its own directory. (Grail #847.)

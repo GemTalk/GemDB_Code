@@ -11,26 +11,35 @@
 # Bumping a pin is a one-line PR to this file; a green CI run on it is the
 # proof the new upstream commit works.
 
-# Grail: main as of 2026-09-28, 72 commits (30 PRs) on from the previous pin
-# (b86985f). The C shim, every script resources/install-grail.sh drives, and
-# the REQUIRED list in bundle-grail.sh are untouched, and nothing was deleted or
-# renamed. Built against 4.0.0.a4, the engine pin that moves with it.
+# Grail: main as of 2026-10-01, 47 commits (21 PRs) on from the previous pin
+# (84821c1). Every script resources/install-grail.sh drives and the REQUIRED
+# list in bundle-grail.sh are untouched, and nothing was deleted or renamed.
+# The C shim's SOURCE changed, so every platform rebuilds it: cpython.cc grows,
+# and shim_pyo3.cc joins it, the CPython 3.14 entry points a PyO3 wheel such as
+# pydantic_core needs (#1277, #1282). Same toolchain, no new build dependency.
 #
-# One installer change, inert for GemDB: install.gs's headroom-guarded MFC now
-# probes `System sessionsHoldingGcLock` and `System voteState` and skips when
-# another collection is under way, rather than waiting two minutes for the
-# gcLock and dying with ERROR 2501 (#1245). That MFC runs only near a
-# configured STN_MAX_REPOSITORY_SIZE, which GemDB's stone leaves unset.
+# One addition GemDB does not take up: src/c/ssl, a second C library holding
+# the four OpenSSL callbacks _ssl.py cannot make through CCallout -- server-side
+# ALPN, msg_callback, keylog and PSK (#1266). Grail's install.sh builds it and
+# passes GRAIL_SSL_LIB_PATH; resources/install-grail.sh does neither, and
+# bundle-grail.sh ships no src/c. install.gs records an unset path as nil, so
+# the install succeeds and those four raise NotImplementedError, which is what
+# they did before #1266. The rest of ssl is unaffected.
 #
-# The rest is CPython conformance: typing.py and urllib are CPython's own again
-# (#1241, #1246), CPython's ssl.py over an OpenSSL binding (#1247), NamedTuple
-# and TypedDict (#1209), xml.etree, sax and pulldom (#1211, #1231, #1248,
-# #1252), unittest.main() exiting non-zero on failure (#1257), any()/all()
-# testing truth the way `if` does (#1256), a module attribute read that no
-# longer runs the dict protocol underneath (#1259), ScaledDecimal hashing like
-# an equal int (#1260), and a @staticmethod/@classmethod that can override a
-# base's plain method (#1215).
-PINNED_GRAIL_REF=84821c1e96e5d1918284e9353e63d79771a4709d
+# Session hygiene, which bears on any app with more than one gem: a module-level
+# lru_cache in a deployed module is per-session (#1279) -- a hit wrote a shared
+# object and a miss committed its arguments -- and `Cls.x = v` on a deployed
+# class stays session-local whichever name it uses (#1278), so two gems setting
+# Flask.secret_key no longer conflict. A committed WeakSet drops dead references
+# (#1283).
+#
+# Also: a Flask view that raises answers 500 instead of ending the process
+# (#1284, by way of a catchable KeyError from `%(key)s` and a real root
+# logger), re.sub with a callable on a deployed pattern (#1285), a dotted import
+# of an unfindable package raises instead of answering nil (#1274), Fraction
+# hashing like the equal float (#1267), and statistics adding, sorting and
+# dividing as Python does (#1280).
+PINNED_GRAIL_REF=9f8b1161101608cb57d696887c672a3a5c5ce9f2
 
 # mcp_server: main as of 2026-09-25, 26 commits (8 PRs) on from the previous pin
 # (afa3790). No load.gs changed, and every selector src/mcp.ts sends --
