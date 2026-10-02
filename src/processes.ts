@@ -196,28 +196,32 @@ export async function startStone(): Promise<void> {
   // Under the lock the generated `gemdb` wrapper also takes, because both
   // doors start the same stone and nothing downstream refuses a second one.
   // The re-check inside the lock is the point: whoever we queued behind was
-  // most likely starting it, and without this we would start another.
-  await withStoneLock(async () => {
-    if (isRunning()) {
-      log('The database is already running; nothing to start.');
-      return;
-    }
-    logStep(`Starting the database`);
-    const env = engineEnvironment();
-    const stoneLog = path.join(databaseLogPath(), `${STONE_NAME}.log`);
-    const logSizeBefore = fileSize(stoneLog);
-    try {
-      await runEngineCommand(
-        path.join(env.GEMSTONE, 'bin', 'startstone'),
-        ['-l', stoneLog, STONE_NAME],
-        env,
-        'Start database',
-      );
-    } catch (e) {
-      if (refusedNfs(e, stoneLog, logSizeBefore)) throw databaseOnNfsError();
-      throw e;
-    }
-  });
+  // most likely starting it, and without this we would start another. For the
+  // same reason, a stone that comes up while we wait ends the wait.
+  await withStoneLock(
+    async () => {
+      if (isRunning()) {
+        log('The database is already running; nothing to start.');
+        return;
+      }
+      logStep(`Starting the database`);
+      const env = engineEnvironment();
+      const stoneLog = path.join(databaseLogPath(), `${STONE_NAME}.log`);
+      const logSizeBefore = fileSize(stoneLog);
+      try {
+        await runEngineCommand(
+          path.join(env.GEMSTONE, 'bin', 'startstone'),
+          ['-l', stoneLog, STONE_NAME],
+          env,
+          'Start database',
+        );
+      } catch (e) {
+        if (refusedNfs(e, stoneLog, logSizeBefore)) throw databaseOnNfsError();
+        throw e;
+      }
+    },
+    { satisfied: isRunningAsync },
+  );
 }
 
 /**

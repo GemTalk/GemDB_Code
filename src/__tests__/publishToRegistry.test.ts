@@ -278,14 +278,35 @@ describe("the CLI's own words survive", () => {
       detached: true,
     });
 
+    // Once only: stderr already in the pipe can still arrive after the kill,
+    // and killing a group that is gone throws ESRCH from the 'data' handler.
+    let killed = false;
+    const killGroup = (): void => {
+      if (killed) return;
+      killed = true;
+      try {
+        process.kill(-(child.pid as number), 'SIGKILL');
+      } catch {
+        /* already gone */
+      }
+    };
     let stderr = '';
-    child.stderr.on('data', (chunk) => (stderr += String(chunk)));
+    child.stderr.on('data', (chunk) => {
+      stderr += String(chunk);
+      // Killed the moment the CLI's words arrive, while the stub still stalls:
+      // a script that held them back until the CLI exited would never get here.
+      if (stderr.includes('Internal Server Error (500)')) killGroup();
+    });
 
     await new Promise<void>((resolve) => {
-      child.on('exit', () => resolve());
-      // Long enough for the stub to have written and for tee to have flushed,
-      // well short of the stub's stall.
-      setTimeout(() => process.kill(-(child.pid as number), 'SIGKILL'), 400);
+      // The ceiling, well short of the stub's stall. A fixed short timer here
+      // failed whenever other test files loaded the machine enough to delay
+      // the stub's first line.
+      const ceiling = setTimeout(killGroup, 3000);
+      child.on('exit', () => {
+        clearTimeout(ceiling);
+        resolve();
+      });
     });
 
     expect(stderr).toContain('Internal Server Error (500)');
