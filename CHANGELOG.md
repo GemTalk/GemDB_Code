@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-10-01
+
+The engine is unchanged at GemStone 4.0.0.a4, so a database created by GemDB
+1.5.3 carries over as it is. The bundled Python runtime moves forward.
+
 ### Added
 
 - **Use a database someone else runs.** Set `gemdb.externalDatabase.gemstone` to an engine an
@@ -62,6 +67,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attributes or items. **Remove from Persisted Objects** takes back an addition not yet committed,
   or deletes a committed entry and commits just that removal. Its **?** button explains, for someone
   new, that persisting is adding under `gemdb.root` and then committing.
+
+### Changed
+
+- **A newer Python runtime.** 47 commits across 21 pull requests since 1.5.3.
+  An application served from more than one database session conflicts less:
+  a module-level `functools.lru_cache` keeps its cache per session, as
+  CPython's is per process, and setting a class attribute such as
+  `Flask.secret_key` at run time stays in the session that set it. A Flask
+  view that raises now answers 500, where it used to end the process. `re.sub`
+  with a function works on a compiled pattern stored in the database, a dotted
+  import of a package that cannot be found now fails at the import, and
+  `statistics` arithmetic and `Fraction` hashing now match CPython.
+
+- **The usage event for a skipped setup says what is already on disk.** When GemDB skips
+  its automatic first-run setup, the event now says whether a database, an
+  engine and Python support are already on disk — yes or no, and for the
+  engine whether it is the one this version installs — never a path or a
+  version. It also now tells a setup that completed after being cancelled
+  apart from one that was only cancelled. [docs/telemetry.md](docs/telemetry.md)
+  lists the properties.
 
 ### Fixed
 
