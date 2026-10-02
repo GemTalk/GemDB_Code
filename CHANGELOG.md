@@ -63,6 +63,11 @@ this one does not look.
   stone start on the same database. Nothing removes a lock it does not own. A window that finds
   another process starting the database now waits for it, for up to a minute, instead of carrying
   on as if it were already running.
+- **A setup interrupted while unpacking the engine or creating the database no longer leaves an
+  install that looks finished.** Both are now built beside their final location and moved into
+  place only once complete, so closing the window part way through means the next start redoes that
+  step instead of failing later with a half-extracted engine or a truncated database. What an
+  interrupted run leaves behind is removed the next time setup runs.
 
 ## [1.5.4] - 2026-10-01
 

@@ -45,8 +45,13 @@ export function engineArtifact(version = engineVersion()): { fileName: string; u
 export async function installEngine(
   progress: Progress,
   token: vscode.CancellationToken,
+  extract: Extract = extractArchive,
 ): Promise<string> {
   const version = engineVersion();
+  // Before the check below: an extraction a crash cut short leaves nothing
+  // under the engine's own name, only one of these, and nothing else will
+  // ever look at it again.
+  removeExtractionLeftovers();
   const existing = enginePath(version);
   if (existing) {
     log(`Database engine ${version} is already installed at ${existing}`);
@@ -80,26 +85,14 @@ export async function installEngine(
   }
 
   // Cancelling during extraction is recorded but not obeyed until the copy
-  // finishes. Killing it mid-way would leave a half-populated engine directory,
-  // and `enginePath` treats any such directory as an installed engine — the
-  // next run would skip the download and fail somewhere far less obvious. A few
+  // finishes: everything extracted so far would be thrown away, and a few
   // seconds of finishing work is the cheaper end of that trade. The held cancel
   // is obeyed as soon as this returns, before the database is created (see
   // prepareFiles).
   progress.report({ message: 'Extracting the database engine…' });
-  if (process.platform === 'darwin') {
-    await extractDmg(archivePath, rootPath(), progress);
-  } else {
-    await extractZip(archivePath, rootPath());
-  }
-
-  const installed = enginePath(version);
-  if (!installed) {
-    throw new Error(
-      `Extraction finished but ${expectedEnginePath(version)} is not there. ` +
-        `The archive may be incomplete — delete ${archivePath} and try again.`,
-    );
-  }
+  const installed = await extractIntoPlace(archivePath, expectedEnginePath(version), (dest) =>
+    extract(archivePath, dest, progress),
+  );
 
   // The archive (144 MB for the macOS disk image, ~450 MB for the Linux zips)
   // serves no purpose once extracted, and keeping it would add most of its own
@@ -115,13 +108,89 @@ export async function installEngine(
   return installed;
 }
 
-/** Delete the extracted engine. Files ship read-only, so widen them first. */
+/** Delete the extracted engine. */
 export function removeEngine(version = engineVersion()): void {
   const dir = enginePath(version);
   if (!dir) return;
+  removeReadOnlyTree(dir);
+  log(`Removed the database engine at ${dir}`);
+}
+
+/** Files in the engine ship read-only, so widen them before deleting. */
+function removeReadOnlyTree(dir: string): void {
   execFileSync('chmod', ['-R', 'u+w', dir]);
   fs.rmSync(dir, { recursive: true, force: true });
-  log(`Removed the database engine at ${dir}`);
+}
+
+/** What every extraction directory's name starts with, under the root path. */
+const EXTRACTION_PREFIX = '.tmp-engine-';
+
+/**
+ * Unpack the archive into a directory of its own, then rename the engine onto
+ * its final path.
+ *
+ * `enginePath` takes any directory under the engine's name for an installed
+ * engine, so an extraction written there directly and cut short — the window
+ * closed, the extension host killed — would be taken for a finished one, and
+ * the next run would skip straight to a database it cannot create. Extracting
+ * beside it and renaming means the name appears only once everything under it
+ * is there: the rename is atomic, because both sides are on the root path's
+ * file system. What a crash leaves is a `.tmp-engine-*` directory, which the
+ * next install removes. Nothing is fsynced, so this covers the process dying,
+ * not the machine losing power: syncing every file of the engine would cost
+ * more than the rare re-extraction it saves.
+ */
+async function extractIntoPlace(
+  archivePath: string,
+  target: string,
+  extract: (destDir: string) => Promise<void>,
+): Promise<string> {
+  const staging = fs.mkdtempSync(path.join(path.dirname(target), EXTRACTION_PREFIX));
+  try {
+    await extract(staging);
+    const extracted = path.join(staging, path.basename(target));
+    if (!fs.existsSync(extracted)) {
+      throw new Error(
+        `Extraction finished but ${path.basename(target)} is not in it. ` +
+          `The archive may be incomplete — delete ${archivePath} and try again.`,
+      );
+    }
+    fs.renameSync(extracted, target);
+    return target;
+  } finally {
+    // Never thrown: it would replace the extraction's own error, or fail an
+    // install whose rename already succeeded. What is left is removed by the
+    // next install's `removeExtractionLeftovers`.
+    try {
+      removeReadOnlyTree(staging);
+    } catch (e) {
+      log(`Could not remove ${staging}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+}
+
+/**
+ * Remove what an extraction cut short left behind.
+ *
+ * Only ever called with the setup lock held, by `installEngine`, so no other
+ * window can be extracting into one of these at the time.
+ */
+function removeExtractionLeftovers(): void {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(rootPath());
+  } catch {
+    return;
+  }
+  for (const entry of entries.filter((e) => e.startsWith(EXTRACTION_PREFIX))) {
+    const dir = path.join(rootPath(), entry);
+    try {
+      removeReadOnlyTree(dir);
+      log(`Removed ${dir}, left by an extraction that did not finish`);
+    } catch (e) {
+      log(`Could not remove ${dir}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
 }
 
 /**
@@ -306,6 +375,14 @@ export function downloadFile(
  * because flipping a CancellationToken needs an event loop that is free to run.
  */
 const run = promisify(execFile);
+
+/** Unpack an archive into a directory, which then holds the `GemStone64Bit…` entry. */
+export type Extract = (archivePath: string, destDir: string, progress: Progress) => Promise<void>;
+
+const extractArchive: Extract = (archivePath, destDir, progress) =>
+  process.platform === 'darwin'
+    ? extractDmg(archivePath, destDir, progress)
+    : extractZip(archivePath, destDir);
 
 async function extractDmg(dmgPath: string, destDir: string, progress: Progress): Promise<void> {
   progress.report({ message: 'Mounting the disk image…' });
