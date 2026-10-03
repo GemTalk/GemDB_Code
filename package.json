@@ -223,7 +223,7 @@
       },
       {
         "command": "gemdb.refresh",
-        "title": "Refresh",
+        "title": "Refresh Status",
         "category": "GemDB",
         "icon": "$(refresh)"
       },
@@ -256,6 +256,12 @@
         "title": "Clear Notebook Variables",
         "category": "GemDB",
         "icon": "$(clear-all)"
+      },
+      {
+        "command": "gemdb.refreshNotebookView",
+        "title": "Refresh Notebook View",
+        "category": "GemDB",
+        "icon": "$(sync)"
       },
       {
         "command": "gemdb.cloneBrainFreeze",
@@ -380,6 +386,13 @@
       }
     ],
     "menus": {
+      "notebook/toolbar": [
+        {
+          "command": "gemdb.refreshNotebookView",
+          "when": "notebookKernel == gemtalksystems.gemdb/gemdb-python",
+          "group": "navigation@1"
+        }
+      ],
       "view/title": [
         {
           "command": "gemdb.start",

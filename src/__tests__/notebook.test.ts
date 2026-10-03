@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as vscode from 'vscode';
 import { FakeController, __controllers, __resetSettings } from '../__mocks__/vscode';
 
 // Runs the kernel through the same entry point VS Code calls (the
@@ -24,6 +25,9 @@ const runPython =
     (source: string, owner: SessionOwner, onOutput?: (text: string) => void) => Promise<PyResult>
   >();
 const isErrorResult = vi.fn<(result: string) => boolean>();
+const runPythonInSession =
+  vi.fn<(session: unknown, source: string, scope: string) => Promise<PyResult>>();
+const sessionForIfOpen = vi.fn<(key: string) => unknown>();
 
 interface PyResult {
   output: string;
@@ -39,9 +43,15 @@ vi.mock('../pythonQueries', () => ({
     runPython(source, owner, onOutput),
   isErrorResult: (result: string) => isErrorResult(result),
   resetScope: () => {},
+  runPythonInSession: (session: unknown, source: string, scope: string) =>
+    runPythonInSession(session, source, scope),
+}));
+vi.mock('../session', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../session')>()),
+  sessionForIfOpen: (key: string) => sessionForIfOpen(key),
 }));
 
-const { GemDbNotebookController } = await import('../notebook');
+const { GemDbNotebookController, refreshActiveNotebookView } = await import('../notebook');
 
 /** A notebook cell, reduced to what the controller reads. */
 function cell(source: string, notebook = 'file:///a.ipynb'): unknown {
@@ -366,5 +376,72 @@ describe('the notebook kernel', () => {
     });
     await run(controller, [cell('1')]);
     expect(atStart).toEqual([]);
+  });
+});
+
+describe('Refresh Notebook View', () => {
+  const notebook = 'file:///analysis.ipynb';
+  const openNotebook = () => {
+    (vscode.window as { activeNotebookEditor: unknown }).activeNotebookEditor = {
+      notebook: { uri: { toString: () => notebook } },
+    };
+  };
+
+  beforeEach(() => {
+    runPythonInSession.mockReset();
+    sessionForIfOpen.mockReset();
+    isErrorResult.mockImplementation((value) => value.startsWith('Error: '));
+  });
+
+  it('asks for a notebook when none is open', async () => {
+    (vscode.window as { activeNotebookEditor: unknown }).activeNotebookEditor = undefined;
+    const error = vi.spyOn(vscode.window, 'showErrorMessage');
+
+    await refreshActiveNotebookView();
+
+    expect(error).toHaveBeenCalledWith('Open a notebook to refresh its view.');
+    expect(runPythonInSession).not.toHaveBeenCalled();
+  });
+
+  it('spends no session on a notebook that has not run a cell', async () => {
+    openNotebook();
+    sessionForIfOpen.mockReturnValue(undefined);
+    const info = vi.spyOn(vscode.window, 'showInformationMessage');
+
+    await refreshActiveNotebookView();
+
+    expect(runPythonInSession).not.toHaveBeenCalled();
+    expect(info.mock.calls.at(-1)?.[0]).toContain('first cell will see every commit');
+  });
+
+  it('runs gemdb.refresh() in the notebook’s own session, binding no name', async () => {
+    openNotebook();
+    const session = { id: 'the notebook’s' };
+    sessionForIfOpen.mockReturnValue(session);
+    runPythonInSession.mockResolvedValue(py(''));
+    const info = vi.spyOn(vscode.window, 'showInformationMessage');
+
+    await refreshActiveNotebookView();
+
+    const [usedSession, source, scope] = runPythonInSession.mock.calls[0];
+    expect(usedSession).toBe(session);
+    expect(source).toBe("__import__('gemdb').refresh()");
+    expect(scope).toBe(sessionForIfOpen.mock.calls[0][0]);
+    expect(info.mock.calls.at(-1)?.[0]).toContain('now sees every commit');
+  });
+
+  it('shows gemdb.refresh()’s own refusal when there are uncommitted changes', async () => {
+    openNotebook();
+    sessionForIfOpen.mockReturnValue({});
+    runPythonInSession.mockResolvedValue(
+      py('Error: PendingChangesError: commit or abort your changes first'),
+    );
+    const error = vi.spyOn(vscode.window, 'showErrorMessage');
+
+    await refreshActiveNotebookView();
+
+    expect(error.mock.calls.at(-1)?.[0]).toBe(
+      'PendingChangesError: commit or abort your changes first',
+    );
   });
 });
