@@ -61,6 +61,7 @@ import {
   Stopwatch,
   TRIGGER,
   initTelemetry,
+  registerCopyTelemetryIdCommand,
   reportActivation,
   reportUnattendedSetupSkipped,
 } from './telemetry';
@@ -78,6 +79,7 @@ const EXTERNAL_DATABASE_SETTINGS = ['gemstone', 'globalDirectory', 'stone', 'net
 export function activate(context: vscode.ExtensionContext): void {
   const stopwatch = Stopwatch.start();
   initTelemetry(context, isInstalled());
+  registerCopyTelemetryIdCommand(context);
 
   const extensionPath = context.extensionPath;
   log(`GemDB ${context.extension.packageJSON.version as string} activated`);
