@@ -7,7 +7,6 @@ import {
 } from '../config';
 import {
   DatabaseSession,
-  FIRST_PAGES_MS,
   GC_HEADROOM_MB,
   QUIET_MS,
   SPACE_GC_SPACING_MS,
@@ -21,11 +20,11 @@ import {
   parseMfcReport,
   parseSessions,
   parseSpaceReading,
-  reclaimSettled,
   roomLeftMb,
   stoppableSessions,
   thresholdToReclaimUnder,
   usedMb,
+  viewsNewerThanQuery,
 } from '../maintenance';
 import { spaceRow } from '../statusView';
 
@@ -124,30 +123,16 @@ describe('getting reclaim going again', () => {
 });
 
 describe('waiting for reclaim to give pages back', () => {
-  const start = 1_000_000;
-  const settledMs = 30_000;
+  it('waits for every view to be newer than the reclaim, from slot 5', () => {
+    const query = viewsNewerThanQuery(1791210000.7);
 
-  it('keeps waiting while nothing has come free, past the quiet window', () => {
-    // On a CI runner, stopping 30 quiet seconds after the first reading,
-    // straight after a large commit, reported nothing given back.
-    const facts = { start, baselineKb: 500_000, bestKb: 500_000, grewAt: start, settledMs };
-
-    expect(reclaimSettled({ ...facts, now: start + 45_000 })).toBe(false);
-    expect(reclaimSettled({ ...facts, now: start + FIRST_PAGES_MS })).toBe(true);
-  });
-
-  it('stops once free space has grown and then held still for the quiet window', () => {
-    const grewAt = start + 40_000;
-    const facts = { start, baselineKb: 500_000, bestKb: 520_000, grewAt, settledMs };
-
-    expect(reclaimSettled({ ...facts, now: grewAt + settledMs - 1 })).toBe(false);
-    expect(reclaimSettled({ ...facts, now: grewAt + settledMs })).toBe(true);
-  });
-
-  it('counts a single freed page as growth', () => {
-    const facts = { start, baselineKb: 500_000, bestKb: 500_016, grewAt: start + 5_000, settledMs };
-
-    expect(reclaimSettled({ ...facts, now: start + 35_000 })).toBe(true);
+    // Slot 5 is when a session last began, committed or aborted; the
+    // SymbolGem's moves only about once a minute, and the pages wait for it.
+    expect(query).toContain('System currentSessions allSatisfy:');
+    expect(query).toContain('(System descriptionOfSession: id) at: 5');
+    expect(query).toContain('t > 1791210000]');
+    // Its own view must not be the one that is old.
+    expect(query.startsWith('System abortTransaction.')).toBe(true);
   });
 });
 

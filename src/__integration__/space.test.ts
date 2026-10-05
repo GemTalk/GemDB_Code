@@ -205,7 +205,7 @@ describe.skipIf(!haveExtent || !canMakeFixture())('collecting garbage', () => {
     expect(outcome.kind).toBe('done');
     expect(outcome.kind === 'done' && (outcome.record.dead ?? 0)).toBeGreaterThanOrEqual(50_001);
     expect(outcome.kind === 'done' && (outcome.record.freedMb ?? 0)).toBeGreaterThan(0);
-    // Up to FIRST_PAGES_MS for the first pages and SETTLED_MS after them.
+    // Up to a minute of that is the SymbolGem's view moving past the reclaim.
   }, 240_000);
 
   it('logs its own session out afterwards', async () => {

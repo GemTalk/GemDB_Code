@@ -217,22 +217,33 @@ is committing past holds nothing back, so it is left alone.
    every poll.
 3. **Reclaim**, then a **checkpoint**: freed pages are not counted as free until
    one. Measured: 69 MB free after reclaim, 144 MB after `startCheckpointSync`.
-4. **Wait for the pages, not the counters.** Vote state, `possibleDeadSize`,
-   `deadNotReclaimedCount` and `pagesNeedReclaimCount` all reach zero within a
-   quarter of a second. The space follows anywhere from two seconds to a
-   minute later, longest straight after a large commit while the shared cache
-   is still writing it out (the reclaim gem logs "Suspending reclaims because
-   cache numberOfFreeFrames … is below targetFreeFrameCount"). So the
-   collection checkpoints and reads free space every five seconds until it has
-   grown and then stopped growing for 30 seconds (90 when it lowered the
-   threshold), or is back above the threshold it lowered. The quiet window
-   counts from the first growth, not the first reading: on a macOS CI runner
-   a collection straight after a 20-odd MB commit found the garbage, waited
-   out 30 quiet seconds from its first reading, and reported nothing given
-   back. Until free space
-   grows it waits up to 90 seconds, read in KB so that one freed page counts.
+4. **Wait for every view to move past the reclaim.** Vote state,
+   `possibleDeadSize`, `deadNotReclaimedCount` and `pagesNeedReclaimCount` all
+   reach zero within a quarter of a second, but the pages behind them stay
+   unavailable while any session's view predates the reclaim. Every session
+   GemDB controls aborts on each poll; the stone's **SymbolGem refreshes its
+   view only about once a minute**. Measured on 2026-10-05, 28 MB of junk:
+   `descriptionOfSession:` slot 5 showed SymbolUser's view age climbing to 59
+   seconds and resetting, it alone held the oldest commit record in between
+   (slot 8), and the space came free at the first checkpoint after it reset.
+   A trickle of under 1 MB comes back first, then the rest all at once, a few
+   seconds to a minute after the mark, depending only on where the SymbolGem
+   was in its cycle. That accounts for every slow case measured before, the
+   two-seconds-to-a-minute spread included.
 
-Two hypotheses for the slow cases were tested and are **wrong**. Don't chase
+   So the collection notes the stone's `System timeGmt` when reclaim is done,
+   waits until every session's slot 5 is later (`viewsNewerThanQuery`),
+   checkpoints, and reads free space. Three back-to-back collections each
+   took 68 seconds and reported 30, 28 and 28 MB, and a reading afterwards
+   found nothing more to come. It gives up after two minutes, naming the
+   session still holding an older view in the log.
+
+   Waiting for free space to stop growing does not work, and was shipped
+   briefly: a 30-second quiet window stopped in the gap between the trickle
+   and the rest, and reported 0–2 MB for the 28 that came back seconds later.
+   It failed on a macOS and then a Linux CI runner.
+
+Three hypotheses for the slow cases were tested and are **wrong**. Don't chase
 them again:
 
 - *A session that made the garbage keeps it alive while logged in.* A filler
@@ -241,6 +252,9 @@ them again:
 - *`GEM_TEMPOBJ_POMGEN_PRUNE_ON_VOTE`'s five-minute window.* Garbage six
   minutes old came back no faster, and `System _vmPrunePomGen` in the filler
   changed nothing.
+- *The session that ran the mark holds the space until it logs out.* A marking
+  session that stayed logged in saw the space come back at the SymbolGem's
+  refresh, just as one that logged out at once did.
 
 ## When GemDB collects
 
