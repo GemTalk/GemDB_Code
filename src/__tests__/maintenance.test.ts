@@ -7,11 +7,11 @@ import {
 } from '../config';
 import {
   DatabaseSession,
-  FIRST_PAGES_MS,
   GC_HEADROOM_MB,
   QUIET_MS,
   SPACE_GC_SPACING_MS,
   LAST_CALL_MS,
+  describeFound,
   formatMb,
   gcDue,
   isBelowThreshold,
@@ -20,11 +20,11 @@ import {
   parseMfcReport,
   parseSessions,
   parseSpaceReading,
-  reclaimSettled,
   roomLeftMb,
   stoppableSessions,
   thresholdToReclaimUnder,
   usedMb,
+  viewsNewerThanQuery,
 } from '../maintenance';
 import { spaceRow } from '../statusView';
 
@@ -123,30 +123,16 @@ describe('getting reclaim going again', () => {
 });
 
 describe('waiting for reclaim to give pages back', () => {
-  const start = 1_000_000;
-  const settledMs = 30_000;
+  it('waits for every view to be newer than the reclaim, from slot 5', () => {
+    const query = viewsNewerThanQuery(1791210000.7);
 
-  it('keeps waiting while nothing has come free, past the quiet window', () => {
-    // On a CI runner, stopping 30 quiet seconds after the first reading,
-    // straight after a large commit, reported nothing given back.
-    const facts = { start, baselineKb: 500_000, bestKb: 500_000, grewAt: start, settledMs };
-
-    expect(reclaimSettled({ ...facts, now: start + 45_000 })).toBe(false);
-    expect(reclaimSettled({ ...facts, now: start + FIRST_PAGES_MS })).toBe(true);
-  });
-
-  it('stops once free space has grown and then held still for the quiet window', () => {
-    const grewAt = start + 40_000;
-    const facts = { start, baselineKb: 500_000, bestKb: 520_000, grewAt, settledMs };
-
-    expect(reclaimSettled({ ...facts, now: grewAt + settledMs - 1 })).toBe(false);
-    expect(reclaimSettled({ ...facts, now: grewAt + settledMs })).toBe(true);
-  });
-
-  it('counts a single freed page as growth', () => {
-    const facts = { start, baselineKb: 500_000, bestKb: 500_016, grewAt: start + 5_000, settledMs };
-
-    expect(reclaimSettled({ ...facts, now: start + 35_000 })).toBe(true);
+    // Slot 5 is when a session last began, committed or aborted; the
+    // SymbolGem's moves only about once a minute, and the pages wait for it.
+    expect(query).toContain('System currentSessions allSatisfy:');
+    expect(query).toContain('(System descriptionOfSession: id) at: 5');
+    expect(query).toContain('t > 1791210000]');
+    // Its own view must not be the one that is old.
+    expect(query.startsWith('System abortTransaction.')).toBe(true);
   });
 });
 
@@ -160,7 +146,17 @@ describe('what a collection reports', () => {
   });
 
   it('leaves out what it does not say', () => {
-    expect(parseMfcReport('the repository is busy')).toEqual({ live: undefined, dead: undefined });
+    expect(parseMfcReport('the repository is busy')).toEqual({
+      live: undefined,
+      dead: undefined,
+    });
+  });
+
+  it('says what it found, in words', () => {
+    expect(describeFound({ live: 157318, dead: 8002 })).toBe(
+      '8,002 dead objects among 157,318 live',
+    );
+    expect(describeFound({})).toBe('');
   });
 });
 
@@ -232,12 +228,20 @@ describe('the Space row', () => {
   it('says when garbage was last collected, and what it gave back', () => {
     const row = spaceRow({
       reading: fresh,
-      record: { at: NOW - 2 * HOUR, reason: 'schedule', dead: 10, freedMb: 64 },
+      record: {
+        at: NOW - 2 * HOUR,
+        reason: 'schedule',
+        dead: 10,
+        live: 2000,
+        freedMb: 64,
+      },
       collecting: false,
       now: NOW,
     });
 
-    expect(row?.tooltip).toContain('last collected 2 h ago, giving back 64 MB.');
+    expect(row?.tooltip).toContain(
+      'last collected 2 h ago, finding 10 dead objects among 2,000 live, giving back 64 MB.',
+    );
   });
 
   it('shows a collection in progress, and offers no second one', () => {

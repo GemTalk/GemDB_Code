@@ -138,6 +138,18 @@ export function formatMb(mb: number): string {
   return mb >= 1024 ? `${Math.round(mb / 102.4) / 10} GB` : `${Math.round(mb)} MB`;
 }
 
+/**
+ * What a collection found, as markForCollection counted it: "8,002 dead
+ * objects among 157,318 live". Empty when the report said nothing.
+ */
+export function describeFound(found: { live?: number; dead?: number }): string {
+  if (found.dead === undefined) return '';
+  return (
+    `${found.dead.toLocaleString('en-US')} dead objects` +
+    (found.live !== undefined ? ` among ${found.live.toLocaleString('en-US')} live` : '')
+  );
+}
+
 /** The answer to `SPACE_QUERY`, or undefined if it is not one. */
 export function parseSpaceReading(answer: string): SpaceReading | undefined {
   const match = answer.trim().match(/^(\d+) (\d+)(?: (\d+))?$/);
@@ -253,7 +265,14 @@ export function thresholdToReclaimUnder(freeMb: number): number {
   return Math.max(1, Math.floor(freeMb / 2));
 }
 
-/** The counts in a markForCollection report, where it gives them. */
+/**
+ * The counts in a markForCollection report, where it gives them: "… found
+ * 157318 live objects, 8002 dead objects(occupying approx 720180 bytes), 0
+ * possibleDeadSymbols". The counts are exact. The bytes are not read: they are
+ * the dead count times 90 (measured: 50230 dead, 4520700 bytes), which said
+ * 4.5 MB for strings holding 24 million characters. What a collection gave
+ * back is measured from free space instead.
+ */
 export function parseMfcReport(report: string): { live?: number; dead?: number } {
   const live = report.match(/(\d+) live objects/);
   const dead = report.match(/(\d+) dead objects/);
@@ -371,55 +390,39 @@ const RECLAIM_QUERY =
   "System abortTransaction. System voteStateString, ' ', System possibleDeadSize printString, ' ', " +
   "System deadNotReclaimedCount printString, ' ', System pagesNeedReclaimCount printString";
 
-/**
- * Free space in KB as a checkpoint leaves it: pages reclaim frees are not
- * counted free before one. KB rather than MB so that a single freed page
- * counts as space coming back.
- */
-const CHECKPOINTED_FREE_QUERY =
-  'System abortTransaction. System startCheckpointSync. ' +
-  '(SystemRepository freeSpace // 1024) printString';
+/** A checkpoint: pages reclaim frees are not counted free before one. */
+const CHECKPOINT_QUERY = 'System abortTransaction. System startCheckpointSync printString';
 
 /**
- * How long free space must stop growing before reclaim is taken to be
- * finished, and how often to look. Pages came free anywhere from two seconds
- * to a minute after the vote, measured — longest straight after a large
- * commit, while the shared cache is still writing it out. A lowered threshold
- * gets the longer wait, because putting it back too early suspends reclaim.
- */
-const SETTLED_MS = 30_000;
-const SETTLED_LOWERED_MS = 90_000;
-const FREE_POLL_MS = 5_000;
-
-/**
- * How long to wait for the first pages to come free before deciding none
- * will. The quiet window counts from the last growth, so it must not start
- * before there has been any: on a CI runner, a collection straight after a
- * large commit waited out 30 quiet seconds from its first reading and
- * reported nothing given back.
- */
-export const FIRST_PAGES_MS = 90_000;
-
-/**
- * Whether to stop waiting for reclaim to give pages back. Free space is in
- * KB, read after a checkpoint; `baselineKb` is the reading taken just before
- * the mark, and `bestKb` the most seen since, last growing at `grewAt`.
- * Before any growth the wait is `FIRST_PAGES_MS` from `start`; after it,
- * `settledMs` without further growth.
+ * Smalltalk answering whether every session's view is newer than `gmt` (the
+ * stone's `System timeGmt` seconds): slot 5 of a session's description is
+ * when it last began, committed or aborted.
  *
- * Pure, so the timing can be tested without a database.
+ * Pages reclaim frees are not free while any view predates the reclaim, and
+ * the stone's SymbolGem refreshes its view only about once a minute (measured:
+ * its view age climbed to 59 s and reset, and the 28 MB a collection had
+ * reclaimed came free at the next checkpoint after). So a collection waits for
+ * this, not for free space to stop growing: the space came back in a trickle
+ * and then all at once, up to a minute later, and any quiet window short of
+ * the SymbolGem's cycle stopped in the gap.
  */
-export function reclaimSettled(facts: {
-  start: number;
-  now: number;
-  baselineKb: number;
-  bestKb: number;
-  grewAt: number;
-  settledMs: number;
-}): boolean {
-  const { start, now, baselineKb, bestKb, grewAt, settledMs } = facts;
-  return bestKb > baselineKb ? now - grewAt >= settledMs : now - start >= FIRST_PAGES_MS;
+export function viewsNewerThanQuery(gmt: number): string {
+  return (
+    'System abortTransaction. ' +
+    '(System currentSessions allSatisfy: [:id | | t | ' +
+    't := (System descriptionOfSession: id) at: 5. ' +
+    `t isNil or: [t > ${Math.trunc(gmt)}]]) printString`
+  );
 }
+
+/**
+ * How long to wait for every view to move past the reclaim. Twice the
+ * SymbolGem's cycle; a session that holds its view longer — an idle topaz,
+ * another window's notebook — is named in the log, and what came back by then
+ * is what the collection reports.
+ */
+const VIEWS_WAIT_MS = 2 * 60_000;
+const VIEWS_POLL_MS = 5_000;
 
 const THRESHOLD_QUERY = '(System stoneConfigurationAt: #StnFreeSpaceThreshold) printString';
 
@@ -433,6 +436,8 @@ export interface GcRecord {
   reason: GcReason | 'command';
   /** Dead objects it found. */
   dead?: number;
+  /** Live objects the mark counted. */
+  live?: number;
   /** Room it gave back, in MB, once reclaimed and checkpointed. */
   freedMb?: number;
 }
@@ -781,9 +786,8 @@ export async function collectGarbage(
       restoreThreshold = threshold;
     }
 
-    const baselineKb = Number(await askingAgain(session, CHECKPOINTED_FREE_QUERY));
     const report = await askingAgain(session, MFC_QUERY);
-    const { dead } = parseMfcReport(report);
+    const { live, dead } = parseMfcReport(report);
     log(report);
 
     if (dead !== 0) {
@@ -809,28 +813,30 @@ export async function collectGarbage(
         }
         await delay(POLL_MS);
       }
-      // The counts above reach zero within a quarter of a second, and the
-      // pages behind them come free over the following seconds — counted
+      // The counts above reach zero within a quarter of a second, but the
+      // pages behind them are not free while any session's view predates
+      // the reclaim — the SymbolGem's for up to a minute — and are counted
       // only after a checkpoint (measured). Restoring a lowered threshold
-      // before then suspends reclaim halfway, so wait until free space is
-      // back above it, or has grown and then stopped growing.
-      const settledMs = restoreThreshold === undefined ? SETTLED_MS : SETTLED_LOWERED_MS;
-      const start = Date.now();
-      let bestKb = baselineKb;
-      let grewAt = start;
+      // before then would suspend reclaim halfway.
+      const reclaimedAt = Number(await askingAgain(session, 'System timeGmt printString'));
+      const viewsDeadline = Date.now() + VIEWS_WAIT_MS;
       for (;;) {
         sweep(0);
-        const freeKb = Number(await askingAgain(session, CHECKPOINTED_FREE_QUERY));
-        if (freeKb > bestKb) {
-          bestKb = freeKb;
-          grewAt = Date.now();
+        if ((await askingAgain(session, viewsNewerThanQuery(reclaimedAt))) === 'true') break;
+        if (Date.now() >= viewsDeadline) {
+          const own = session.serial;
+          const holders = parseSessions(await askingAgain(session, SESSIONS_QUERY))
+            .filter((s) => s.holdsOldest && s.id !== own)
+            .map((s) => s.name || `${s.user} (session ${s.id})`);
+          log(
+            `Garbage collection reclaimed what it found, but ${holders.join(', ') || 'a session'} ` +
+              'still holds a view from before, so some of the space comes back later.',
+          );
+          break;
         }
-        if (restoreThreshold !== undefined && freeKb / 1024 > restoreThreshold) break;
-        const now = Date.now();
-        if (now >= deadline) break;
-        if (reclaimSettled({ start, now, baselineKb, bestKb, grewAt, settledMs })) break;
-        await delay(FREE_POLL_MS);
+        await delay(VIEWS_POLL_MS);
       }
+      await askingAgain(session, CHECKPOINT_QUERY);
     }
 
     const after = parseSpaceReading(session.execute(SPACE_QUERY));
@@ -838,12 +844,13 @@ export async function collectGarbage(
       at: Date.now(),
       reason,
       dead,
+      live,
       freedMb: before && after ? Math.max(0, roomLeftMb(after) - roomLeftMb(before)) : undefined,
     };
     writeGcRecord(record);
     if (after) lastReading = after;
     log(
-      `Garbage collection finished: ${dead ?? 'some'} dead objects` +
+      `Garbage collection finished: ${describeFound(record) || 'some dead objects'}` +
         (record.freedMb !== undefined ? `, ${formatMb(record.freedMb)} given back` : '') +
         (after ? `; ${formatMb(roomLeftMb(after))} of room left.` : '.'),
     );
@@ -905,7 +912,7 @@ export async function collectGarbageCommand(hooks: MaintenanceHooks): Promise<vo
   if (outcome.kind === 'done') {
     const { record, reading } = outcome;
     void vscode.window.showInformationMessage(
-      `Collected garbage: ${record.dead ?? 0} dead objects` +
+      `Collected garbage: ${describeFound(record) || 'no dead objects reported'}` +
         (record.freedMb !== undefined ? `, ${formatMb(record.freedMb)} given back` : '') +
         (reading
           ? `. ${formatMb(usedMb(reading))} of ${formatMb(REPOSITORY_LIMIT_MB)} used.`
