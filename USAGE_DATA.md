@@ -10,7 +10,7 @@ does not cover any other GemTalk product.
 GemDB sends usage events describing how the extension is used — for example,
 when it starts up and how features within it perform — so we can tell
 whether it's working and prioritize fixes. These events carry only
-non-identifying, extension-level information: things like which platform
+extension-level information: things like which platform
 GemDB is running on, how long an operation took, or whether an operation
 succeeded or failed. They never carry the contents of your work (see "What
 we do not collect" below). [docs/telemetry.md](docs/telemetry.md) lists every
@@ -98,5 +98,5 @@ delete the matching records.
 
 ## Changes
 
-Last updated: 2026-10-02. Changes to this notice will be published in this
+Last updated: 2026-10-05. Changes to this notice will be published in this
 repository.
