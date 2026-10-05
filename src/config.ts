@@ -274,13 +274,16 @@ export function mcpPort(): number {
 }
 
 /**
- * Whether the server hides and refuses every state-changing tool.
+ * Whether agents log in as a GemStone user that cannot commit.
  *
- * Off by default. The tools that matter here run Python and Smalltalk in the
- * database and commit the result, which is the entire reason to point an agent
- * at GemDB; a read-only server can browse and search a database the user could
- * already browse in a notebook. It is the user's own local database on their
- * own machine, and the switch is here for whoever wants the narrower surface.
+ * Every tool stays, `eval_python` included: read-only is a property of the
+ * database user the workers run as (`McpReadOnly`, commits disabled -- see
+ * `ensureReadOnlyUser` in mcp.ts), not a list of hidden tools, which could
+ * never have been a boundary. Off by default. The tools that matter here run
+ * Python and Smalltalk in the database and commit the result, which is the
+ * entire reason to point an agent at GemDB; it is the user's own local database
+ * on their own machine, and the switch is here for whoever wants agents unable
+ * to change it.
  */
 export function mcpReadOnly(): boolean {
   return vscode.workspace.getConfiguration('gemdb').get<boolean>('mcp.readOnly', false);

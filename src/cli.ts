@@ -225,7 +225,7 @@ set user ${dbUser()} pass ${dbPassword()}
 set gemstone ${stone}
 login
 run
-| args ofs target status statusFile label uncaught |
+| args ofs target status statusFile label uncaught interrupted |
 "No canonical-modules flag is set here; see cli.ts. Grail retired that
 flag once warm binding became its only path -- what is warm is now
 decided by what has been committed, which is what installing Grail
@@ -235,6 +235,7 @@ args := System commandLineArguments.
 1 to: args size do: [:j | (args at: j) = '--' ifTrue: [ofs := j]].
 statusFile := System gemEnvironmentVariable: 'GEMDB_STATUS_FILE'.
 status := 0.
+interrupted := false.
 "The console override, not Transcript := GsFile stdout: the Transcript
 global is a committed association, and reassigning it dirties the
 transaction -- gemdb.transaction() in the very script being run would
@@ -307,7 +308,17 @@ sys.breakpointhook = _gemdb_breakpoint']]
         | sysExit baseExc |
         sysExit := System myUserProfile symbolList objectNamed: #'SystemExit'.
         baseExc := System myUserProfile symbolList objectNamed: #'BaseException'.
-        (ex isKindOf: ExitClientError)
+        "Ctrl-C. Topaz turns it into a soft break, and the Break reaches the
+        handler above like any exception, after the script's finally blocks
+        have run. Reported as CPython reports an uncaught KeyboardInterrupt, with
+        the status a shell gives a process SIGINT ended (128 + 2)."
+        (ex isKindOf: Break)
+            ifTrue: [
+                interrupted := true.
+                GsFile stdout flush.
+                GsFile stderr nextPutAll: 'KeyboardInterrupt'; lf; flush.
+                status := 130]
+            ifFalse: [(ex isKindOf: ExitClientError)
             ifTrue: [status := ex status ifNil: [1]]
             ifFalse: [(sysExit notNil and: [ex isKindOf: sysExit])
                 ifTrue: [
@@ -349,7 +360,7 @@ sys.breakpointhook = _gemdb_breakpoint']]
                         msg := msg , (String with: Character lf)].
                     GsFile stdout flush.
                     GsFile stderr nextPutAll: msg encodeAsUTF8; flush.
-                    status := 1]]].
+                    status := 1]]]].
 ] ensure: [
     SessionTemps current removeKey: #'GrailConsole' ifAbsent: [].
     statusFile ifNotNil: [
@@ -357,6 +368,12 @@ sys.breakpointhook = _gemdb_breakpoint']]
         f := GsFile openWrite: statusFile.
         f nextPutAll: status printString; close].
 ].
+"Handling the Break is not enough to end the run. Topaz saw the Ctrl-C too,
+and it stops reading this script once the block returns, leaving the user at
+a topaz 1> prompt still holding a session -- so nothing written after this
+block would run. An ExitClientError is what makes topaz log out and exit
+instead. The status still travels through GEMDB_STATUS_FILE, written above."
+interrupted ifTrue: [ExitClientError new status: status; signal].
 %
 `;
 

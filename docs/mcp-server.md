@@ -192,23 +192,26 @@ works today and needs no upstream change, which is exactly why it is tempting
 expendable, and it would paper over the missing cap rather than motivate it.
 Worth revisiting if upstream does not land.
 
-## Each tool call is a clean slate
+## State carries over between tool calls, as in a notebook
 
-Also measured 2026-09-07, and worth knowing before writing anything that
-assumes otherwise: **`eval_python` neither keeps Python module scope nor
-carries an uncommitted transaction between calls.** Within one call a write is
-visible and `needs_commit()` is true; on the next call the variable is a
-`NameError` and `needs_commit()` is false — the worker has aborted in between.
+Measured 2026-10-02 on GemDB Code 1.5.4, and the opposite of what the bundled
+server did on 2026-09-07: **within one MCP session, `eval_python` keeps both
+Python names and an uncommitted transaction from one call to the next.** One
+call ran `x = 41` and wrote `gemdb.root['d9probe'] = 1` without committing; the
+next printed `42` for `x + 1`, found the key, and `needs_commit()` was still
+true. The server says so after any call that leaves changes behind:
 
-So an agent cannot build up state across calls the way a notebook does: to
-persist anything it must `commit()` **in the same call** that writes. That was
-verified end to end — a commit inside one call put a key in the database and
-took `needs_commit()` back to false.
+```
+[session] You have uncommitted changes. No tool commits for you: call commit to
+persist them or abort to discard them. They are lost when this session ends:
+1 minute with no event stream open.
+```
 
-This is upstream behaviour, not GemDB's, and it is defensible: it means a tool
-call cannot leave the session dirty for the next one, which is the failure that
-`gemdb.transaction()`'s entry check exists to complain about. It is only a
-problem if a user expects notebook semantics from an agent.
+So an agent can build up state across calls the way a notebook does, and the
+same rule applies: nothing is in the database until something commits, and
+uncommitted work is lost with the session. The Brain Freeze tutorial's MCP step
+depends on the first half -- one call imports and binds, the next asks the
+question -- and passes on 1.5.4.
 
 ## Stopping it, and the thing that had to be measured
 
