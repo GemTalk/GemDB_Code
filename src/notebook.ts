@@ -2,8 +2,14 @@ import * as vscode from 'vscode';
 import { noteRunningCell } from './debugger';
 import { ensureRunning } from './lifecycle';
 import { errorMessage, log } from './log';
-import { PyResult, isErrorResult, resetScope, runPython } from './pythonQueries';
-import { SessionOwner, interruptSessionFor } from './session';
+import {
+  PyResult,
+  isErrorResult,
+  resetScope,
+  runPython,
+  runPythonInSession,
+} from './pythonQueries';
+import { SessionOwner, interruptSessionFor, sessionForIfOpen } from './session';
 import { EVIDENCE, SURFACE, TRIGGER, reportPythonUsed } from './telemetry';
 
 /**
@@ -249,6 +255,49 @@ export async function resetActiveNotebook(): Promise<void> {
     void vscode.window.showInformationMessage('Notebook variables cleared.');
   } catch (e) {
     void vscode.window.showErrorMessage(`Could not clear the notebook: ${errorMessage(e)}`);
+  }
+}
+
+/**
+ * Take a fresh view of the database in the active notebook's session: what
+ * `gemdb.refresh()` does, without typing it into a cell.
+ *
+ * A notebook sees the database as of its last transaction, so an analysis does
+ * not shift under it halfway through; this is the deliberate step that lets in
+ * what other sessions have committed since. It refuses exactly as
+ * `gemdb.refresh()` does while the notebook has uncommitted changes, and that
+ * refusal is shown as it is, because it already says what to do.
+ *
+ * `__import__` rather than `import gemdb`, so a refresh binds no name in the
+ * notebook's namespace. A notebook with no session yet has nothing to refresh
+ * -- its first cell sees every commit -- and logging one in to refresh it would
+ * spend a scarce session on nothing.
+ */
+export async function refreshActiveNotebookView(): Promise<void> {
+  const editor = vscode.window.activeNotebookEditor;
+  if (!editor) {
+    void vscode.window.showErrorMessage('Open a notebook to refresh its view.');
+    return;
+  }
+  const owner = notebookOwner(editor.notebook);
+  const session = sessionForIfOpen(owner.key);
+  if (!session) {
+    void vscode.window.showInformationMessage(
+      'This notebook has not run a cell yet; its first cell will see every commit so far.',
+    );
+    return;
+  }
+  try {
+    const result = await runPythonInSession(session, "__import__('gemdb').refresh()", owner.key);
+    if (isErrorResult(result.value)) {
+      void vscode.window.showErrorMessage(result.value.replace(/^Error: /, ''));
+      return;
+    }
+    void vscode.window.showInformationMessage('This notebook now sees every commit made so far.');
+  } catch (e) {
+    void vscode.window.showErrorMessage(
+      `Could not refresh the notebook's view: ${errorMessage(e)}`,
+    );
   }
 }
 

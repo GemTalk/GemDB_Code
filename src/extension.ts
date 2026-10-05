@@ -28,6 +28,7 @@ import {
   newNotebook,
   notebookOwner,
   notebookOwnerForUri,
+  refreshActiveNotebookView,
   resetActiveNotebook,
 } from './notebook';
 import { isMcpRunning, startMcpServer, stopMcpServer } from './mcp';
@@ -252,6 +253,7 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand('gemdb.newNotebook', () => newNotebook()),
     vscode.commands.registerCommand('gemdb.resetNotebook', () => resetActiveNotebook()),
+    vscode.commands.registerCommand('gemdb.refreshNotebookView', () => refreshActiveNotebookView()),
     vscode.commands.registerCommand('gemdb.registerMcpClient', async () => {
       // `registerWithClient` asks first when the server is switched off, which
       // is the default — so the order here matters: consent, then start the
