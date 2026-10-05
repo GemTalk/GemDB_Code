@@ -272,6 +272,7 @@ jobs:
             "grail/GRAIL_VERSION" \
             "grail/prebuilt/${PLATFORM_KEY}/libcpython_ua.${LIB_EXT}" \
             ".test-extent/gemdb.dbf" \
+            ".test-extent/gemdb.password" \
             "out/gemdb-shell.js" \
             "mcp/MCP_VERSION" \
             "mcp/install.sh"
@@ -286,6 +287,9 @@ jobs:
             exit 1
           fi
           echo "Engine, Grail payload, MCP payload and test extent are all present."
+          # Every test database reserves its cap on disk (DBF_PRE_GROW), so say
+          # how much disk the runner had, for when a leg runs short of it.
+          df -h . "$HOME"
 
       - name: Integration tests
         run: npm run test:integration

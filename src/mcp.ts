@@ -1,9 +1,20 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'path';
 import { execFileSync, spawn } from 'child_process';
 import * as vscode from 'vscode';
-import { dbPassword, dbUser, mcpPort, mcpReadOnly, rootPath, stoneName } from './config';
+import {
+  DB_USER,
+  adminAccount,
+  dbPassword,
+  dbUser,
+  isExternalDatabase,
+  mcpPort,
+  mcpReadOnly,
+  rootPath,
+  stoneName,
+} from './config';
 import { errorMessage, log, logStep } from './log';
 import { engineEnvironment } from './processes';
 import { grailPath, installedMcpStamp, mcpPath, mcpRouterStatePath, mcpStampPath } from './paths';
@@ -394,11 +405,11 @@ function runTopaz(script: string, label: string): Promise<string> {
  * 2026-09-27; filed upstream as mcp_server#56. GemDB's own sessions name
  * `localhost` for the same reason (`stoneNrs` in session.ts).
  */
-function topazLogin(): string {
+function topazLogin(account = { user: dbUser(), password: dbPassword() }): string {
   return [
     `set gemstone !tcp@localhost#server!${stoneName()}`,
-    `set username ${dbUser()}`,
-    `set password ${dbPassword()}`,
+    `set username ${account.user}`,
+    `set password ${account.password}`,
     'login',
     'iferr 1 stk',
   ].join('\n');
@@ -489,6 +500,7 @@ async function ensureReadOnlyUser(): Promise<boolean> {
   }
 
   logStep(`Provisioning the ${READ_ONLY_USER} database user`);
+  if (!isExternalDatabase()) return provisionReadOnlyUserForGemdb();
   const script = path.join(mcpPath(), 'setup-read-only-user.sh');
   if (!fs.existsSync(script)) {
     log(
@@ -531,6 +543,55 @@ async function ensureReadOnlyUser(): Promise<boolean> {
       resolve(false);
     });
   });
+}
+
+/**
+ * `setup-read-only-user.sh`'s steps, for the database GemDB manages.
+ *
+ * The script logs in as the account the router runs as and creates the user
+ * from there, which needs privileges `gemdb` deliberately lacks
+ * (`OtherPassword`, to create a user). So the same steps run as DataCurator,
+ * with the two things the script takes from "me" — the symbol list it copies
+ * and the one-time-password allowlist it extends — taken from `gemdb`, the
+ * router's account. Keep this in step with the script when the payload moves:
+ * the privilege list is its `DEFAULT_PRIVS`, argued there.
+ */
+async function provisionReadOnlyUserForGemdb(): Promise<boolean> {
+  const password = crypto.randomBytes(20).toString('hex');
+  const script = [
+    topazLogin(adminAccount()),
+    'run',
+    '| uid up me |',
+    `uid := ${smalltalkString(READ_ONLY_USER)}.`,
+    `me := AllUsers userWithId: ${smalltalkString(DB_USER)}.`,
+    '(AllUsers userWithId: uid ifAbsent: [nil]) ifNotNil: [:u |',
+    '  AllUsers removeAndCleanupUserWithId: uid ifAbsent: [nil]].',
+    `up := AllUsers addNewUserWithId: uid password: '${password}'.`,
+    'up disableCommits.',
+    'up privileges: #(#CodeModification #NoPerformOnServer #NoUserAction #NoGsFileOnServer #NoGsFileOnClient).',
+    'me symbolList do: [:d |',
+    '  (up symbolList includesIdentical: d) ifFalse: [up insertDictionary: d at: up symbolList size + 1]].',
+    "(up symbolList detect: [:d | d name asString = 'Mcp'] ifNone: [nil]) isNil",
+    "  ifTrue: [^'GEMDB_RO_USER=no Mcp dictionary'].",
+    'me addOnetimePasswordUserId: uid.',
+    'System commitTransaction.',
+    "'GEMDB_RO_USER=', 'provisioned'",
+    '%',
+    'logout',
+    'exit',
+  ].join('\n');
+  try {
+    const output = await runTopaz(script, `Provision ${READ_ONLY_USER}`);
+    if (/^\[[^\]]*\]\s*GEMDB_RO_USER=provisioned\s*$/m.test(output)) {
+      log(`The ${READ_ONLY_USER} user is ready; agent sessions will not be able to commit.`);
+      return true;
+    }
+    log(output.trimEnd());
+    log(`Provisioning ${READ_ONLY_USER} failed.`);
+  } catch (e) {
+    log(`Provisioning ${READ_ONLY_USER} failed: ${errorMessage(e)}`);
+  }
+  return false;
 }
 
 /**
@@ -658,6 +719,12 @@ export async function startMcpServer(): Promise<boolean> {
     pid: Number.isInteger(pid) ? pid : undefined,
     startedAt: new Date().toISOString(),
   };
+  // The router is forked as the gemdb account, which may not describe another
+  // session, so the serial and pid come back empty. On the database GemDB
+  // manages the administrator can describe it, and does.
+  if ((record.serial === undefined || record.pid === undefined) && !isExternalDatabase()) {
+    Object.assign(record, await describeAsAdmin(sessionId));
+  }
   writeRouterState(record);
 
   // The fork returns as soon as the child is launched, so the listener may not
@@ -687,6 +754,29 @@ export async function startMcpServer(): Promise<boolean> {
       'Check the gem log under the database log directory.',
   );
   return false;
+}
+
+/** A session's serial and gem pid, read as the administrator; empty if it has gone. */
+async function describeAsAdmin(sessionId: number): Promise<{ serial?: number; pid?: number }> {
+  const script = [
+    topazLogin(adminAccount()),
+    'run',
+    `| d | d := System descriptionOfSession: ${sessionId}.`,
+    "'router serial ' , (d at: 9) printString , ' pid ' , (d at: 2) printString",
+    '%',
+    'logout',
+    'exit',
+  ].join('\n');
+  try {
+    const output = await runTopaz(script, "Read the MCP server's session");
+    const match = /^\[[^\]]*\]\s*router serial (\d+) pid (\d+)\s*$/m.exec(output);
+    if (!match) return {};
+    const [serial, pid] = [Number(match[1]), Number(match[2])];
+    return { serial: serial > 0 ? serial : undefined, pid: pid > 0 ? pid : undefined };
+  } catch (e) {
+    log(`Could not read the MCP server's session: ${errorMessage(e)}`);
+    return {};
+  }
 }
 
 /**
@@ -767,7 +857,9 @@ export async function stopMcpServer({ bySession = true } = {}): Promise<void> {
     let stopped = false;
     try {
       const output = await runTopaz(
-        [topazLogin(), 'run', script, '%', 'logout', 'exit'].join('\n'),
+        // As the administrator: describing the router's session needs
+        // SessionAccess and stopping it SystemControl, which `gemdb` lacks.
+        [topazLogin(adminAccount()), 'run', script, '%', 'logout', 'exit'].join('\n'),
         'Stop the MCP server',
       );
       stopped = /stopped router session \d+/.test(output);

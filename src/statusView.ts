@@ -9,6 +9,19 @@ import {
 import { GrailInstallFailure, bundledGrailStamp, grailInstallFailure, grailLabel } from './grail';
 import { isInstalled } from './lifecycle';
 import { bundledMcpStamp, mcpLabel, mcpServerState, mcpUrl } from './mcp';
+import { FREE_SPACE_THRESHOLD_MB, REPOSITORY_LIMIT_MB } from './database';
+import {
+  GC_HEADROOM_MB,
+  GcRecord,
+  SpaceReading,
+  describeFound,
+  formatMb,
+  isCollecting,
+  readGcRecord,
+  roomLeftMb,
+  spaceReading,
+  usedMb,
+} from './maintenance';
 import { isRemoveIpcConfigured, isSharedMemoryConfigured, sharedMemoryLabel } from './osConfig';
 import {
   databaseExists,
@@ -134,6 +147,57 @@ export function pythonRow(facts: {
 }
 
 /**
+ * How full the database is, against the free license's 10 GB.
+ *
+ * Shown once maintenance has read it — reading takes a session, and the view
+ * must not spend one just to paint. "Used" counts garbage not yet reclaimed,
+ * which is the honest number: it is what the limit is measured against.
+ */
+export function spaceRow(facts: {
+  reading: SpaceReading | undefined;
+  record: GcRecord | undefined;
+  collecting: boolean;
+  now?: number;
+}): Row | undefined {
+  const { reading, record, collecting } = facts;
+  if (!reading && !collecting) return undefined;
+  const now = facts.now ?? Date.now();
+  const low = reading !== undefined && roomLeftMb(reading) < GC_HEADROOM_MB;
+  const last = record
+    ? `Garbage was last collected ${humanIdle(now - record.at)} ago` +
+      (describeFound(record) ? `, finding ${describeFound(record)}` : '') +
+      (record.freedMb !== undefined ? `, giving back ${formatMb(record.freedMb)}.` : '.')
+    : 'Garbage has not been collected yet.';
+  return {
+    label: 'Space',
+    description: collecting
+      ? 'collecting garbage…'
+      : reading
+        ? low
+          ? `${formatMb(roomLeftMb(reading))} left of ${formatMb(REPOSITORY_LIMIT_MB)}`
+          : `${formatMb(usedMb(reading))} of ${formatMb(REPOSITORY_LIMIT_MB)} used`
+        : undefined,
+    tooltip:
+      (reading
+        ? `${formatMb(usedMb(reading))} used, counting garbage not yet reclaimed; ` +
+          `${formatMb(roomLeftMb(reading))} of room left before the free license's ` +
+          `${formatMb(REPOSITORY_LIMIT_MB)} limit.\n\n`
+        : '') +
+      `GemDB collects garbage on a schedule, and whenever less than ${formatMb(GC_HEADROOM_MB)} ` +
+      `is left — well before the last ${FREE_SPACE_THRESHOLD_MB} MB, where the database stops ` +
+      `reclaiming garbage to protect itself. ${last}\n\nClick to collect garbage now.`,
+    icon: collecting
+      ? new vscode.ThemeIcon('loading~spin')
+      : low
+        ? warn('warning')
+        : ok('pie-chart'),
+    command: collecting
+      ? undefined
+      : { command: 'gemdb.collectGarbage', title: 'Collect Garbage Now' },
+  };
+}
+
+/**
  * The whole GemDB view: a handful of rows saying what is installed, whether it
  * is running, and what to do next.
  *
@@ -252,6 +316,15 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
             icon: databaseExists() ? new vscode.ThemeIcon('database') : warn('warning'),
           },
     );
+
+    if (state === 'running' && !external) {
+      const space = spaceRow({
+        reading: spaceReading(),
+        record: readGcRecord(),
+        collecting: isCollecting(),
+      });
+      if (space) rows.push(space);
+    }
 
     rows.push(
       pythonRow({

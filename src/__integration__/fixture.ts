@@ -2,8 +2,9 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { __setSetting } from '../__mocks__/vscode';
+import { STONE_NAME, databasePasswordPath } from '../config';
 import { createDatabase } from '../database';
-import { ensureRootPath, expectedEnginePath, extentPath } from '../paths';
+import { databaseConfPath, ensureRootPath, expectedEnginePath, extentPath } from '../paths';
 
 /**
  * A database of GemDB's own making, in a directory of its own, on the real
@@ -95,18 +96,56 @@ export function testExtentPath(): string {
   return path.join(process.cwd(), '.test-extent', 'gemdb.dbf');
 }
 
-/** True when `npm run test:extent` has been run in this checkout. */
+/** The `gemdb` account's password in the prepared extent, written beside it. */
+function testExtentPasswordPath(): string {
+  return path.join(process.cwd(), '.test-extent', 'gemdb.password');
+}
+
+/**
+ * True when `npm run test:extent` has been run in this checkout — by a build
+ * that made the `gemdb` account, whose password travels with the extent.
+ */
 export function haveTestExtent(): boolean {
-  return fs.existsSync(testExtentPath());
+  return fs.existsSync(testExtentPath()) && fs.existsSync(testExtentPasswordPath());
+}
+
+/**
+ * The cap the suite's databases reserve, in MB, instead of the license's
+ * 10 GB. Every database here pregrows to its cap when its stone starts, and
+ * the suite makes one per file on runners with about 14 GB of disk. Pregrow
+ * and the threshold behave the same at any size (docs/repository-space.md),
+ * and the 10 GB figure itself is checked against the key in space.test.ts.
+ */
+export const TEST_CAP_MB = 1024;
+
+/**
+ * Set the database's cap in the stone's own configuration file, which the
+ * stone reads after `system.conf`, so it overrides the license-sized one
+ * GemDB writes there — and `ensureSpaceLimits`, which leaves a setting any
+ * file makes alone, keeps it. Replaces a cap set earlier.
+ */
+export function limitTestDatabase(capMb = TEST_CAP_MB, thresholdMb?: number): void {
+  const conf = path.join(databaseConfPath(), `${STONE_NAME}.conf`);
+  const lines = fs
+    .readFileSync(conf, 'utf-8')
+    .split('\n')
+    .filter((line) => !/^\s*(DBF_EXTENT_SIZES|STN_FREE_SPACE_THRESHOLD)\s*=/.test(line));
+  lines.push(`DBF_EXTENT_SIZES = ${capMb}MB;`);
+  if (thresholdMb !== undefined) lines.push(`STN_FREE_SPACE_THRESHOLD = ${thresholdMb}MB;`);
+  fs.writeFileSync(conf, `${lines.join('\n').replace(/\n*$/, '')}\n`);
 }
 
 /**
  * Create the fixture's database from the prepared extent, so Python is there
  * without a file-in. Mirrors what `createDatabase` does for a user, then
- * swaps the stock extent for the prepared one.
+ * swaps the stock extent for the prepared one, and the generated password for
+ * the one the prepared extent's `gemdb` account has.
  */
 export function createDatabaseWithPython(fixture: Fixture): void {
   createDatabase(fixture.engine);
+  limitTestDatabase();
   fs.copyFileSync(testExtentPath(), extentPath());
   fs.chmodSync(extentPath(), 0o644);
+  fs.copyFileSync(testExtentPasswordPath(), databasePasswordPath());
+  fs.chmodSync(databasePasswordPath(), 0o600);
 }

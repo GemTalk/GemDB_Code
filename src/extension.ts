@@ -31,6 +31,7 @@ import {
   refreshActiveNotebookView,
   resetActiveNotebook,
 } from './notebook';
+import { collectGarbageCommand, startMaintenance, stopSessionCommand } from './maintenance';
 import { isMcpRunning, startMcpServer, stopMcpServer } from './mcp';
 import { registerBreakpointDebugger } from './debugger';
 import { registerSavedObjects } from './savedObjects';
@@ -315,6 +316,21 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
   );
 
+  // Space, garbage and idle sessions. The commands are registered on every
+  // platform, like the rest; the timer starts only past the platform gate.
+  const maintenanceHooks = {
+    changed: () => status.refresh(),
+    committedOrAborted: () => savedObjects.refresh(),
+  };
+  context.subscriptions.push(
+    vscode.commands.registerCommand('gemdb.collectGarbage', () =>
+      collectGarbageCommand(maintenanceHooks),
+    ),
+    vscode.commands.registerCommand('gemdb.stopSession', () =>
+      stopSessionCommand(maintenanceHooks),
+    ),
+  );
+
   // A change of root path or engine version invalidates everything the view
   // shows, and the session is bound to the old database.
   context.subscriptions.push(
@@ -352,6 +368,16 @@ export function activate(context: vscode.ExtensionContext): void {
         // the check above: a new one changes no session, but it changes this.
         if (isSupportedPlatform() && isInstalled()) ensureCliCurrent(extensionPath);
         status.refresh();
+      }
+
+      // The GemDB Shell reads the idle-abort setting from its wrapper's
+      // environment, so a new value needs a new wrapper.
+      if (
+        event.affectsConfiguration('gemdb.maintenance.abortIdleSessionsAfterMinutes') &&
+        isSupportedPlatform() &&
+        isInstalled()
+      ) {
+        ensureCliCurrent(extensionPath);
       }
 
       // Read-only is decided when the router is forked and serialized into the
@@ -406,6 +432,8 @@ export function activate(context: vscode.ExtensionContext): void {
   // setting, and this string is what the terminal shows to explain itself.
   context.environmentVariableCollection.description = `Adds the \`gemdb\` command (${cliDirPath()}) to the PATH.`;
   putCliOnPath(context.environmentVariableCollection);
+
+  context.subscriptions.push(startMaintenance(maintenanceHooks));
 
   status.refresh();
   // Reported off the synchronous activation path: `isRunningAsync()` spawns

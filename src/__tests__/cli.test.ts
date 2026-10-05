@@ -364,6 +364,96 @@ describe('starting the database', () => {
     expect(fs.existsSync(lock)).toBe(false);
   });
 
+  /** Make a path look ten seconds old, past the grace given to a half-written lock. */
+  function backdate(target: string): void {
+    const then = new Date(Date.now() - 10_000);
+    fs.utimesSync(target, then, then);
+  }
+
+  it('leaves alone a lock whose pid is not written yet', async () => {
+    // mkdir and the pid write are two steps, so a fresh empty lock is another
+    // process mid-claim. Removing it would start a second stone beside theirs.
+    writeCliScripts(ext);
+    const { starts } = installEngineStubs();
+    const lock = path.join(root, '.gemdb-stone.lock');
+    fs.mkdirSync(lock);
+    // The "other process" finishes: the stone comes up while the wrapper waits.
+    setTimeout(() => fs.writeFileSync(path.join(root, 'stone.up'), ''), 300);
+
+    await runWrapper();
+
+    expect(fs.existsSync(lock)).toBe(true);
+    expect(fs.existsSync(starts)).toBe(false);
+  });
+
+  it('takes over a lock that has had no pid for longer than any claim takes', async () => {
+    writeCliScripts(ext);
+    const { starts } = installEngineStubs();
+    const lock = path.join(root, '.gemdb-stone.lock');
+    fs.mkdirSync(lock);
+    backdate(lock);
+
+    await runWrapper();
+
+    expect(fs.existsSync(starts)).toBe(true);
+    expect(fs.existsSync(lock)).toBe(false);
+  });
+
+  it('does not remove a lock that someone else took over while it was starting', async () => {
+    // If ours was judged stale and stolen mid-start, the lock is the thief's now.
+    writeCliScripts(ext);
+    const bin = path.join(expectedEnginePath(), 'bin');
+    installEngineStubs();
+    const lock = path.join(root, '.gemdb-stone.lock');
+    fs.writeFileSync(
+      path.join(bin, 'startstone'),
+      `#!/bin/sh\necho ${process.pid} > '${lock}/pid'\ntouch '${path.join(root, 'stone.up')}'\nexit 0\n`,
+    );
+
+    await runWrapper();
+
+    expect(fs.readFileSync(path.join(lock, 'pid'), 'utf8').trim()).toBe(String(process.pid));
+  });
+
+  /** The stone lock and steal guard a stealer left when it died inside the guard. */
+  function leaveDeadStealersDebris(): void {
+    const lock = path.join(root, '.gemdb-stone.lock');
+    fs.mkdirSync(lock);
+    fs.writeFileSync(path.join(lock, 'pid'), '999999\n');
+    fs.mkdirSync(`${lock}.steal`);
+    backdate(`${lock}.steal`);
+  }
+
+  /** What is left beside the stone lock: the guard, or a tomb it was moved to. */
+  function guardLeftovers(): string[] {
+    return fs.readdirSync(root).filter((name) => name.startsWith('.gemdb-stone.lock.steal'));
+  }
+
+  it('takes over the steal guard of a stealer that died inside it', async () => {
+    writeCliScripts(ext);
+    const { starts } = installEngineStubs();
+    leaveDeadStealersDebris();
+
+    await runWrapper();
+
+    expect(fs.existsSync(starts)).toBe(true);
+    expect(guardLeftovers()).toEqual([]);
+  });
+
+  it('starts the stone once when several commands race over a dead stealer’s guard', async () => {
+    // A smoke test of the takeover under contention, not a reproduction of the
+    // race it closes: that window is too narrow to hit with natural timing,
+    // and this passes against delete-in-place too. No assertion on leftovers:
+    // a guard put back in the rare three-stealer case can outlive the run.
+    writeCliScripts(ext);
+    const { starts } = installEngineStubs();
+    leaveDeadStealersDebris();
+
+    await Promise.all([runWrapper(), runWrapper(), runWrapper(), runWrapper()]);
+
+    expect(fs.readFileSync(starts, 'utf8').trim().split('\n')).toHaveLength(1);
+  });
+
   it('starts the stone once when several commands race', async () => {
     writeCliScripts(ext);
     const { starts } = installEngineStubs();

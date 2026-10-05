@@ -1,3 +1,4 @@
+import { abortIdleSessionsAfterMinutes } from './config';
 import { errorMessage } from './log';
 import { findNetldi, findStone, startNetldi, startStone } from './processes';
 import { PyRepl, ReplSession } from './pyRepl';
@@ -42,9 +43,33 @@ async function ensureDatabase(): Promise<boolean> {
   }
 }
 
+/**
+ * How often the shell checks whether its session has been idle long enough to
+ * refresh. The setting is in minutes, so a minute is fine-grained enough.
+ */
+const IDLE_CHECK_MS = 60_000;
+
 /** A fresh session of this shell's own, shaped the way the loop wants it. */
 function login(): ReplSession {
   const session = GciSession.login('shell');
+  // A shell left at its prompt holds the commit record its view was taken
+  // from, exactly as an idle notebook does, so it gets the same treatment:
+  // aborted once idle, and only when that loses nothing. See
+  // `GciSession.abortIfClean` and maintenance.ts.
+  const idleAfterMs = abortIdleSessionsAfterMinutes() * 60_000;
+  const idleCheck =
+    idleAfterMs > 0
+      ? setInterval(() => {
+          if (!session.connected || session.idleMs < idleAfterMs) return;
+          try {
+            session.abortIfClean();
+          } catch {
+            /* the prompt reports a dead session at the next statement */
+          }
+        }, IDLE_CHECK_MS)
+      : undefined;
+  // Never what keeps the process alive.
+  idleCheck?.unref();
   return {
     get connected(): boolean {
       return session.connected;
@@ -52,7 +77,10 @@ function login(): ReplSession {
     run: (source: string, onOutput: (text: string) => void) =>
       runPythonInSession(session, source, 'repl', onOutput),
     interrupt: () => session.interrupt(),
-    logout: () => session.logout(),
+    logout: () => {
+      clearInterval(idleCheck);
+      session.logout();
+    },
   };
 }
 
