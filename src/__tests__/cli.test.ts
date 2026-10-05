@@ -95,6 +95,24 @@ describe('writeCliScripts', () => {
     expect(run).toContain('label size > 31 ifTrue:');
   });
 
+  it('ends the run on Ctrl-C rather than leaving topaz at its prompt', () => {
+    writeCliScripts(ext);
+
+    const run = fs.readFileSync(path.join(root, 'bin', 'gemdb-run.tpz'), 'utf8');
+
+    // The soft break is reported as CPython reports Ctrl-C, with the status
+    // a shell gives a process SIGINT ended...
+    expect(run).toContain('(ex isKindOf: Break)');
+    expect(run).toContain("nextPutAll: 'KeyboardInterrupt'");
+    expect(run).toContain('status := 130');
+    // ...and only an ExitClientError, after the status file is written,
+    // gets topaz to exit: it has stopped reading the script by then.
+    expect(run).toContain('interrupted ifTrue: [ExitClientError new status: status; signal].');
+    expect(run.indexOf('interrupted ifTrue:')).toBeGreaterThan(
+      run.indexOf('GsFile openWrite: statusFile'),
+    );
+  });
+
   it('reports an uncaught exception only after the stack has unwound', () => {
     writeCliScripts(ext);
 
