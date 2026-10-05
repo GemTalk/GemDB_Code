@@ -14,6 +14,7 @@ import {
   GC_HEADROOM_MB,
   GcRecord,
   SpaceReading,
+  describeFound,
   formatMb,
   isCollecting,
   readGcRecord,
@@ -164,6 +165,7 @@ export function spaceRow(facts: {
   const low = reading !== undefined && roomLeftMb(reading) < GC_HEADROOM_MB;
   const last = record
     ? `Garbage was last collected ${humanIdle(now - record.at)} ago` +
+      (describeFound(record) ? `, finding ${describeFound(record)}` : '') +
       (record.freedMb !== undefined ? `, giving back ${formatMb(record.freedMb)}.` : '.')
     : 'Garbage has not been collected yet.';
   return {

@@ -12,6 +12,7 @@ import {
   QUIET_MS,
   SPACE_GC_SPACING_MS,
   LAST_CALL_MS,
+  describeFound,
   formatMb,
   gcDue,
   isBelowThreshold,
@@ -160,7 +161,17 @@ describe('what a collection reports', () => {
   });
 
   it('leaves out what it does not say', () => {
-    expect(parseMfcReport('the repository is busy')).toEqual({ live: undefined, dead: undefined });
+    expect(parseMfcReport('the repository is busy')).toEqual({
+      live: undefined,
+      dead: undefined,
+    });
+  });
+
+  it('says what it found, in words', () => {
+    expect(describeFound({ live: 157318, dead: 8002 })).toBe(
+      '8,002 dead objects among 157,318 live',
+    );
+    expect(describeFound({})).toBe('');
   });
 });
 
@@ -232,12 +243,20 @@ describe('the Space row', () => {
   it('says when garbage was last collected, and what it gave back', () => {
     const row = spaceRow({
       reading: fresh,
-      record: { at: NOW - 2 * HOUR, reason: 'schedule', dead: 10, freedMb: 64 },
+      record: {
+        at: NOW - 2 * HOUR,
+        reason: 'schedule',
+        dead: 10,
+        live: 2000,
+        freedMb: 64,
+      },
       collecting: false,
       now: NOW,
     });
 
-    expect(row?.tooltip).toContain('last collected 2 h ago, giving back 64 MB.');
+    expect(row?.tooltip).toContain(
+      'last collected 2 h ago, finding 10 dead objects among 2,000 live, giving back 64 MB.',
+    );
   });
 
   it('shows a collection in progress, and offers no second one', () => {

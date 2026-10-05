@@ -138,6 +138,18 @@ export function formatMb(mb: number): string {
   return mb >= 1024 ? `${Math.round(mb / 102.4) / 10} GB` : `${Math.round(mb)} MB`;
 }
 
+/**
+ * What a collection found, as markForCollection counted it: "8,002 dead
+ * objects among 157,318 live". Empty when the report said nothing.
+ */
+export function describeFound(found: { live?: number; dead?: number }): string {
+  if (found.dead === undefined) return '';
+  return (
+    `${found.dead.toLocaleString('en-US')} dead objects` +
+    (found.live !== undefined ? ` among ${found.live.toLocaleString('en-US')} live` : '')
+  );
+}
+
 /** The answer to `SPACE_QUERY`, or undefined if it is not one. */
 export function parseSpaceReading(answer: string): SpaceReading | undefined {
   const match = answer.trim().match(/^(\d+) (\d+)(?: (\d+))?$/);
@@ -253,7 +265,14 @@ export function thresholdToReclaimUnder(freeMb: number): number {
   return Math.max(1, Math.floor(freeMb / 2));
 }
 
-/** The counts in a markForCollection report, where it gives them. */
+/**
+ * The counts in a markForCollection report, where it gives them: "… found
+ * 157318 live objects, 8002 dead objects(occupying approx 720180 bytes), 0
+ * possibleDeadSymbols". The counts are exact. The bytes are not read: they are
+ * the dead count times 90 (measured: 50230 dead, 4520700 bytes), which said
+ * 4.5 MB for strings holding 24 million characters. What a collection gave
+ * back is measured from free space instead.
+ */
 export function parseMfcReport(report: string): { live?: number; dead?: number } {
   const live = report.match(/(\d+) live objects/);
   const dead = report.match(/(\d+) dead objects/);
@@ -433,6 +452,8 @@ export interface GcRecord {
   reason: GcReason | 'command';
   /** Dead objects it found. */
   dead?: number;
+  /** Live objects the mark counted. */
+  live?: number;
   /** Room it gave back, in MB, once reclaimed and checkpointed. */
   freedMb?: number;
 }
@@ -783,7 +804,7 @@ export async function collectGarbage(
 
     const baselineKb = Number(await askingAgain(session, CHECKPOINTED_FREE_QUERY));
     const report = await askingAgain(session, MFC_QUERY);
-    const { dead } = parseMfcReport(report);
+    const { live, dead } = parseMfcReport(report);
     log(report);
 
     if (dead !== 0) {
@@ -838,12 +859,13 @@ export async function collectGarbage(
       at: Date.now(),
       reason,
       dead,
+      live,
       freedMb: before && after ? Math.max(0, roomLeftMb(after) - roomLeftMb(before)) : undefined,
     };
     writeGcRecord(record);
     if (after) lastReading = after;
     log(
-      `Garbage collection finished: ${dead ?? 'some'} dead objects` +
+      `Garbage collection finished: ${describeFound(record) || 'some dead objects'}` +
         (record.freedMb !== undefined ? `, ${formatMb(record.freedMb)} given back` : '') +
         (after ? `; ${formatMb(roomLeftMb(after))} of room left.` : '.'),
     );
@@ -905,7 +927,7 @@ export async function collectGarbageCommand(hooks: MaintenanceHooks): Promise<vo
   if (outcome.kind === 'done') {
     const { record, reading } = outcome;
     void vscode.window.showInformationMessage(
-      `Collected garbage: ${record.dead ?? 0} dead objects` +
+      `Collected garbage: ${describeFound(record) || 'no dead objects reported'}` +
         (record.freedMb !== undefined ? `, ${formatMb(record.freedMb)} given back` : '') +
         (reading
           ? `. ${formatMb(usedMb(reading))} of ${formatMb(REPOSITORY_LIMIT_MB)} used.`

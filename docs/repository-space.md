@@ -207,7 +207,11 @@ is committing past holds nothing back, so it is left alone.
 `markForCollection` alone frees nothing visible. The chain, each link measured:
 
 1. **Mark.** On 4.0 it *answers* a Warning carrying the report ("found 157318
-   live objects, 8002 dead objects…"), rather than signalling it.
+   live objects, 8002 dead objects(occupying approx 720180 bytes)…"), rather
+   than signalling it. The counts are exact; the bytes are the dead count
+   times 90 (50230 dead objects reported as 4520700 bytes, for strings holding
+   24 million characters), so GemDB shows the counts and measures what came
+   back from free space rather than repeating that figure.
 2. **Every session votes**, by committing or aborting. The collection aborts
    this window's clean sessions straight after the mark, and its own session on
    every poll.
