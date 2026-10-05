@@ -50,6 +50,47 @@ describe('the message when the database has no sessions left', () => {
     expect(message).toContain('Other windows');
   });
 
+  it('names the MCP server when it is running, and says how to free what agents hold', () => {
+    // Agents connected to GemDB's MCP server hold sessions no window lists, so
+    // the message used to send the user to close a notebook while an agent
+    // held them.
+    const message = sessionLimitMessage(owner('new.ipynb'), [], {
+      mcpServing: true,
+      external: false,
+    });
+    expect(message).toContain('MCP server is running');
+    expect(message).toContain('each connected AI agent');
+    expect(message).toContain('disconnect an AI agent');
+  });
+
+  it('says nothing about agents when the MCP server is not running', () => {
+    const message = sessionLimitMessage(owner('new.ipynb'), [], {
+      mcpServing: false,
+      external: false,
+    });
+    expect(message).not.toContain('MCP');
+    expect(message).not.toContain('agent');
+  });
+
+  it('says where the limit comes from for GemDB’s own database', () => {
+    const message = sessionLimitMessage(owner('new.ipynb'), [], {
+      mcpServing: false,
+      external: false,
+    });
+    expect(message).toContain('allows 10');
+    expect(message).toContain('Community Edition key');
+  });
+
+  it('does not state a limit for a database GemDB did not set up', () => {
+    const message = sessionLimitMessage(owner('new.ipynb'), [], {
+      mcpServing: false,
+      external: true,
+    });
+    expect(message).not.toContain('10');
+    expect(message).not.toContain('Community Edition');
+    expect(message).toContain('Other windows');
+  });
+
   it('scales the idle time it reports', () => {
     const message = sessionLimitMessage(owner('x'), [
       held('a', 90 * 60_000),
