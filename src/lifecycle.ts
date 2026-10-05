@@ -9,6 +9,7 @@ import {
   reinstallPythonOnUpdate,
   rootPath,
 } from './config';
+import { ensureDatabaseAccount } from './account';
 import { writeCliScripts } from './cli';
 import {
   assertDatabaseIsLocal,
@@ -16,6 +17,10 @@ import {
   createDatabase,
   DatabaseOnNfsError,
   DatabaseVersionError,
+  DiskSpaceError,
+  assertRoomForExtent,
+  assertRoomForSetup,
+  ensureSpaceLimits,
   removeDatabase,
 } from './database';
 import { Progress, installEngine, removeEngine } from './engine';
@@ -140,8 +145,10 @@ async function prepareFiles(
   }
 
   // Before the download: the stone will not open a database on NFS, and
-  // finding that out at the first start costs the whole setup.
+  // finding that out at the first start costs the whole setup. Nor will it
+  // start on a disk too small for its reserved extent.
   assertDatabaseIsLocal();
+  if (!databaseExists()) assertRoomForSetup();
 
   const engine = await installEngine(progress, token);
   if (token.isCancellationRequested) return false;
@@ -386,6 +393,17 @@ function reportFailure(what: string, e: unknown): void {
     return;
   }
 
+  // The same: nothing starts until there is disk for the reserved extent, so
+  // the message says how much and offers somewhere else.
+  if (e instanceof DiskSpaceError) {
+    const elsewhere = 'Choose Another Folder…';
+    void vscode.window.showErrorMessage(e.message, elsewhere, 'Show Log').then((choice) => {
+      if (choice === elsewhere) void chooseLocalRootPath();
+      else if (choice === 'Show Log') showLog();
+    });
+    return;
+  }
+
   void vscode.window
     .showErrorMessage(`${what} failed: ${errorMessage(e)}`, 'Show Log')
     .then((choice) => {
@@ -546,6 +564,10 @@ export async function ensureRunning(extensionPath: string, trigger: Trigger): Pr
       try {
         const { startedStone, startedNetldi } = await startProcesses(progress);
 
+        // Before Python is installed, because it is installed into this
+        // account. An external database's account is its administrator's.
+        if (!isExternalDatabase()) ensureDatabaseAccount();
+
         // Grail is filed in here rather than during preparation because it
         // needs a running database. The same branch covers the first install
         // and an extension update that ships a newer Grail — in both cases the
@@ -703,6 +725,10 @@ async function startProcesses(
     assertDatabaseIsLocal();
     const engine = enginePath();
     if (engine) assertDatabaseMatchesEngine(engine, engineVersion());
+    // A database an earlier GemDB created has no space limits yet, and the
+    // stone reserves the extent's full size as it starts.
+    ensureSpaceLimits();
+    assertRoomForExtent();
     progress?.report({ message: 'Starting the database…' });
     await startStone();
     startedStone = true;

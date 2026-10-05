@@ -72,8 +72,9 @@ locally, where a fresh checkout should still have a green suite, and dangerous
 in CI, where an artifact that failed to build would report success for a suite
 that executed nothing. The `Confirm the suite has something to run against`
 step asserts those paths instead of trusting the exit code — the engine, the
-payload, the shim, the test extent, `out/gemdb-shell.js` (which `repl.test.ts`
-needs because it drives the shell as a real process), and the MCP payload.
+payload, the shim, the test extent and its `gemdb` password,
+`out/gemdb-shell.js` (which `repl.test.ts` needs because it drives the shell
+as a real process), and the MCP payload.
 Anything new that skips on a missing artifact belongs in that list.
 
 **`bundle:grail` and `bundle:mcp` clone the commits pinned in `vendor-pins.sh`**, not
@@ -236,6 +237,29 @@ Checked in two places, and both are needed: `prepareFiles`, which is the
 first-install path, and `startProcesses` before the stone starts, because an
 extension update reaches that line without preparing anything — engine
 downloaded, database present, Grail staged, so `isInstalled()` is true.
+
+**Below its free-space threshold the stone stops collecting garbage.** GemDB
+caps the extent at the license's 10240 MB, reserves it on disk, and sets a
+500 MB threshold (`withSpaceLimits` in `database.ts`). The threshold is not a
+reserve that collection gets to use: below it, the reclaim gem suspends, so a
+collection finds garbage and frees none of it until SystemUser lowers the
+threshold. So `maintenance.ts` collects whenever less than 2 GB is left, and
+lowers the threshold for the duration when it is already too late. An idle
+session in `autoBegin` never votes, so collections wait on it, which is why
+idle sessions with nothing to commit are aborted (`abortIfClean`).
+
+**Sessions log in as `gemdb`, not DataCurator** (`DB_USER`; `account.ts`
+creates it). The threshold exempts DataCurator and SystemUser by name, and
+GemDB wants it to apply: below it a new `gemdb` session is refused (4002), and
+at three minutes the stone ends `gemdb` sessions holding the oldest commit
+record — measured, and left on deliberately. GemDB warns at once and at two
+minutes. `gemdb` has `CodeModification` and `CreateOnetimePassword` only, so
+anything administrative — collecting garbage, checkpoints, listing or stopping
+sessions, provisioning `McpReadOnly`, stopping the stone — logs in as
+DataCurator on a session of its own (`adminAccount()`). Integration tests that
+look at other sessions need the same. **Changing space settings, garbage
+collection, accounts, or anything that holds a session open? Read
+[`docs/repository-space.md`](docs/repository-space.md) first.**
 
 **GemDB runs in Restricted Mode and leaves trust to VS Code — keep it that
 way.** `capabilities.untrustedWorkspaces` is `"limited"`: without it GemDB is

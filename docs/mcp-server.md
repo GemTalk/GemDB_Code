@@ -415,8 +415,11 @@ thing to do to a router that is serving with it. If provisioning fails, the
 server does not start. Forking a read-write router for a user who asked for
 read-only would be a promise broken in the one direction they cannot check.
 
-`ensureReadOnlyUser` probes for that user and runs the script only if
-it is missing. That probe reads topaz's **result line**,
+`ensureReadOnlyUser` probes for that user and provisions it only if
+it is missing. On the database GemDB manages it does not run the script: the
+script creates the user from the router's own account, and `gemdb` lacks the
+privilege to create users, so `provisionReadOnlyUserForGemdb` runs the same
+steps as DataCurator (see [`repository-space.md`](repository-space.md)). That probe reads topaz's **result line**,
 not its output: topaz echoes a script before running it, so searching the whole
 answer for a marker finds the probe's own source and both spellings with it —
 which answered "present" whatever the image held, provisioned nothing, and left

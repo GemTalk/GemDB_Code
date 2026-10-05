@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DB_PASSWORD, DB_USER, STONE_NAME, STOP_TIMEOUT_SECONDS } from '../config';
+import { ADMIN_PASSWORD, ADMIN_USER, STONE_NAME, STOP_TIMEOUT_SECONDS } from '../config';
 import { EngineProcess } from '../gslist';
 import { StopWorld, runStop } from '../lifecycle';
 import { isListening, isRunning, stopStoneArgs } from '../processes';
@@ -189,7 +189,7 @@ describe('stopStoneArgs', () => {
     // stop would fail in a way that looks like bad credentials.
     const args = stopStoneArgs(true);
     expect(args.slice(0, args.indexOf(STONE_NAME))).toEqual(['-i', '-t', '10']);
-    expect(args.slice(args.indexOf(STONE_NAME))).toEqual([STONE_NAME, DB_USER, DB_PASSWORD]);
+    expect(args.slice(args.indexOf(STONE_NAME))).toEqual([STONE_NAME, ADMIN_USER, ADMIN_PASSWORD]);
   });
 
   it('leaves -i off unless forced, so no stop disconnects anyone unasked', () => {

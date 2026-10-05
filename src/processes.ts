@@ -4,8 +4,8 @@ import * as path from 'path';
 import { execFile, execFileSync, spawn } from 'child_process';
 import { promisify } from 'util';
 import {
-  DB_PASSWORD,
-  DB_USER,
+  ADMIN_PASSWORD,
+  ADMIN_USER,
   NETLDI_NAME,
   STONE_NAME,
   STOP_TIMEOUT_SECONDS,
@@ -17,7 +17,7 @@ import {
 import { libraryPathVariable, sharedLibraryExtension } from './platform';
 import { log, logStep } from './log';
 import { withStoneLock } from './lock';
-import { databaseOnNfsError } from './database';
+import { DiskSpaceError, databaseOnNfsError } from './database';
 import { EngineProcess, parseGslist } from './gslist';
 import { databaseConfPath, databaseLogPath, databasePath, enginePath, grailPath } from './paths';
 
@@ -215,6 +215,13 @@ export async function startStone(): Promise<void> {
       );
     } catch (e) {
       if (refusedNfs(e, stoneLog, logSizeBefore)) throw databaseOnNfsError();
+      if (stoneLogSays(/No space left on device/, e, stoneLog, logSizeBefore)) {
+        throw new DiskSpaceError(
+          'The GemDB database could not start: the disk ran out of space while it reserved ' +
+            'its extent. Free some disk space, or set gemdb.rootPath to a folder on a disk ' +
+            'with more room, then start GemDB again.',
+        );
+      }
       throw e;
     }
   });
@@ -231,7 +238,22 @@ export async function startStone(): Promise<void> {
  * a refusal from before the root path moved cannot be blamed for a new failure.
  */
 export function refusedNfs(e: unknown, stoneLog: string, logSizeBefore: number): boolean {
-  const said = (text: string): boolean => /NFS-mounted/.test(text);
+  return stoneLogSays(/NFS-mounted/, e, stoneLog, logSizeBefore);
+}
+
+/**
+ * Whether this start attempt's error, or what it added to the stone's log,
+ * matches `pattern`. Also how a pregrow the disk cannot hold is recognised:
+ * the stone logs "failed with No space left on device" and "Stone startup
+ * has failed" (measured).
+ */
+export function stoneLogSays(
+  pattern: RegExp,
+  e: unknown,
+  stoneLog: string,
+  logSizeBefore: number,
+): boolean {
+  const said = (text: string): boolean => pattern.test(text);
   if (e instanceof Error && said(e.message)) return true;
   try {
     const bytes = fs.readFileSync(stoneLog);
@@ -286,7 +308,7 @@ export async function startNetldi(): Promise<void> {
  */
 export function stopStoneArgs(force: boolean): string[] {
   const flags = force ? ['-i'] : [];
-  return [...flags, '-t', String(STOP_TIMEOUT_SECONDS), STONE_NAME, DB_USER, DB_PASSWORD];
+  return [...flags, '-t', String(STOP_TIMEOUT_SECONDS), STONE_NAME, ADMIN_USER, ADMIN_PASSWORD];
 }
 
 export async function stopStone(force = false): Promise<void> {

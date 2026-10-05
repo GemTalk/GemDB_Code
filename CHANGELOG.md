@@ -7,12 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Start with a fresh database: delete `~/GemDB/db` before starting this release. Your sessions now
+log in as a new `gemdb` account, and what an earlier release stored belongs to DataCurator, where
+this one does not look.
+
 ### Added
 
+- **The database reserves the free license's full 10 GB, with room to collect its garbage.** GemDB
+  Code caps the database at the license's 10 GB (until now it stopped at 8 GB), reserves all of it
+  on disk when the database first starts, and keeps 500 MB of it free, so the database protects
+  itself before it fills. Reserving the space up front means the disk cannot fill underneath the
+  database later. Setup checks for about 11 GB (12 GB on Linux) before it downloads anything, and
+  every start checks too, saying how much is missing and offering another folder. Garbage is
+  collected on a schedule (daily, `gemdb.maintenance.garbageCollectionIntervalHours`) once nothing
+  has run for a few minutes, and whenever less than 2 GB is left. That second trigger matters
+  because below the last 500 MB the database stops reclaiming garbage; if it gets there anyway,
+  GemDB lifts that limit for the length of a collection. The GemDB panel's **Space** row shows how
+  much is used and when garbage was last collected, and **GemDB: Collect Garbage Now** runs a
+  collection immediately.
+- **A warning when the database is full, with time to commit.** When the database runs out of the
+  space it keeps free, GemDB says so at once and starts collecting garbage, and says so again two
+  minutes later: at three, the database starts stopping sessions that hold back its space, and
+  what they have not committed is lost. A notebook that is already open can still commit; a new
+  notebook or GemDB Shell is refused, with a message saying why, until there is room. GemDB says
+  when there is room again.
+- **Idle sessions stop holding garbage back.** A notebook, GemDB Shell or GemDB session left idle
+  for 10 minutes (`gemdb.maintenance.abortIdleSessionsAfterMinutes`) is refreshed by aborting its
+  transaction, only when it has no uncommitted changes, so nothing is lost and its variables stay.
+  A notebook with uncommitted changes is never aborted. If it holds a collection back, GemDB asks
+  you to commit or abort it.
+- **GemDB: Stop a Database Session…** lists every session on the database, the ones holding garbage
+  collection back first, and stops the one you pick after asking. Anything it had not committed is
+  lost.
 - **GemDB: Copy Telemetry ID** puts the ID GemDB's usage data is keyed by on
   the clipboard, so you can ask for that data to be found or deleted.
   `USAGE_DATA.md` used to send you to Help: About for it, which does not show
   it. It works with telemetry turned off.
+
+### Changed
+
+- **Your work runs as a `gemdb` database account, not DataCurator.** Notebooks, the GemDB Shell,
+  Python files and AI agents log in as `gemdb`, which can define classes and run Python but has no
+  administrative privileges; GemDB creates it on the database's first start. GemDB's own
+  maintenance still uses DataCurator, on sessions of its own. From Python,
+  `gemdb.admin.garbage_collect()`, `gemdb.admin.backup()` and `gemdb.sessions.all()` now raise a
+  security error; **Collect Garbage Now** and **Stop a Database Session…** cover the first and
+  last.
 
 ## [1.5.4] - 2026-10-01
 

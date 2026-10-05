@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import * as fs from 'fs';
+import { ensureDatabaseAccount } from '../account';
 import { createDatabase } from '../database';
 import { isSharedMemoryConfigured } from '../osConfig';
-import { databaseExists } from '../paths';
+import { databaseExists, extentPath } from '../paths';
 import {
   findNetldi,
   findStone,
@@ -14,7 +16,7 @@ import {
   stopStone,
 } from '../processes';
 import { execute, isConnected, logout } from '../session';
-import { Fixture, makeFixture } from './fixture';
+import { Fixture, TEST_CAP_MB, limitTestDatabase, makeFixture } from './fixture';
 
 /**
  * The parts of GemDB that are only interesting against a real database.
@@ -68,6 +70,7 @@ describe.skipIf(!makeFixtureIsPossible())('a real database', () => {
     // new database has no Python in it until `ensureRunning` files Grail in.
     expect(createDatabase(fixture!.engine)).toBe(true);
     expect(databaseExists()).toBe(true);
+    limitTestDatabase();
 
     // Second call finds it already there and creates nothing — the state an
     // upgrade arrives in, where the database keeps whatever the user put in it.
@@ -77,6 +80,7 @@ describe.skipIf(!makeFixtureIsPossible())('a real database', () => {
   it('starts, and reports itself through gslist', async () => {
     await startStone();
     await startNetldi();
+    ensureDatabaseAccount();
 
     const processes = listProcesses();
     expect(findStone(processes)?.name).toBe('gemdb');
@@ -100,6 +104,31 @@ describe.skipIf(!makeFixtureIsPossible())('a real database', () => {
     // path has to evaluate to a String.
     expect(execute('(3 + 4) printString')).toBe('7');
     expect(isConnected()).toBe(true);
+  });
+
+  it('logs in as the gemdb account, which holds nothing administrative', () => {
+    expect(execute('System myUserProfile userId')).toBe('gemdb');
+    expect(execute('System myUserProfile privileges asSortedCollection asArray printString')).toBe(
+      "anArray( #'CodeModification', #'CreateOnetimePassword')",
+    );
+  });
+
+  it('creates the account once, and leaves it alone after that', () => {
+    const before = execute('(AllUsers userWithId: #gemdb) printString');
+
+    ensureDatabaseAccount();
+
+    expect(execute('(AllUsers userWithId: #gemdb) printString')).toBe(before);
+  });
+
+  it('reserves its whole cap on disk as it starts', async () => {
+    // DBF_PRE_GROW is asynchronous: the stone starts, then grows the extent.
+    const deadline = Date.now() + 30_000;
+    while (fs.statSync(extentPath()).size < TEST_CAP_MB * 1048576 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+
+    expect(fs.statSync(extentPath()).size).toBe(TEST_CAP_MB * 1048576);
   });
 
   it('refuses an unforced stop while a session is logged in', async () => {

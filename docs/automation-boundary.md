@@ -77,6 +77,44 @@ spend one. GemDB never uses `claude mcp get` or `list` to look before
 changing anything, because both connect to the server to report its status.
 It runs only in a trusted folder (see "Workspace Trust" under "Asked").
 
+**Capping the database at the license's 10 GB, and reserving it on disk**
+(`ensureSpaceLimits` in `database.ts`). Three lines in `conf/system.conf`,
+which GemDB wrote in the first place, added before the stone starts:
+`DBF_EXTENT_SIZES`, `STN_FREE_SPACE_THRESHOLD` and `DBF_PRE_GROW`. They live in
+the root path, take effect at the next start, and a value the user set in any
+configuration file is left alone. The cost is 10 GB of disk from the first
+start, which is the persistent kind of cost and was chosen deliberately: a
+disk that fills under a growing extent becomes a smaller cap without a word,
+and leaves the disk full for everything else (measured). It stays on this side
+because it is confined to the root path, undone by deleting the database, and
+checked first — setup and every start refuse, with the numbers and a way to
+choose another folder, when the disk cannot hold it. The setup footprint and
+the walkthrough say 11–12 GB. See [`repository-space.md`](repository-space.md).
+
+**Creating the `gemdb` database account** (`account.ts`). A committed write
+to GemDB's own database, made as DataCurator on the way to a running
+database, before Python is installed into the account: the user, its own
+security policy, two privileges, and a generated password in the root path.
+Inert and reversible for the same reason creating the database is — the
+database is GemDB's, and deleting it undoes this. Never on an external
+database, whose accounts are its administrator's.
+
+**Aborting idle sessions that have nothing to commit** (`abortIfClean`,
+`gemdb.maintenance.abortIdleSessionsAfterMinutes`). Only when `System
+needsCommit` is false, so it discards nothing, and the variables survive
+(SessionTemps). It never counts as use and never touches a session that is
+running or paused. The Shell does the same for its own session. Without it, an
+idle `autoBegin` session holds back every collection, and the stone's own
+remedies do not apply to it.
+
+**Collecting garbage** (`maintenance.ts`). Runs on a schedule once the window
+is quiet, or whenever less than 2 GB is left, and only for a database GemDB
+manages. It changes no data, and the space it frees is the user's. When free
+space is already below the threshold, it lowers the threshold as SystemUser
+for the duration and puts the value back. That runtime-only change is reverted
+at the end and by any stone restart, and without it the collection frees
+nothing, because the reclaim gem stops below the threshold.
+
 ## Asked
 
 **Raising shared memory — always prompts; never automate it.** It needs
@@ -147,3 +185,24 @@ says so.
 
 **Editing the user's shell profile.** Persistent and not ours to undo, so the
 README tells the user how instead.
+
+**A notebook left idle with uncommitted changes, holding back garbage
+collection — asked, once per stretch of idleness.** Commit, Abort… (which
+confirms) or Leave It. Only once the notebook is at least 20 commits behind
+(`STN_SIGNAL_ABORT_CR_BACKLOG`'s default): a dirty notebook that nothing else
+commits past holds nothing back, and a prompt then would be noise.
+
+**Stopping a database session — asked, every time** (`gemdb.stopSession`).
+Whatever the session has not committed is lost, so it is a modal with the
+session named. It is never automated, and neither of the stone's automatic
+versions is used. `STN_GEM_TIMEOUT` would end idle notebooks and Shells with
+their variables.
+
+**Ending sessions below the free-space threshold — the stone's, not GemDB's,
+and left on.** Three minutes below the threshold the stone ends the `gemdb`
+sessions holding the oldest commit record (`STN_DISKFULL_TERMINATION_INTERVAL`,
+at its default). That loses their uncommitted work, unasked, and is accepted:
+the alternative is a repository with no free pages, where nothing can be
+collected and committed work is at risk. GemDB's part is to warn — at once,
+and again at two minutes — and to start collecting the moment it notices (see
+[`repository-space.md`](repository-space.md)).

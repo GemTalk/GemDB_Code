@@ -3,7 +3,7 @@ import * as http from 'http';
 import * as net from 'net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { __setSetting } from '../__mocks__/vscode';
-import { mcpPort } from '../config';
+import { adminAccount, mcpPort } from '../config';
 import { stageGrail } from '../grail';
 import {
   bundledMcpStamp,
@@ -18,7 +18,7 @@ import {
 } from '../mcp';
 import { mcpInstalled, mcpRouterStatePath, mcpStagedOnDisk } from '../paths';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
-import { execute, logoutAll } from '../session';
+import { GciSession, execute, logoutAll } from '../session';
 import { createDatabaseWithPython, Fixture, haveTestExtent, makeFixture } from './fixture';
 
 /**
@@ -165,7 +165,7 @@ function mcpRequest(
  * `currentSessions` and the lookup, hence the slot 10 check.
  */
 function routerGems(routerPid: number): number[] {
-  const rows = execute(
+  const rows = asAdmin(
     [
       '| ws |',
       'ws := WriteStream on: String new.',
@@ -179,10 +179,26 @@ function routerGems(routerPid: number): number[] {
   return rows.split(/\s+/).filter(Boolean).map(Number);
 }
 
+/**
+ * Smalltalk as DataCurator, for looking at other sessions: the gemdb account
+ * GemDB's sessions use may not describe them, which is the point of it.
+ */
+function asAdmin(code: string): string {
+  const session = GciSession.login(
+    { key: 'it-admin', kind: 'extension', label: 'it admin' },
+    adminAccount(),
+  );
+  try {
+    return session.execute(code);
+  } finally {
+    session.logout();
+  }
+}
+
 /** Which of these serials still belong to a logged-in session. */
 function stillLoggedIn(serials: number[]): number[] {
   if (serials.length === 0) return [];
-  const rows = execute(
+  const rows = asAdmin(
     [
       '| ws |',
       'ws := WriteStream on: String new.',
@@ -257,7 +273,7 @@ describe.skipIf(!havePayload || !haveExtent || !canMakeFixture())(
       expect(state?.sessionId).toBeGreaterThan(0);
       expect(state?.serial).toBeGreaterThan(0);
       expect(
-        execute(`((System descriptionOfSessionSerialNum: ${state?.serial}) at: 10) printString`),
+        asAdmin(`((System descriptionOfSessionSerialNum: ${state?.serial}) at: 10) printString`),
       ).toBe(String(state?.sessionId));
 
       // And GemDB knows it is its own, which is what keeps it from killing a
