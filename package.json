@@ -202,6 +202,21 @@
         "when": "gemdb.running && gemdb.hasSavedStacks"
       }
     ],
+    "customEditors": [
+      {
+        "viewType": "gemdb.statistics",
+        "displayName": "GemDB Stats",
+        "selector": [
+          {
+            "filenamePattern": "*.out"
+          },
+          {
+            "filenamePattern": "*.out.gz"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
     "commands": [
       {
         "command": "gemdb.install",
@@ -297,6 +312,12 @@
         "title": "Show Log",
         "category": "GemDB",
         "icon": "$(output)"
+      },
+      {
+        "command": "gemdb.openStatistics",
+        "title": "Open Statistics File…",
+        "category": "GemDB",
+        "icon": "$(graph-line)"
       },
       {
         "command": "gemdb.uninstall",
@@ -679,6 +700,7 @@
     "test:integration": "vitest run --config vitest.integration.config.mts",
     "bundle:grail": "./scripts/bundle-grail.sh",
     "bundle:mcp": "./scripts/bundle-mcp.sh",
+    "bundle:stats": "node scripts/bundle-stats.mjs",
     "test:extent": "./scripts/build-test-extent.sh",
     "//hooks": "Local git hooks (lefthook.yml): eslint + prettier on staged files, and a non-blocking package-lock.json warning after checkout/merge/rebase. lefthook's postinstall installs them on `npm install`, so use hooks:uninstall to opt out. CI's `checks` job is the gate regardless.",
     "hooks:install": "lefthook install",

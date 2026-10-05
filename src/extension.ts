@@ -53,6 +53,7 @@ import { debugFile } from './debugFile';
 import { openRepl, runFile } from './repl';
 import { closeSessionFor, logoutAll, setInputHandler } from './session';
 import { GemDbStatusBar } from './statusBar';
+import { registerStatistics } from './statistics';
 import { StatusViewProvider } from './statusView';
 import {
   SETUP_OUTCOME,
@@ -123,6 +124,11 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     registerMcpProvider(extensionPath, () => ensureMcpRunning(extensionPath)),
   );
+
+  // GemDB Stats charts a statmon file in an editor tab. Before the platform
+  // gate: it reads a file and needs no database, so it works on a machine
+  // that cannot host one.
+  context.subscriptions.push(registerStatistics(context.extensionUri));
 
   // A closed notebook gives its session back. Sessions are scarce — the
   // database allows ten at once, and its own gems spend some of that — so a

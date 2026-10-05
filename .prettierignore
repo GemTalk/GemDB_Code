@@ -1,5 +1,6 @@
 out
 grail
+stats
 *.vsix
 
 # Vendored from Jasper byte-for-byte so upstream fixes are a plain copy.

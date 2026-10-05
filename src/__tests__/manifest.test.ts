@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { DEBUG_TYPE } from '../debugger';
+import { STATISTICS_VIEW_TYPE } from '../statistics';
 
 /**
  * What package.json promises VS Code about trust, held to it.
@@ -33,6 +34,11 @@ interface Manifest {
     menus: Record<string, Array<{ command: string; when?: string; group?: string }>>;
     viewsWelcome: Array<{ view: string; contents: string; when?: string }>;
     walkthroughs: { steps: WalkthroughStep[] }[];
+    customEditors: Array<{
+      viewType: string;
+      selector: Array<{ filenamePattern: string }>;
+      priority?: string;
+    }>;
   };
 }
 
@@ -213,5 +219,21 @@ describe('restoring a saved stack', () => {
     const entry = menus['view/title'].find((e) => e.command === 'gemdb.restoreStack');
 
     expect(entry?.when).toBe('view == gemdbStatus && gemdb.running && gemdb.hasSavedStacks');
+  });
+});
+
+describe('GemDB Stats', () => {
+  const { customEditors } = manifest.contributes;
+
+  it('declares the editor under the view type the code registers', () => {
+    // A mismatch fails silently: Open With… offers an editor nothing resolves.
+    expect(customEditors.map((e) => e.viewType)).toEqual([STATISTICS_VIEW_TYPE]);
+  });
+
+  it('is offered for statmon files without taking over every .out file', () => {
+    // `.out` is a common extension, so GemDB Stats is a choice under Open
+    // With…, never what a click on one opens.
+    expect(customEditors[0].priority).toBe('option');
+    expect(customEditors[0].selector.map((s) => s.filenamePattern)).toEqual(['*.out', '*.out.gz']);
   });
 });
