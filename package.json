@@ -299,6 +299,11 @@
         "icon": "$(output)"
       },
       {
+        "command": "gemdb.copyTelemetryId",
+        "title": "Copy Telemetry ID",
+        "category": "GemDB"
+      },
+      {
         "command": "gemdb.uninstall",
         "title": "Uninstall GemDB",
         "category": "GemDB"

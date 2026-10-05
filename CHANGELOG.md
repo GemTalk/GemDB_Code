@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **GemDB: Copy Telemetry ID** puts the ID GemDB's usage data is keyed by on
+  the clipboard, so you can ask for that data to be found or deleted.
+  `USAGE_DATA.md` used to send you to Help: About for it, which does not show
+  it. It works with telemetry turned off.
+
 ## [1.5.4] - 2026-10-01
 
 The engine is unchanged at GemStone 4.0.0.a4, so a database created by GemDB
