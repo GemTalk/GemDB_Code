@@ -54,6 +54,21 @@ this one does not look.
   security error; **Collect Garbage Now** and **Stop a Database Session…** cover the first and
   last.
 
+### Fixed
+
+- **Two windows, or a window and a `gemdb` command, no longer take the same lock at once.** Taking
+  over a lock left behind by a crash is now one process at a time, so two windows that both found
+  it stale cannot both go ahead and download into one file. A lock that has just been taken, with no
+  owner written into it yet, is no longer mistaken for debris and removed, which could let a second
+  stone start on the same database. Nothing removes a lock it does not own. A window that finds
+  another process starting the database now waits for it, for up to a minute, instead of carrying
+  on as if it were already running.
+- **A setup interrupted while unpacking the engine or creating the database no longer leaves an
+  install that looks finished.** Both are now built beside their final location and moved into
+  place only once complete, so closing the window part way through means the next start redoes that
+  step instead of failing later with a half-extracted engine or a truncated database. What an
+  interrupted run leaves behind is removed the next time setup runs.
+
 ## [1.5.4] - 2026-10-01
 
 The engine is unchanged at GemStone 4.0.0.a4, so a database created by GemDB
