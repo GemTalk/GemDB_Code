@@ -33,7 +33,11 @@ vi.mock('../database', async (importOriginal) => {
   return {
     DatabaseOnNfsError: actual.DatabaseOnNfsError,
     DatabaseVersionError: actual.DatabaseVersionError,
+    DiskSpaceError: actual.DiskSpaceError,
     assertDatabaseIsLocal: () => assertDatabaseIsLocal(),
+    assertRoomForSetup: () => {},
+    assertRoomForExtent: () => {},
+    ensureSpaceLimits: () => {},
     assertDatabaseMatchesEngine: () => {},
     createDatabase: (enginePath: string, extensionPath?: string) =>
       createDatabase(enginePath, extensionPath),

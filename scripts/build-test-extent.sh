@@ -73,7 +73,11 @@ cp "$GEMSTONE/bin/extent0.dbf" "$BUILD/data/extent0.dbf"
 chmod 644 "$BUILD/data/extent0.dbf"
 
 # Mirrors what src/database.ts writes, so the extent is built by the same
-# engine configuration that will later open it.
+# engine configuration that will later open it -- except the space limits.
+# DBF_PRE_GROW would make this artifact the size of the cap, and a 500 MB
+# threshold would grow it by that much; the extent copied out at the end must
+# stay small, and the stone that later opens it applies the limits the test
+# fixture sets (limitTestDatabase in src/__integration__/fixture.ts).
 cat > "$BUILD/conf/$STONE.conf" <<CONF
 SHR_PAGE_CACHE_SIZE_KB = 100000;
 KEYFILE = "$GEMSTONE/sys/community.starter.key";
@@ -87,8 +91,29 @@ echo "==> starting a scratch stone in $BUILD"
 startstone -z "$BUILD/conf/$STONE.conf" -l "$BUILD/log/$STONE.log" "$STONE"
 startnetldi -a "$(id -un)" -g -l "$BUILD/log/$NETLDI.log" "$NETLDI"
 
+# The account GemDB's sessions use, created by DataCurator as src/account.ts
+# creates it, with a password that travels with the extent: the fixture puts
+# it where src/config.ts reads it.
+echo "==> creating the gemdb account"
+GEMDB_ACCOUNT_PASSWORD="$(openssl rand -hex 16)"
+topaz -l -q <<TPZ
+set gemstone $STONE user DataCurator pass swordfish
+iferr 1 exit 1
+login
+run
+| u |
+u := AllUsers addNewUserWithId: 'gemdb' password: '$GEMDB_ACCOUNT_PASSWORD'
+  createNewSecurityPolicy: true.
+u addPrivilege: #CodeModification.
+u addPrivilege: #CreateOnetimePassword.
+System commitTransaction
+%
+logout
+exit 0
+TPZ
+
 echo "==> filing Grail in"
-export GEMDB_STONE="$STONE" GEMDB_USER=DataCurator GEMDB_PASSWORD=swordfish
+export GEMDB_STONE="$STONE" GEMDB_USER=gemdb GEMDB_PASSWORD="$GEMDB_ACCOUNT_PASSWORD"
 export GRAIL_DIR="$REPO/grail"
 export PYTHON_PACKAGE_PATH="$REPO/grail/src/python"
 export SHIM_LIB_PATH="$REPO/grail/src/c/shim/libcpython_ua.$([ "$(uname -s)" = Darwin ] && echo dylib || echo so)"
@@ -102,6 +127,8 @@ stopstone -t 120 "$STONE" DataCurator swordfish
 mkdir -p "$DEST"
 cp "$BUILD/data/extent0.dbf" "$DEST/gemdb.dbf"
 chmod 644 "$DEST/gemdb.dbf"
+printf '%s\n' "$GEMDB_ACCOUNT_PASSWORD" > "$DEST/gemdb.password"
+chmod 600 "$DEST/gemdb.password"
 cp "$REPO/grail/GRAIL_VERSION" "$DEST/GRAIL_VERSION"
 printf 'engine=%s\n' "$VERSION" >> "$DEST/GRAIL_VERSION"
 

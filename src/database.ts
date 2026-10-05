@@ -1,7 +1,8 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
-import { STONE_NAME, rootPath } from './config';
+import { STONE_NAME, databasePasswordPath, rootPath } from './config';
 import { log, logStep } from './log';
 import { isOnNfs } from './networkFileSystem';
 import { databaseExists, databasePath, ensureRootPath, extentPath } from './paths';
@@ -64,19 +65,22 @@ export function createDatabase(enginePath: string): boolean {
     ].join('\n'),
   );
 
-  // conf/system.conf — where the extent and transaction logs live.
+  // conf/system.conf — where the extent and transaction logs live, and how big
+  // the extent may get (see `withSpaceLimits`).
   fs.writeFileSync(
     path.join(dbPath, 'conf', 'system.conf'),
-    [
-      '# GemDB system configuration. Edit conf/gemdb.conf or conf/gem.conf instead;',
-      '# see conf/default.conf for every setting the engine understands.',
-      '',
-      `DBF_EXTENT_NAMES = "${path.join(dbPath, 'data', 'extent0.dbf')}";`,
-      'STN_TRAN_FULL_LOGGING = TRUE;',
-      `STN_TRAN_LOG_DIRECTORIES = "${path.join(dbPath, 'data')}/";`,
-      'STN_TRAN_LOG_SIZES = 1000;',
-      '',
-    ].join('\n'),
+    withSpaceLimits(
+      [
+        '# GemDB system configuration. Edit conf/gemdb.conf or conf/gem.conf instead;',
+        '# see conf/default.conf for every setting the engine understands.',
+        '',
+        `DBF_EXTENT_NAMES = "${path.join(dbPath, 'data', 'extent0.dbf')}";`,
+        'STN_TRAN_FULL_LOGGING = TRUE;',
+        `STN_TRAN_LOG_DIRECTORIES = "${path.join(dbPath, 'data')}/";`,
+        'STN_TRAN_LOG_SIZES = 1000;',
+        '',
+      ].join('\n'),
+    ) ?? '',
   );
 
   // The community starter key ships with the engine and is what lets a
@@ -95,6 +99,11 @@ export function createDatabase(enginePath: string): boolean {
     fs.copyFileSync(defaultConf, path.join(dbPath, 'conf', 'default.conf'));
   }
 
+  // The password for the `gemdb` account, which the first start creates
+  // (account.ts). Written now so that everything which embeds or reads it —
+  // the `gemdb` command among them — finds it from the beginning.
+  ensurePasswordFile();
+
   const stock = path.join(enginePath, 'bin', 'extent0.dbf');
   if (!fs.existsSync(stock)) {
     throw new Error(`The engine at ${enginePath} has no initial extent at ${stock}.`);
@@ -106,6 +115,238 @@ export function createDatabase(enginePath: string): boolean {
   fs.chmodSync(extentPath(), 0o644);
 
   log(`Database created at ${dbPath}`);
+  return true;
+}
+
+/**
+ * The most the Community Edition key lets a repository hold, in MB — the
+ * key's own words are `Repository size limit: 10240 MB`.
+ */
+export const REPOSITORY_LIMIT_MB = 10240;
+
+/**
+ * Free space, in MB, below which the stone starts protecting itself.
+ *
+ * Measured on 4.0.0.a4 (docs/repository-space.md): the stone keeps at least
+ * this much free by growing the extent ahead of demand, so a new database's
+ * extent starts at its contents plus this; and once the extent is at its
+ * maximum and free space falls below it, the stone logs it, sends every
+ * DataCurator session error 2338, refuses logins from anyone else — and
+ * suspends reclaim. GemDB's own garbage collection is timed to finish well
+ * before that line (`maintenance.ts`), because below it collecting garbage
+ * frees nothing until the threshold is lowered.
+ */
+export const FREE_SPACE_THRESHOLD_MB = 500;
+
+/** A setting given a value somewhere in `conf`, rather than commented out. */
+function setsOption(conf: string, option: string): boolean {
+  return new RegExp(`^\\s*${option}\\s*=`, 'm').test(conf);
+}
+
+/**
+ * `systemConf` with the space limits added, or undefined when it needs none.
+ *
+ * Three settings, each added only if no configuration file already sets it —
+ * so a developer who raised the threshold in `gemdb.conf` (which the stone
+ * reads after `system.conf`) keeps their value, and running this again
+ * changes nothing:
+ *
+ *   DBF_EXTENT_SIZES caps the extent at what the key allows. Without it the
+ *   stone's log says the extent is "unlimited, using REPOS MAX: 8192 Mbytes",
+ *   two gigabytes short of the key's limit; with it the stone accepts exactly
+ *   10240 MB (measured by pregrowing to it).
+ *
+ *   STN_FREE_SPACE_THRESHOLD is the line the stone defends. Its default is
+ *   0.1% of the repository, which on a 10 GB cap is 10 MB.
+ *
+ *   DBF_PRE_GROW reserves the whole cap on disk when the stone starts.
+ *   Measured: without it, a disk that fills first is treated as the cap — the
+ *   stone logged "Repository grow failure … No space left on device", went
+ *   below its threshold at whatever size it had reached, and left the disk
+ *   full for everything else. With it, a disk too small for the extent stops
+ *   the stone at startup ("Stone startup has failed") and damages nothing —
+ *   `assertRoomForExtent` says so before it gets that far. And `freeSpace`
+ *   alone is then the room left, for every tool that reads it. The cost is
+ *   10 GB of disk from the first start (3 seconds on an SSD, not sparse).
+ */
+export function withSpaceLimits(systemConf: string, otherConfs: string[] = []): string | undefined {
+  const all = [systemConf, ...otherConfs];
+  const missing: string[] = [];
+  if (!all.some((conf) => setsOption(conf, 'DBF_EXTENT_SIZES'))) {
+    missing.push(`DBF_EXTENT_SIZES = ${REPOSITORY_LIMIT_MB}MB;`);
+  }
+  if (!all.some((conf) => setsOption(conf, 'STN_FREE_SPACE_THRESHOLD'))) {
+    missing.push(`STN_FREE_SPACE_THRESHOLD = ${FREE_SPACE_THRESHOLD_MB}MB;`);
+  }
+  if (!all.some((conf) => setsOption(conf, 'DBF_PRE_GROW'))) {
+    missing.push('DBF_PRE_GROW = TRUE;');
+  }
+  if (missing.length === 0) return undefined;
+  return (
+    systemConf.replace(/\n*$/, '\n') +
+    [
+      '',
+      "# The license's repository limit, reserved on disk at startup, and the free",
+      '# space the stone defends below it. Below the threshold the stone stops',
+      '# reclaiming garbage and admits only DataCurator and SystemUser; override',
+      '# these in conf/gemdb.conf rather than deleting them. See',
+      '# docs/repository-space.md.',
+      ...missing,
+      '',
+    ].join('\n')
+  );
+}
+
+/**
+ * Give an existing database the space limits a new one is created with.
+ *
+ * Called before the stone starts, because a database created by an earlier
+ * GemDB reaches that line without being created again. The stone applies a
+ * new maximum to an existing extent at startup ("changing the maximum size
+ * from UNLIMITED MB to 10240 MB", in its log). Never throws: a database that
+ * starts without the limits is the one every earlier release ran.
+ */
+export function ensureSpaceLimits(): void {
+  const conf = path.join(databasePath(), 'conf');
+  const systemConf = path.join(conf, 'system.conf');
+  try {
+    if (!fs.existsSync(systemConf)) return;
+    const others = [`${STONE_NAME}.conf`, 'gem.conf']
+      .map((name) => path.join(conf, name))
+      .filter((file) => fs.existsSync(file))
+      .map((file) => fs.readFileSync(file, 'utf-8'));
+    const updated = withSpaceLimits(fs.readFileSync(systemConf, 'utf-8'), others);
+    if (updated === undefined) return;
+    fs.writeFileSync(systemConf, updated);
+    log(
+      `Capped the database at ${REPOSITORY_LIMIT_MB} MB, reserved on disk, with ` +
+        `${FREE_SPACE_THRESHOLD_MB} MB kept free; the stone applies this when it next starts.`,
+    );
+  } catch (e) {
+    log(`Could not add the space limits to ${systemConf}: ${e instanceof Error ? e.message : e}`);
+  }
+}
+
+/**
+ * The extent's cap in MB, as the configuration files set it — the last value
+ * set wins, as the stone reads `system.conf` and then the stone's own file —
+ * or undefined when none does. Units as the stone takes them: MB unless KB or
+ * GB says otherwise.
+ */
+export function configuredExtentMb(confs: string[]): number | undefined {
+  let mb: number | undefined;
+  for (const conf of confs) {
+    for (const match of conf.matchAll(/^\s*DBF_EXTENT_SIZES\s*=\s*(\d+)\s*(KB|MB|GB)?\s*[,;]/gim)) {
+      const value = Number(match[1]);
+      const unit = (match[2] ?? 'MB').toUpperCase();
+      mb = unit === 'GB' ? value * 1024 : unit === 'KB' ? value / 1024 : value;
+    }
+  }
+  return mb;
+}
+
+/**
+ * Disk the extent still needs, in MB, to reach its pregrown size — 0 when it
+ * is already there — and what to say when the disk has less.
+ *
+ * Pure, so the arithmetic and the wording can be tested without a disk.
+ */
+export function extentShortfall(facts: {
+  capMb: number;
+  extentMb: number;
+  freeDiskMb: number;
+  directory: string;
+}): string | undefined {
+  const needMb = Math.max(0, facts.capMb - facts.extentMb);
+  if (needMb <= facts.freeDiskMb) return undefined;
+  const gb = (mb: number): string => `${Math.ceil(mb / 1024)} GB`;
+  return (
+    `The GemDB database reserves its full ${gb(facts.capMb)} on disk when it starts, and ` +
+    `${facts.directory} has ${gb(facts.freeDiskMb)} free of the ${gb(needMb)} that needs. ` +
+    'Free some disk space, or set gemdb.rootPath to a folder on a disk with more room, ' +
+    'then start GemDB again.'
+  );
+}
+
+/** Raised when the disk cannot hold the database's reserved extent. */
+export class DiskSpaceError extends Error {}
+
+/** Free disk under `directory`, in MB, or undefined when it cannot be read. */
+export function freeDiskMb(directory: string): number | undefined {
+  try {
+    const stats = fs.statfsSync(directory);
+    return (stats.bavail * stats.bsize) / 1048576;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Refuse to start a stone whose pregrow the disk cannot hold. The stone would
+ * refuse too (measured), but in its log, as "No space left on device"; this
+ * says it first, with the numbers and the way out. Never refuses when it
+ * cannot read the disk: the stone's own check still stands behind it.
+ */
+export function assertRoomForExtent(): void {
+  const conf = path.join(databasePath(), 'conf');
+  const confs = ['system.conf', `${STONE_NAME}.conf`]
+    .map((name) => path.join(conf, name))
+    .filter((file) => fs.existsSync(file))
+    .map((file) => fs.readFileSync(file, 'utf-8'));
+  const capMb = configuredExtentMb(confs);
+  const free = freeDiskMb(databasePath());
+  if (capMb === undefined || free === undefined) return;
+  let extentMb = 0;
+  try {
+    extentMb = fs.statSync(extentPath()).size / 1048576;
+  } catch {
+    /* not created yet: the whole cap is needed */
+  }
+  const shortfall = extentShortfall({
+    capMb,
+    extentMb,
+    freeDiskMb: free,
+    directory: databasePath(),
+  });
+  if (shortfall) throw new DiskSpaceError(shortfall);
+}
+
+/**
+ * Disk the engine and its download take beside the database, in MB — the
+ * larger, Linux, figure (`setupFootprint` in platform.ts) rounded up.
+ */
+const ENGINE_DISK_MB = 2048;
+
+/**
+ * Refuse to start a first setup that the disk cannot finish: the engine, and
+ * then the database's reserved extent. Checked before the download, where
+ * finding out costs nothing. Never refuses when it cannot read the disk.
+ */
+export function assertRoomForSetup(): void {
+  const directory = fs.existsSync(rootPath()) ? rootPath() : path.dirname(rootPath());
+  const free = freeDiskMb(directory);
+  if (free === undefined) return;
+  const needMb = REPOSITORY_LIMIT_MB + ENGINE_DISK_MB;
+  if (free >= needMb) return;
+  throw new DiskSpaceError(
+    `Setting up GemDB needs about ${Math.ceil(needMb / 1024)} GB of disk — the database ` +
+      `reserves its full ${REPOSITORY_LIMIT_MB / 1024} GB — and ${directory} has ` +
+      `${Math.floor(free / 1024)} GB free. Free some disk space, or set gemdb.rootPath to a ` +
+      'folder on a disk with more room, then run Set Up GemDB again.',
+  );
+}
+
+/**
+ * Write a password for the `gemdb` account if there is none: 32 hex digits,
+ * safe in a Smalltalk string and a topaz command, readable by this OS account
+ * only. Answers whether it wrote one — the account, if it exists, then has a
+ * different password, which `ensureDatabaseAccount` puts right.
+ */
+export function ensurePasswordFile(): boolean {
+  const file = databasePasswordPath();
+  if (fs.existsSync(file)) return false;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${crypto.randomBytes(16).toString('hex')}\n`, { mode: 0o600 });
   return true;
 }
 

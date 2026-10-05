@@ -4,7 +4,6 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { __resetSettings, __setSetting } from '../__mocks__/vscode';
 import {
-  DB_PASSWORD,
   DB_USER,
   NETLDI_NAME,
   PINNED_ENGINE_VERSION,
@@ -83,11 +82,15 @@ afterEach(() => {
 
 describe('settings', () => {
   it('is off unless the product directory is set, and GemDB keeps its own names', () => {
+    __setSetting('gemdb.rootPath', scratch);
+    fs.mkdirSync(path.join(scratch, 'db', 'conf'), { recursive: true });
+    fs.writeFileSync(path.join(scratch, 'db', 'conf', 'gemdb.password'), 'generated\n');
+
     expect(externalDatabase()).toBeUndefined();
     expect(stoneName()).toBe(STONE_NAME);
     expect(netldiName()).toBe(NETLDI_NAME);
     expect(dbUser()).toBe(DB_USER);
-    expect(dbPassword()).toBe(DB_PASSWORD);
+    expect(dbPassword()).toBe('generated');
   });
 
   it('defaults to the conventional GemStone names and the stock account', () => {
@@ -100,7 +103,7 @@ describe('settings', () => {
       user: 'DataCurator',
       passwordFile: undefined,
     });
-    expect(dbPassword()).toBe(DB_PASSWORD);
+    expect(dbPassword()).toBe('swordfish');
   });
 
   it('uses the configured names and account', () => {

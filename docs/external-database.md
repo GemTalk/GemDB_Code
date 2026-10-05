@@ -78,7 +78,9 @@ the GCI library GemDB Code loads.
   missing, and logs in as SystemUser with the stock password to do it. Run it
   as SystemUser before handing the database over, at the Grail commit GemDB
   Code bundles (`PINNED_GRAIL_REF` in `vendor-pins.sh`).
-- **An account for the developer** with the `CodeModification` privilege,
+- **An account for the developer** — the same shape as the `gemdb` account
+  GemDB Code creates on a database of its own (`src/account.ts`) — with the
+  `CodeModification` privilege,
   which is what defining classes and methods needs, and with which Grail
   installs. With `gemdb.mcp.enabled` it also needs `CreateOnetimePassword`:
   the MCP server runs in a gem of its own, which logs in as the developer with

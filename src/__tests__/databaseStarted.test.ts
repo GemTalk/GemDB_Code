@@ -9,6 +9,8 @@ import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 // on the event (silent on a no-op call, deduped on a repeated failure) can be
 // asserted without a real engine, database, or Grail.
 vi.mock('../cli', () => ({ writeCliScripts: () => {}, ensureCliCurrent: () => true }));
+// Creating the database account logs in over GCI; that is integration's.
+vi.mock('../account', () => ({ ensureDatabaseAccount: () => {} }));
 
 const bundledGrailStamp = vi.fn(() => 'grail=0.1-1-gabc\n');
 const grailNeedsUpdate = vi.fn(() => false);

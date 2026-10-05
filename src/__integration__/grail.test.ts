@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { __log } from '../__mocks__/vscode';
+import { ensureDatabaseAccount } from '../account';
 import { createDatabase } from '../database';
 import { bundledGrailStamp, installGrail, recordGrailInstalled, stageGrail } from '../grail';
 import { isSharedMemoryConfigured } from '../osConfig';
@@ -13,7 +14,7 @@ import {
   runPythonOnce,
 } from '../pythonQueries';
 import { GciSession, SessionOwner, logout } from '../session';
-import { Fixture, makeFixture } from './fixture';
+import { Fixture, limitTestDatabase, makeFixture } from './fixture';
 
 /** A notebook owner for a test scope: one session per name, as the kernel does. */
 function nb(name: string): SessionOwner {
@@ -59,8 +60,11 @@ beforeAll(async () => {
   }
 
   createDatabase(fixture.engine);
+  limitTestDatabase();
   await startStone();
   await startNetldi();
+  // Grail installs into the gemdb account, as `ensureRunning` creates it.
+  ensureDatabaseAccount();
 });
 
 afterAll(async () => {

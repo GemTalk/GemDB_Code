@@ -25,6 +25,7 @@ const SETTINGS: Record<string, string | undefined> = {
   // hand), the defaults are the defaults.
   'gemdb.rootPath': process.env.GEMDB_ROOT_PATH ?? process.env.GEMSTONE_GLOBAL_DIR,
   'gemdb.engineVersion': process.env.GEMDB_ENGINE_VERSION,
+  'gemdb.maintenance.abortIdleSessionsAfterMinutes': process.env.GEMDB_ABORT_IDLE_MINUTES,
   // Set only by a wrapper generated for an external database; see config.ts.
   'gemdb.externalDatabase.gemstone': process.env.GEMDB_EXTERNAL_GEMSTONE,
   'gemdb.externalDatabase.globalDirectory': process.env.GEMDB_EXTERNAL_GLOBAL_DIRECTORY,

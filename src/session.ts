@@ -58,8 +58,9 @@ export class SessionLimitError extends SessionError {}
 
 /**
  * GemStone's login errors for "no session available": the stone's limit, the
- * GCI's own, and too many sessions for one user id. GemDB always logs in as
- * DataCurator, so the last one is as reachable as the first.
+ * GCI's own, and too many sessions for one user id. Every GemDB session
+ * logs in as one account (`DB_USER`), so the last one is as reachable as the
+ * first.
  * (`$GEMSTONE/include/gcierr.ht`: GS_ERR_MAX_SESSIONS_LIMIT,
  * GS_ERR_GCI_SESSIONS_LIMIT, GS_ERR_ACTIVE_USER_LIMIT.)
  */
@@ -419,6 +420,54 @@ function getLibrary(): GciLibrary {
 }
 
 /** Does this error mean the session under it is gone, not just unhappy? */
+/**
+ * GemStone's notice that the stone has fallen below its free-space threshold.
+ *
+ * Measured on 4.0.0.a4 (docs/repository-space.md): it is sent once to every
+ * DataCurator session when free space crosses the line, and arrives at that
+ * session's next request — which it replaces: the cell does not run, the
+ * session is fine, and the next cell runs normally. So the message says that,
+ * rather than the stone's "running below the freeSpaceThreshold".
+ */
+const BELOW_FREE_SPACE_THRESHOLD = /\(error 2338\)/;
+const BELOW_THRESHOLD_MESSAGE =
+  'The database is nearly full and has begun protecting the space it keeps free ' +
+  '(GemStone error 2338), so this did not run. Run it again — nothing else is wrong. ' +
+  'GemDB collects garbage to make room; if that is not enough, delete data you no longer ' +
+  'need and commit.';
+
+/**
+ * `REP_ERR_REPOS_FULL`, "The logical repository is full". Measured: what a
+ * login by anyone but DataCurator or SystemUser gets while the stone is below
+ * its threshold — which is every GemDB session's account (`DB_USER`). The
+ * stone re-checks the threshold on its own clock, so a login a second after
+ * space comes back can still get it; seconds later it does not. It also ends
+ * a gemdb session that needs space below the threshold: measured, a session
+ * committing data there was stopped with it.
+ */
+const REPOSITORY_FULL = 4002;
+/**
+ * The same error mid-session, by its words — "The Repository is full and can
+ * no longer be expanded.", measured — since a failed call reaches
+ * `asSessionError` as a message only.
+ */
+const REPOSITORY_FULL_TEXT = /\(error 4002\)|repository is full/i;
+const FULL_LOGIN_MESSAGE =
+  'The GemDB database is full, so it is not opening new sessions (GemStone error 4002). ' +
+  'GemDB is collecting garbage to make room; try again in a minute or two. If it stays ' +
+  'full, delete data you no longer need from a notebook that is already open, and commit.';
+const FULL_SESSION_MESSAGE =
+  'The GemDB database is full and stopped this session (GemStone error 4002). Anything it ' +
+  'had not committed is lost. Try again once GemDB says the database has room again.';
+
+/**
+ * Whether `e` is that notice. It replaces the request it arrived on, so
+ * anything that is not the user's own code can simply ask again.
+ */
+export function isFreeSpaceNotice(e: unknown): boolean {
+  return e instanceof SessionError && e.message === BELOW_THRESHOLD_MESSAGE;
+}
+
 function isDeadSession(message: string): boolean {
   return /not logged in|session.*(gone|terminated)|GCI_ERR_.*LOGIN/i.test(message);
 }
@@ -540,8 +589,16 @@ export class GciSession {
     return Date.now() - this.lastUsedAt;
   }
 
-  /** Log in, or throw a `SessionError` saying why that is impossible. */
-  static login(owner: SessionOwner | string): GciSession {
+  /**
+   * Log in, or throw a `SessionError` saying why that is impossible.
+   *
+   * `account` is for the one thing GemDB does as someone else: lowering the
+   * free-space threshold, which only SystemUser may change (`maintenance.ts`).
+   */
+  static login(
+    owner: SessionOwner | string,
+    account: { user: string; password: string } = { user: dbUser(), password: dbPassword() },
+  ): GciSession {
     // A bare string is still accepted: cliMain logs in as 'shell', and a
     // standalone process has exactly one session and no registry to key.
     const resolved: SessionOwner =
@@ -558,8 +615,8 @@ export class GciSession {
       null,
       false,
       gemNrs(),
-      dbUser(),
-      dbPassword(),
+      account.user,
+      account.password,
       GCI_LOGIN_QUIET,
       0,
     );
@@ -572,6 +629,7 @@ export class GciSession {
       if (SESSION_LIMIT_ERRORS.has(result.err.number)) {
         throw new SessionLimitError(sessionLimitMessage(resolved, sessionRegistry()));
       }
+      if (result.err.number === REPOSITORY_FULL) throw new SessionError(FULL_LOGIN_MESSAGE);
       throw new SessionError(
         result.err.message || `Could not connect to GemDB (error ${result.err.number}).`,
       );
@@ -597,7 +655,7 @@ export class GciSession {
     }
     session.publishName();
     log(
-      `Connected to GemDB as ${dbUser()} (${resolved.label}` +
+      `Connected to GemDB as ${account.user} (${resolved.label}` +
         `${session.sessionSerial === undefined ? '' : `, session ${session.sessionSerial}`})`,
     );
     return session;
@@ -614,6 +672,21 @@ export class GciSession {
     const { result: inProgress } = this.gci.GciTsCallInProgress(handle);
     if (inProgress !== 0) {
       throw new SessionError('GemDB is busy running something else. Wait for it to finish.');
+    }
+    return this.fetchAskingAgain(handle, code);
+  }
+
+  /**
+   * `executeAndFetchString`, asked again once if the stone's free-space
+   * notice took the first request's place. Only for GemDB's own queries:
+   * user code goes through `executeAsync`, where the notice is reported.
+   */
+  private fetchAskingAgain(handle: unknown, code: string): string {
+    try {
+      return this.gci.executeAndFetchString(handle, code);
+    } catch (e) {
+      const error = this.asSessionError(e);
+      if (!isFreeSpaceNotice(error)) throw error;
     }
     try {
       return this.gci.executeAndFetchString(handle, code);
@@ -1112,6 +1185,45 @@ export class GciSession {
     this.gci.GciTsBreak(this.handle, false);
   }
 
+  /**
+   * Run a short Smalltalk query without counting as use, or answer undefined
+   * when the session is running something or paused at a breakpoint().
+   *
+   * For maintenance (`maintenance.ts`), which must not make a session the
+   * user left alone look recently used — idle time is what the status view
+   * ranks sessions by, and what decides which ones maintenance touches.
+   */
+  peek(code: string): string | undefined {
+    if (this.busy || this.pendingHaltCancel) return undefined;
+    const handle = this.requireHandle();
+    if (this.gci.GciTsCallInProgress(handle).result !== 0) return undefined;
+    return this.fetchAskingAgain(handle, code);
+  }
+
+  /**
+   * Abort this session's transaction if that loses nothing, without counting
+   * as use.
+   *
+   * GemDB's sessions run in `autoBegin`, the stone's default, so an idle one
+   * is always inside a transaction and holds the commit record its view was
+   * taken from. The stone's own remedies (`STN_SIGNAL_ABORT_CR_BACKLOG`,
+   * `STN_GEM_ABORT_TIMEOUT`) apply only to sessions outside a transaction, so
+   * nothing makes it let go — and until it does, garbage a collection found
+   * waits on its vote and is never reclaimed (measured; see
+   * docs/repository-space.md). With `System needsCommit` false an abort only
+   * refreshes the view: a notebook's variables live in SessionTemps, which an
+   * abort leaves alone, and `gemdb.abort()` is this same send.
+   *
+   * A session that is running something, or paused at a breakpoint(), is
+   * left alone: its transaction is its owner's business.
+   */
+  abortIfClean(): 'aborted' | 'dirty' | 'busy' {
+    const answer = this.peek(
+      "System needsCommit ifTrue: ['dirty'] ifFalse: [System abortTransaction. 'aborted']",
+    );
+    return answer === undefined ? 'busy' : answer === 'dirty' ? 'dirty' : 'aborted';
+  }
+
   commit(): void {
     const handle = this.requireHandle();
     const { success, err } = this.gci.GciTsCommit(handle);
@@ -1172,6 +1284,13 @@ export class GciSession {
     // Deliberate, not failures.
     if (e instanceof ExecutionInterrupted || e instanceof ExecutionStopped) return e;
     const message = e instanceof Error ? e.message : String(e);
+    if (BELOW_FREE_SPACE_THRESHOLD.test(message)) return new SessionError(BELOW_THRESHOLD_MESSAGE);
+    if (REPOSITORY_FULL_TEXT.test(message)) {
+      // The engine stops the gem that needed the space, so this handle is dead.
+      this.handle = undefined;
+      liveSessions.delete(this);
+      return new SessionError(FULL_SESSION_MESSAGE);
+    }
     if (isDeadSession(message)) {
       this.handle = undefined;
       liveSessions.delete(this);
@@ -1256,6 +1375,11 @@ export function renameSession(oldKey: string, newOwner: SessionOwner): boolean {
   return true;
 }
 
+/** Every session this window holds, for maintenance to sweep. */
+export function windowSessions(): GciSession[] {
+  return [...sessions.values()].filter((s) => s.connected);
+}
+
 /** One owner's session if it is already open, without logging one in. */
 export function sessionForIfOpen(key: string): GciSession | undefined {
   const session = sessions.get(key);
@@ -1276,7 +1400,7 @@ export function closeSessionFor(key: string): void {
 }
 
 /** Human-readable "3 minutes", for messages about idle sessions. */
-function humanDuration(ms: number): string {
+export function humanDuration(ms: number): string {
   const seconds = Math.round(ms / 1000);
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.round(seconds / 60);

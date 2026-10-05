@@ -65,6 +65,20 @@
           "default": true,
           "description": "When a GemDB Code update ships a newer Python execution engine, reinstall it into your database automatically the next time GemDB Code starts."
         },
+        "gemdb.maintenance.abortIdleSessionsAfterMinutes": {
+          "scope": "machine",
+          "type": "number",
+          "default": 10,
+          "minimum": 0,
+          "markdownDescription": "Minutes a notebook, the GemDB Shell, or GemDB itself may leave its database session idle before GemDB refreshes it — aborting its transaction, **only when it has no uncommitted changes**, so nothing is lost and your variables stay. An idle session otherwise keeps the database from reclaiming garbage. A notebook with uncommitted changes is never aborted: if it holds garbage collection back, GemDB asks you to commit or abort. `0` turns this off."
+        },
+        "gemdb.maintenance.garbageCollectionIntervalHours": {
+          "scope": "machine",
+          "type": "number",
+          "default": 24,
+          "minimum": 0,
+          "markdownDescription": "Hours between garbage collections, which run once nothing in the window has run for a few minutes. GemDB also collects whenever less than 2 GB is left of the free license's 10 GB, so the database never reaches the point where it stops reclaiming garbage. `0` collects only when space runs short. **GemDB: Collect Garbage Now** runs one immediately."
+        },
         "gemdb.mcp.enabled": {
           "scope": "machine",
           "type": "boolean",
@@ -173,12 +187,12 @@
     "viewsWelcome": [
       {
         "view": "gemdbStatus",
-        "contents": "GemDB isn't set up yet.\n\nSetup downloads the database engine and creates your database. It picks up where it left off, so a cancelled download costs you nothing.\n[Set Up GemDB](command:gemdb.install)\n\nEverything goes in one folder: `~/GemDB`, unless you [choose another](command:workbench.action.openSettings?%22gemdb.rootPath%22). It has to be on a local disk.\n\nAbout 145 MB to download, 700 MB on disk.",
+        "contents": "GemDB isn't set up yet.\n\nSetup downloads the database engine and creates your database. It picks up where it left off, so a cancelled download costs you nothing.\n[Set Up GemDB](command:gemdb.install)\n\nEverything goes in one folder: `~/GemDB`, unless you [choose another](command:workbench.action.openSettings?%22gemdb.rootPath%22). It has to be on a local disk.\n\nAbout 145 MB to download, 11 GB on disk.",
         "when": "gemdb.state == notInstalled && !gemdb.externalDatabase && !gemdb.settingUp && isMac"
       },
       {
         "view": "gemdbStatus",
-        "contents": "GemDB isn't set up yet.\n\nSetup downloads the database engine and creates your database. It picks up where it left off, so a cancelled download costs you nothing.\n[Set Up GemDB](command:gemdb.install)\n\nEverything goes in one folder: `~/GemDB`, unless you [choose another](command:workbench.action.openSettings?%22gemdb.rootPath%22). It has to be on a local disk.\n\nAbout 450 MB to download, 1.4 GB on disk.",
+        "contents": "GemDB isn't set up yet.\n\nSetup downloads the database engine and creates your database. It picks up where it left off, so a cancelled download costs you nothing.\n[Set Up GemDB](command:gemdb.install)\n\nEverything goes in one folder: `~/GemDB`, unless you [choose another](command:workbench.action.openSettings?%22gemdb.rootPath%22). It has to be on a local disk.\n\nAbout 450 MB to download, 12 GB on disk.",
         "when": "gemdb.state == notInstalled && !gemdb.externalDatabase && !gemdb.settingUp && isLinux"
       },
       {
@@ -266,6 +280,17 @@
       {
         "command": "gemdb.reinstallPython",
         "title": "Reinstall the Python Execution Engine",
+        "category": "GemDB"
+      },
+      {
+        "command": "gemdb.collectGarbage",
+        "title": "Collect Garbage Now",
+        "category": "GemDB",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "gemdb.stopSession",
+        "title": "Stop a Database Session…",
         "category": "GemDB"
       },
       {
@@ -435,6 +460,16 @@
           "command": "gemdb.restartMcpServer",
           "when": "view == gemdbStatus && gemdb.running",
           "group": "1_gemdb@3"
+        },
+        {
+          "command": "gemdb.collectGarbage",
+          "when": "view == gemdbStatus && gemdb.running && !gemdb.externalDatabase",
+          "group": "1_gemdb@4"
+        },
+        {
+          "command": "gemdb.stopSession",
+          "when": "view == gemdbStatus && gemdb.running",
+          "group": "1_gemdb@5"
         },
         {
           "command": "gemdb.savedObjects.refresh",

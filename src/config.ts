@@ -50,9 +50,38 @@ export const STONE_NAME = 'gemdb';
 export const NETLDI_NAME = 'gemdbldi';
 export const DB_DIR_NAME = 'db';
 
-/** The stock account on a fresh extent. GemDB never asks the user for it. */
-export const DB_USER = 'DataCurator';
-export const DB_PASSWORD = 'swordfish';
+/**
+ * The account every notebook, Shell, Python run and MCP worker uses on the
+ * database GemDB manages.
+ *
+ * Deliberately not DataCurator. The stone's free-space threshold exempts
+ * DataCurator and SystemUser by name: below it, other accounts cannot log in,
+ * and an idle one holding the oldest commit record is ended after
+ * `STN_DISKFULL_TERMINATION_INTERVAL` — measured, and wanted, because losing
+ * a little uncommitted work beats a repository with no room left to collect
+ * garbage in (docs/repository-space.md). It holds `CodeModification`, to
+ * define classes, and `CreateOnetimePassword`, for the MCP server's gem, and
+ * nothing administrative: maintenance logs in as {@link ADMIN_USER} on a
+ * session of its own. Created by `ensureDatabaseAccount` (account.ts), the
+ * same way GemDB Cloud's image creates its customer account.
+ */
+export const DB_USER = 'gemdb';
+
+/**
+ * The stock administrator account, which GemDB uses only for its own
+ * maintenance: creating {@link DB_USER}, collecting garbage, checkpoints,
+ * listing and stopping sessions, provisioning the MCP read-only user, and
+ * stopping the stone. Never for the user's own work.
+ */
+export const ADMIN_USER = 'DataCurator';
+export const ADMIN_PASSWORD = 'swordfish';
+
+/** The stock SystemUser password, for the two things only SystemUser may do. */
+export const SYSTEM_USER_PASSWORD = 'swordfish';
+
+/** What an external database's account defaults to: the stock one. */
+const EXTERNAL_DEFAULT_USER = 'DataCurator';
+const EXTERNAL_DEFAULT_PASSWORD = 'swordfish';
 
 /**
  * A database someone else installed and runs, which GemDB only connects to.
@@ -96,7 +125,7 @@ export function externalDatabase(): ExternalDatabase | undefined {
     globalDirectory: expandHome(setting('globalDirectory', '/opt/gemstone')),
     stone: setting('stone', 'gs64stone'),
     netldi: setting('netldi', 'gs64ldi'),
-    user: setting('user', DB_USER),
+    user: setting('user', EXTERNAL_DEFAULT_USER),
     passwordFile: passwordFile ? expandHome(passwordFile) : undefined,
   };
 }
@@ -130,20 +159,45 @@ export function dbUser(): string {
  * picked up without touching the editor.
  */
 export function dbPassword(): string {
-  const file = externalDatabase()?.passwordFile;
-  if (!file) return DB_PASSWORD;
+  const external = externalDatabase();
+  const file = external ? external.passwordFile : databasePasswordPath();
+  if (!file) return EXTERNAL_DEFAULT_PASSWORD;
   let text: string;
   try {
     text = fs.readFileSync(file, 'utf8');
   } catch (e) {
     throw new Error(
-      `Cannot read the database password from ${file} (gemdb.externalDatabase.passwordFile): ` +
-        `${e instanceof Error ? e.message : String(e)}`,
+      `Cannot read the database password from ${file}` +
+        (external ? ' (gemdb.externalDatabase.passwordFile)' : '') +
+        `: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
   const password = text.split(/\r?\n/, 1)[0]?.trim() ?? '';
   if (!password) throw new Error(`The database password file ${file} is empty.`);
   return password;
+}
+
+/**
+ * Where the password for {@link DB_USER} is kept on a database GemDB manages:
+ * beside its configuration, readable only by this OS account. Generated when
+ * the account is created; it is not a security boundary on its own — the
+ * stock administrator passwords are well known — but it keeps the account's
+ * password out of settings and out of the wrapper's source.
+ */
+export function databasePasswordPath(): string {
+  return path.join(rootPath(), DB_DIR_NAME, 'conf', 'gemdb.password');
+}
+
+/**
+ * The account GemDB's own maintenance logs in as: DataCurator on a database
+ * GemDB manages; on an external one, the configured account, which is all
+ * GemDB knows of it — and which the administrator may not have given the
+ * privileges maintenance needs.
+ */
+export function adminAccount(): { user: string; password: string } {
+  return isExternalDatabase()
+    ? { user: dbUser(), password: dbPassword() }
+    : { user: ADMIN_USER, password: ADMIN_PASSWORD };
 }
 
 function expandHome(p: string): string {
@@ -287,4 +341,40 @@ export function mcpPort(): number {
  */
 export function mcpReadOnly(): boolean {
   return vscode.workspace.getConfiguration('gemdb').get<boolean>('mcp.readOnly', false);
+}
+
+/**
+ * A number setting that may be absent, mistyped, or — in the GemDB Shell,
+ * where settings arrive through the environment (`cliVscode.ts`) — a string.
+ * Negative and unreadable values fall back rather than meaning "always".
+ */
+function nonNegativeSetting(key: string, fallback: number): number {
+  const value = Number(vscode.workspace.getConfiguration('gemdb').get<unknown>(key, fallback));
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+export const DEFAULT_ABORT_IDLE_MINUTES = 10;
+export const DEFAULT_GARBAGE_COLLECTION_HOURS = 24;
+
+/**
+ * Minutes a session may sit idle before GemDB aborts its transaction — only
+ * ever when that loses nothing — so it stops holding back garbage collection.
+ * 0 turns it off. See `GciSession.abortIfClean`.
+ */
+export function abortIdleSessionsAfterMinutes(): number {
+  return nonNegativeSetting(
+    'maintenance.abortIdleSessionsAfterMinutes',
+    DEFAULT_ABORT_IDLE_MINUTES,
+  );
+}
+
+/**
+ * Hours between scheduled garbage collections. 0 collects only when the
+ * database is running out of room. See `maintenance.ts`.
+ */
+export function garbageCollectionIntervalHours(): number {
+  return nonNegativeSetting(
+    'maintenance.garbageCollectionIntervalHours',
+    DEFAULT_GARBAGE_COLLECTION_HOURS,
+  );
 }

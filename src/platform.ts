@@ -71,9 +71,11 @@ export function archiveExtension(): 'dmg' | 'zip' {
  * pin, and the welcome view in package.json and the walkthrough repeat them.
  */
 export function setupFootprint(): { download: string; disk: string } {
+  // The disk figure includes the database's 10 GB, reserved on disk from its
+  // first start (DBF_PRE_GROW; withSpaceLimits in database.ts).
   return process.platform === 'darwin'
-    ? { download: '145 MB', disk: '700 MB' }
-    : { download: '450 MB', disk: '1.4 GB' };
+    ? { download: '145 MB', disk: '11 GB' }
+    : { download: '450 MB', disk: '12 GB' };
 }
 
 /** Shared-library extension for this platform. */

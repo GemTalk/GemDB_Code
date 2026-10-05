@@ -3,6 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { __setSetting } from '../__mocks__/vscode';
+import { ensurePasswordFile } from '../database';
 import { fileInGrail, grailInstallFailure, onDidAttemptGrailInstall } from '../grail';
 import { databasePath, expectedEnginePath, installedGrailStamp } from '../paths';
 
@@ -39,6 +40,9 @@ function makeExtensionDir(stamp: string | undefined, status: number): string {
 beforeEach(() => {
   root = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'gemdb-run-')), 'GemDB');
   __setSetting('gemdb.rootPath', root);
+  // The installer logs in as the database's account, whose password lives
+  // beside the database.
+  ensurePasswordFile();
   // writeCliScripts, which staging calls, refuses without an engine; and the
   // record lives beside a database, which an install only runs against.
   fs.mkdirSync(expectedEnginePath(), { recursive: true });
