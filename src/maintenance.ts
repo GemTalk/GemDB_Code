@@ -371,10 +371,14 @@ const RECLAIM_QUERY =
   "System abortTransaction. System voteStateString, ' ', System possibleDeadSize printString, ' ', " +
   "System deadNotReclaimedCount printString, ' ', System pagesNeedReclaimCount printString";
 
-/** Free space as a checkpoint leaves it: pages reclaim frees are not counted free before one. */
+/**
+ * Free space in KB as a checkpoint leaves it: pages reclaim frees are not
+ * counted free before one. KB rather than MB so that a single freed page
+ * counts as space coming back.
+ */
 const CHECKPOINTED_FREE_QUERY =
   'System abortTransaction. System startCheckpointSync. ' +
-  '(SystemRepository freeSpace // 1048576) printString';
+  '(SystemRepository freeSpace // 1024) printString';
 
 /**
  * How long free space must stop growing before reclaim is taken to be
@@ -386,6 +390,36 @@ const CHECKPOINTED_FREE_QUERY =
 const SETTLED_MS = 30_000;
 const SETTLED_LOWERED_MS = 90_000;
 const FREE_POLL_MS = 5_000;
+
+/**
+ * How long to wait for the first pages to come free before deciding none
+ * will. The quiet window counts from the last growth, so it must not start
+ * before there has been any: on a CI runner, a collection straight after a
+ * large commit waited out 30 quiet seconds from its first reading and
+ * reported nothing given back.
+ */
+export const FIRST_PAGES_MS = 90_000;
+
+/**
+ * Whether to stop waiting for reclaim to give pages back. Free space is in
+ * KB, read after a checkpoint; `baselineKb` is the reading taken just before
+ * the mark, and `bestKb` the most seen since, last growing at `grewAt`.
+ * Before any growth the wait is `FIRST_PAGES_MS` from `start`; after it,
+ * `settledMs` without further growth.
+ *
+ * Pure, so the timing can be tested without a database.
+ */
+export function reclaimSettled(facts: {
+  start: number;
+  now: number;
+  baselineKb: number;
+  bestKb: number;
+  grewAt: number;
+  settledMs: number;
+}): boolean {
+  const { start, now, baselineKb, bestKb, grewAt, settledMs } = facts;
+  return bestKb > baselineKb ? now - grewAt >= settledMs : now - start >= FIRST_PAGES_MS;
+}
 
 const THRESHOLD_QUERY = '(System stoneConfigurationAt: #StnFreeSpaceThreshold) printString';
 
@@ -747,6 +781,7 @@ export async function collectGarbage(
       restoreThreshold = threshold;
     }
 
+    const baselineKb = Number(await askingAgain(session, CHECKPOINTED_FREE_QUERY));
     const report = await askingAgain(session, MFC_QUERY);
     const { dead } = parseMfcReport(report);
     log(report);
@@ -778,18 +813,22 @@ export async function collectGarbage(
       // pages behind them come free over the following seconds — counted
       // only after a checkpoint (measured). Restoring a lowered threshold
       // before then suspends reclaim halfway, so wait until free space is
-      // back above it, or has stopped growing.
+      // back above it, or has grown and then stopped growing.
       const settledMs = restoreThreshold === undefined ? SETTLED_MS : SETTLED_LOWERED_MS;
-      let best = -1;
-      let grewAt = Date.now();
-      while (Date.now() - grewAt < settledMs && Date.now() < deadline) {
+      const start = Date.now();
+      let bestKb = baselineKb;
+      let grewAt = start;
+      for (;;) {
         sweep(0);
-        const free = Number(await askingAgain(session, CHECKPOINTED_FREE_QUERY));
-        if (free > best) {
-          best = free;
+        const freeKb = Number(await askingAgain(session, CHECKPOINTED_FREE_QUERY));
+        if (freeKb > bestKb) {
+          bestKb = freeKb;
           grewAt = Date.now();
         }
-        if (restoreThreshold !== undefined && free > restoreThreshold) break;
+        if (restoreThreshold !== undefined && freeKb / 1024 > restoreThreshold) break;
+        const now = Date.now();
+        if (now >= deadline) break;
+        if (reclaimSettled({ start, now, baselineKb, bestKb, grewAt, settledMs })) break;
         await delay(FREE_POLL_MS);
       }
     }

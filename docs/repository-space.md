@@ -220,8 +220,13 @@ is committing past holds nothing back, so it is left alone.
    is still writing it out (the reclaim gem logs "Suspending reclaims because
    cache numberOfFreeFrames … is below targetFreeFrameCount"). So the
    collection checkpoints and reads free space every five seconds until it has
-   stopped growing for 30 seconds (90 when it lowered the threshold), or is
-   back above the threshold it lowered.
+   grown and then stopped growing for 30 seconds (90 when it lowered the
+   threshold), or is back above the threshold it lowered. The quiet window
+   counts from the first growth, not the first reading: on a macOS CI runner
+   a collection straight after a 20-odd MB commit found the garbage, waited
+   out 30 quiet seconds from its first reading, and reported nothing given
+   back. Until free space
+   grows it waits up to 90 seconds, read in KB so that one freed page counts.
 
 Two hypotheses for the slow cases were tested and are **wrong**. Don't chase
 them again:
