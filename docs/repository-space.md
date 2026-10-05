@@ -213,8 +213,21 @@ is committing past holds nothing back, so it is left alone.
    24 million characters), so GemDB shows the counts and measures what came
    back from free space rather than repeating that figure.
 2. **Every session votes**, by committing or aborting. The collection aborts
-   this window's clean sessions straight after the mark, and its own session on
-   every poll.
+   this window's clean sessions and its own session on every poll.
+
+   The vote matters *before* the mark too. A mark needs the GC lock, which is
+   not granted while an earlier mark's possible dead objects are still being
+   voted on ("There also must be no outstanding possible dead objects in the
+   system for the GC lock to be granted", in the method comment of
+   `Repository>>_mfcWithMaxThreads:waitForLock:...`). So an earlier vote held
+   open by an idle notebook keeps the lock from a new mark, which waits two
+   minutes and fails with 2501, "Waited too long to get gcLock". It failed that
+   way once on a CI runner, and `space.test.ts` reproduces it on purpose:
+   another session marks and logs out, leaving the vote waiting on an idle
+   notebook. So the collection also aborts this window's clean sessions just
+   before the mark and every five seconds while it waits for the lock. A
+   session outside this window can still hold the vote open; the collection
+   then fails, naming the sessions holding the oldest commit record.
 3. **Reclaim**, then a **checkpoint**: freed pages are not counted as free until
    one. Measured: 69 MB free after reclaim, 144 MB after `startCheckpointSync`.
 4. **Wait for every view to move past the reclaim.** Vote state,
