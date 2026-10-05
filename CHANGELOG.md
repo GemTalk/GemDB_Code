@@ -39,6 +39,10 @@ this one does not look.
 - **GemDB: Stop a Database Session…** lists every session on the database, the ones holding garbage
   collection back first, and stops the one you pick after asking. Anything it had not committed is
   lost.
+- **GemDB: Copy Telemetry ID** puts the ID GemDB's usage data is keyed by on
+  the clipboard, so you can ask for that data to be found or deleted.
+  `USAGE_DATA.md` used to send you to Help: About for it, which does not show
+  it. It works with telemetry turned off.
 
 ### Changed
 

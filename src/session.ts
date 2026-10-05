@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { dbPassword, dbUser, engineVersion, stoneName } from './config';
+import { dbPassword, dbUser, engineVersion, isExternalDatabase, stoneName } from './config';
 import { GCI_PERFORM_FLAG_ENABLE_DEBUG, OOP_ILLEGAL, OOP_NIL } from './gci/gciConstants';
 import { GciError, GciLibrary } from './gci/gciLibrary';
 import { parsePythonStack, pythonStackQuery } from './haltStack';
@@ -8,6 +8,7 @@ import { DotsByFile, armQuery, hookStopQuery, parseArmed } from './redDots';
 import { errorMessage, log } from './log';
 import { enginePath } from './paths';
 import { explainLibraryLoadFailure, sharedLibraryExtension } from './platform';
+import { readRouterState } from './mcp';
 import { findNetldi, findStone } from './processes';
 
 /**
@@ -627,7 +628,14 @@ export class GciSession {
       // not a fault, so it gets an error that says what is holding the
       // sessions rather than a bare error number.
       if (SESSION_LIMIT_ERRORS.has(result.err.number)) {
-        throw new SessionLimitError(sessionLimitMessage(resolved, sessionRegistry()));
+        throw new SessionLimitError(
+          sessionLimitMessage(resolved, sessionRegistry(), {
+            // Read from the record GemDB keeps of the router it forked: there is
+            // no session to ask the database with, which is the whole problem.
+            mcpServing: readRouterState() !== undefined,
+            external: isExternalDatabase(),
+          }),
+        );
       }
       if (result.err.number === REPOSITORY_FULL) throw new SessionError(FULL_LOGIN_MESSAGE);
       throw new SessionError(
@@ -1408,6 +1416,14 @@ export function humanDuration(ms: number): string {
   return `${Math.round(minutes / 6) / 10} h`;
 }
 
+/** What is known about the database around a refused login, without a session to ask it. */
+export interface SessionLimitContext {
+  /** GemDB's MCP server is running: its router holds a session, and each connected agent one more. */
+  mcpServing: boolean;
+  /** An administrator's database, whose limit GemDB did not set and cannot state. */
+  external: boolean;
+}
+
 /**
  * What to tell someone whose login was refused for want of a session.
  *
@@ -1416,10 +1432,20 @@ export function humanDuration(ms: number): string {
  * message says what it can see rather than claiming to explain the whole
  * number, and names the one worth closing first.
  *
+ * It also says the two things GemDB knows without a session: whether its own
+ * MCP server is running — AI agents connected to it hold sessions that no
+ * window lists, and the message used to send the user to close a notebook
+ * while an agent held them — and, for GemDB's own database, where the limit
+ * comes from: the Community Edition key GemDB installs, not a setting.
+ *
  * Takes the held sessions rather than reading the registry, so the wording can
  * be tested without a database (the same reason `runStop` takes a `StopWorld`).
  */
-export function sessionLimitMessage(wanted: SessionOwner, held: SessionInfo[]): string {
+export function sessionLimitMessage(
+  wanted: SessionOwner,
+  held: SessionInfo[],
+  around: SessionLimitContext = { mcpServing: false, external: false },
+): string {
   const lines = [
     `GemDB could not open a session for ${wanted.label}: the database has no free sessions.`,
   ];
@@ -1431,9 +1457,22 @@ export function sessionLimitMessage(wanted: SessionOwner, held: SessionInfo[]): 
         `. Closing ${idlest.owner.label} would free the one idle longest.`,
     );
   }
+  if (around.mcpServing) {
+    lines.push(
+      'GemDB’s MCP server is running: it holds a session itself, and each connected AI agent ' +
+        'holds one more, up to three.',
+    );
+  }
   lines.push(
-    'Other windows, other tools, and the database’s own gems also use sessions. ' +
-      'Close a notebook or a GemDB Shell and try again.',
+    around.external
+      ? 'Other windows, other tools, and the database’s own gems also use sessions.'
+      : 'The database allows 10, a limit set by the Community Edition key GemDB installs. ' +
+          'Other windows, other tools, and the database’s own gems use them too.',
+  );
+  lines.push(
+    around.mcpServing
+      ? 'Close a notebook or a GemDB Shell, or disconnect an AI agent, and try again.'
+      : 'Close a notebook or a GemDB Shell and try again.',
   );
   return lines.join(' ');
 }
