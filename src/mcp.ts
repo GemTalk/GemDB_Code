@@ -17,7 +17,25 @@ import {
 } from './config';
 import { errorMessage, log, logStep } from './log';
 import { engineEnvironment } from './processes';
-import { grailPath, installedMcpStamp, mcpPath, mcpRouterStatePath, mcpStampPath } from './paths';
+import {
+  grailPath,
+  installedMcpStamp,
+  mcpPath,
+  mcpRouterStatePath,
+  mcpStagedByPath,
+  mcpStagedOnDisk,
+  mcpStampPath,
+  removeMcpStamps,
+  stagedMcpStamp,
+} from './paths';
+import {
+  NewerPayload,
+  STAMP_ORDER,
+  StampOrder,
+  compareStamps,
+  newerPayload,
+  stampFor,
+} from './stamps';
 
 /**
  * The MCP server — GemTalk's native GemStone Model Context Protocol server,
@@ -67,11 +85,30 @@ export function mcpLabel(stamp: string | undefined): string {
   return match ? match[1] : 'unknown';
 }
 
-/** True when what is filed into the database is not what this extension ships. */
-export function mcpNeedsUpdate(extensionPath: string): boolean {
+/**
+ * How the MCP build filed into the database compares with this extension's,
+ * or undefined when this build ships none.
+ */
+export function installedMcpOrder(extensionPath: string): StampOrder | undefined {
   const bundled = bundledMcpStamp(extensionPath);
-  if (!bundled) return false; // nothing to install; reported separately
-  return installedMcpStamp() !== bundled;
+  if (!bundled) return undefined;
+  return compareStamps(installedMcpStamp(), stampFor(extensionPath, bundled));
+}
+
+/**
+ * True when the MCP classes in the database should be replaced by this
+ * extension's. One a newer GemDB filed in is left where it is, as Grail is.
+ */
+export function mcpNeedsUpdate(extensionPath: string): boolean {
+  const order = installedMcpOrder(extensionPath); // undefined: nothing to install; reported separately
+  return order === STAMP_ORDER.older || order === STAMP_ORDER.sameVersionDifferent;
+}
+
+/** The MCP payload a newer GemDB filed in or staged, if there is one (`newerPayload`). */
+export function newerMcp(extensionPath: string): NewerPayload | undefined {
+  const bundled = bundledMcpStamp(extensionPath);
+  if (!bundled) return undefined;
+  return newerPayload(stampFor(extensionPath, bundled), installedMcpStamp(), stagedMcpStamp());
 }
 
 /**
@@ -79,9 +116,10 @@ export function mcpNeedsUpdate(extensionPath: string): boolean {
  *
  * Wholesale, like `stageGrail`: a partial overlay of one payload on another is
  * not a state worth supporting, and the class file-outs are a few hundred
- * kilobytes.
+ * kilobytes. And like `stageGrail`, nothing is touched when a newer GemDB
+ * staged or filed in the one there; then this returns false.
  */
-export function stageMcp(extensionPath: string): void {
+export function stageMcp(extensionPath: string): boolean {
   const source = path.join(extensionPath, 'mcp');
   const stamp = bundledMcpStamp(extensionPath);
   if (!stamp) {
@@ -89,6 +127,15 @@ export function stageMcp(extensionPath: string): void {
       'This build of GemDB ships no MCP server payload. ' +
         'Run "npm run bundle:mcp" before packaging the extension.',
     );
+  }
+
+  const newer = newerMcp(extensionPath);
+  if (newer) {
+    log(
+      `Skipped staging the MCP server: GemDB ${newer.version ?? 'unknown'} ` +
+        (newer.where === 'installed' ? 'filed a newer one in.' : 'staged a newer one.'),
+    );
+    return false;
   }
 
   logStep(`Staging the MCP server ${mcpLabel(stamp)}`);
@@ -109,7 +156,10 @@ export function stageMcp(extensionPath: string): void {
       /* best effort */
     }
   }
+  // Last, once the copy is complete, as for Grail.
+  fs.writeFileSync(mcpStagedByPath(), `${stampFor(extensionPath, stamp)}\n`);
   log(`MCP server staged at ${dest}`);
+  return true;
 }
 
 /**
@@ -122,7 +172,39 @@ export function stageMcp(extensionPath: string): void {
 export function recordMcpInstalled(extensionPath: string): void {
   const stamp = bundledMcpStamp(extensionPath);
   if (!stamp) return;
-  fs.writeFileSync(mcpStampPath(), `${stamp}\n`);
+  // An external database has no database directory here; the stamp still lives here.
+  fs.mkdirSync(path.dirname(mcpStampPath()), { recursive: true });
+  fs.writeFileSync(mcpStampPath(), `${stampFor(extensionPath, stamp)}\n`);
+}
+
+/**
+ * Stage and file in the MCP payload when the database needs it, and put the
+ * staged copy back when only that is missing.
+ *
+ * The copy goes missing without the database changing — **Uninstall** with
+ * **Keep my database**, or someone deleting the directory — and nothing else
+ * restages it: the stamp beside the database still says the classes are in.
+ * GemDB does not need the copy to run the router, but the user does, for
+ * `run-server.sh` and `stop-server.sh`, and so does an external database,
+ * for `setup-read-only-user.sh`.
+ *
+ * Both stamps are removed just before the installer runs, so that one which
+ * dies partway reads as "not filed in", as Grail's does.
+ */
+export async function ensureMcpInstalled(
+  extensionPath: string,
+  progress?: vscode.Progress<{ message?: string }>,
+): Promise<void> {
+  if (!mcpNeedsUpdate(extensionPath)) {
+    if (!mcpStagedOnDisk()) stageMcp(extensionPath);
+    return;
+  }
+  log(`Installing the MCP server ${mcpLabel(bundledMcpStamp(extensionPath))} into the database.`);
+  progress?.report({ message: 'Installing the MCP server…' });
+  if (!stageMcp(extensionPath)) return;
+  removeMcpStamps();
+  await installMcp(extensionPath, progress);
+  recordMcpInstalled(extensionPath);
 }
 
 /**

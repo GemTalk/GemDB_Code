@@ -21,8 +21,15 @@ vi.mock('../session', () => ({
 }));
 
 const { ensureDatabaseAccount } = await import('../account');
-const { databasePath, grailInstalled, grailStampPath, legacyGrailStampPath } =
-  await import('../paths');
+const {
+  databasePath,
+  grailInstalled,
+  grailStampPath,
+  legacyGrailStampPath,
+  legacyMcpStampPath,
+  mcpInstalled,
+  mcpStampPath,
+} = await import('../paths');
 
 let root: string;
 
@@ -33,6 +40,9 @@ beforeEach(() => {
   fs.mkdirSync(path.dirname(legacyGrailStampPath()), { recursive: true });
   fs.writeFileSync(grailStampPath(), 'grail=0.1-2200-gnew\nextension=1.6.0\n');
   fs.writeFileSync(legacyGrailStampPath(), 'grail=0.1-2100-gold\n');
+  fs.mkdirSync(path.dirname(legacyMcpStampPath()), { recursive: true });
+  fs.writeFileSync(mcpStampPath(), 'mcp=0.5.0\nextension=1.6.0\n');
+  fs.writeFileSync(legacyMcpStampPath(), 'mcp=0.4.0\n');
 });
 
 afterEach(() => {
@@ -50,11 +60,20 @@ describe('creating the database account', () => {
     expect(grailInstalled()).toBe(false);
   });
 
+  it('forgets that the MCP server is filed in, wherever it was recorded', () => {
+    accountOutcome.mockReturnValue('created');
+
+    ensureDatabaseAccount();
+
+    expect(mcpInstalled()).toBe(false);
+  });
+
   it('keeps the records when the account was already there', () => {
     accountOutcome.mockReturnValue('exists');
 
     ensureDatabaseAccount();
 
     expect(grailInstalled()).toBe(true);
+    expect(mcpInstalled()).toBe(true);
   });
 });

@@ -16,7 +16,7 @@ import {
   startMcpServer,
   stopMcpServer,
 } from '../mcp';
-import { mcpInstalled, mcpRouterStatePath, mcpStagedOnDisk } from '../paths';
+import { installedMcpStamp, mcpInstalled, mcpRouterStatePath, mcpStagedOnDisk } from '../paths';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
 import { GciSession, execute, logoutAll } from '../session';
 import { createDatabaseWithPython, Fixture, haveTestExtent, makeFixture } from './fixture';
@@ -253,6 +253,8 @@ describe.skipIf(!havePayload || !haveExtent || !canMakeFixture())(
       await installMcp(ext);
       recordMcpInstalled(ext);
       expect(mcpInstalled()).toBe(true);
+      // Recorded with the GemDB that filed it in, as Grail's is.
+      expect(installedMcpStamp()).toMatch(/^extension=\d+\.\d+\.\d+/m);
       // The installer asks the image what it has rather than trusting topaz's
       // exit code, but assert it here too — a file-in reports its compile
       // errors and carries on.

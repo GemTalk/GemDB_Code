@@ -15,7 +15,14 @@ import {
   removeGrailStamps,
   stagedGrailStamp,
 } from './paths';
-import { STAMP_ORDER, StampOrder, compareStamps, parseStamp, stampFor } from './stamps';
+import {
+  NewerPayload,
+  STAMP_ORDER,
+  StampOrder,
+  compareStamps,
+  newerPayload,
+  stampFor,
+} from './stamps';
 import { logoutAll } from './session';
 import { writeCliScripts } from './cli';
 
@@ -68,35 +75,11 @@ export function grailNeedsUpdate(extensionPath: string): boolean {
   return order === STAMP_ORDER.older || order === STAMP_ORDER.sameVersionDifferent;
 }
 
-/** A Grail a newer GemDB put in place, which this one must leave alone. */
-export interface NewerGrail {
-  /** Filed into the database, or only staged on disk so far. */
-  where: 'installed' | 'staged';
-  /** The GemDB that did it, as its stamp records. */
-  version: string | undefined;
-}
-
-/**
- * The Grail a newer GemDB filed in or staged, if there is one.
- *
- * Both count. Filed in, replacing it would downgrade the database; staged
- * only, a newer GemDB is about to file it in, and replacing the files under
- * it would hand its install an older payload.
- */
-export function newerGrail(extensionPath: string): NewerGrail | undefined {
+/** The Grail a newer GemDB filed in or staged, if there is one (`newerPayload`). */
+export function newerGrail(extensionPath: string): NewerPayload | undefined {
   const bundled = bundledGrailStamp(extensionPath);
   if (!bundled) return undefined;
-  const ours = stampFor(extensionPath, bundled);
-  const records: [NewerGrail['where'], string | undefined][] = [
-    ['installed', installedGrailStamp()],
-    ['staged', stagedGrailStamp()],
-  ];
-  for (const [where, record] of records) {
-    if (record !== undefined && compareStamps(record, ours) === STAMP_ORDER.newer) {
-      return { where, version: parseStamp(record).extension };
-    }
-  }
-  return undefined;
+  return newerPayload(stampFor(extensionPath, bundled), installedGrailStamp(), stagedGrailStamp());
 }
 
 /**

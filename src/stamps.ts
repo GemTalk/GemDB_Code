@@ -112,3 +112,35 @@ export function compareStamps(installed: string | undefined, bundled: string): S
   if (order > 0) return STAMP_ORDER.newer;
   return theirs.payload === ours.payload ? STAMP_ORDER.same : STAMP_ORDER.sameVersionDifferent;
 }
+
+/** A payload a newer GemDB put in place, which this one must leave alone. */
+export interface NewerPayload {
+  /** Filed into the database, or only staged on disk so far. */
+  where: 'installed' | 'staged';
+  /** The GemDB that did it, as its record says. */
+  version: string | undefined;
+}
+
+/**
+ * The record, filed in or staged, that a newer GemDB wrote, if either was.
+ *
+ * Both count. Filed in, replacing the payload would downgrade the database;
+ * staged only, a newer GemDB is about to file it in, and replacing the files
+ * under it would hand its install an older payload.
+ */
+export function newerPayload(
+  ours: string,
+  installed: string | undefined,
+  staged: string | undefined,
+): NewerPayload | undefined {
+  const records: [NewerPayload['where'], string | undefined][] = [
+    ['installed', installed],
+    ['staged', staged],
+  ];
+  for (const [where, record] of records) {
+    if (record !== undefined && compareStamps(record, ours) === STAMP_ORDER.newer) {
+      return { where, version: parseStamp(record).extension };
+    }
+  }
+  return undefined;
+}

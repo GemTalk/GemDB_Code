@@ -14,7 +14,7 @@ import {
   installedGrailOrder,
 } from './grail';
 import { isInstalled } from './lifecycle';
-import { bundledMcpStamp, mcpLabel, mcpServerState, mcpUrl } from './mcp';
+import { bundledMcpStamp, installedMcpOrder, mcpLabel, mcpServerState, mcpUrl } from './mcp';
 import { FREE_SPACE_THRESHOLD_MB, REPOSITORY_LIMIT_MB } from './database';
 import {
   GC_HEADROOM_MB,
@@ -388,8 +388,11 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
       const mcp = await mcpServerState();
       const installedMcp = installedMcpStamp();
       const bundledMcp = bundledMcpStamp(this.extensionPath);
+      const mcpOrder = installedMcpOrder(this.extensionPath);
       const mcpOutdated =
-        installedMcp !== undefined && bundledMcp !== undefined && installedMcp !== bundledMcp;
+        installedMcp !== undefined &&
+        (mcpOrder === STAMP_ORDER.older || mcpOrder === STAMP_ORDER.sameVersionDifferent);
+      const mcpNewer = installedMcp !== undefined && mcpOrder === STAMP_ORDER.newer;
       rows.push({
         label: 'AI agent access',
         description: mcp.foreign
@@ -415,6 +418,10 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
               (mcpOutdated
                 ? `\n\nThis GemDB update ships ${mcpLabel(bundledMcp)}; it will be installed the ` +
                   'next time GemDB starts.'
+                : '') +
+              (mcpNewer
+                ? `\n\nInstalled by GemDB ${parseStamp(installedMcp).extension ?? 'unknown'}, ` +
+                  "newer than this editor's GemDB, so it is left as it is."
                 : '')
             : 'The MCP server starts and stops with the database. Click to get the ' +
               'configuration an AI agent needs.',

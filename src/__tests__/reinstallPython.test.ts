@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as vscode from 'vscode';
-import { NewerGrail } from '../grail';
+import { NewerPayload } from '../stamps';
 
 // "Reinstall the Python Execution Engine" beside a newer GemDB, in another
 // editor on the same root path. Reinstalling from here would downgrade what
@@ -8,7 +8,7 @@ import { NewerGrail } from '../grail';
 // that touches the machine is mocked, as in databaseStarted.test.ts.
 vi.mock('../cli', () => ({ writeCliScripts: () => {}, ensureCliCurrent: () => true }));
 
-const newerGrail = vi.fn((): NewerGrail | undefined => undefined);
+const newerGrail = vi.fn((): NewerPayload | undefined => undefined);
 const fileInGrail = vi.fn(async () => true);
 vi.mock('../grail', () => ({
   grailLabel: () => 'grail 0.1',

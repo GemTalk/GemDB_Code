@@ -35,12 +35,8 @@ import {
 import { errorMessage, log, logStep, showLog } from './log';
 import {
   bundledMcpStamp,
-  installMcp,
+  ensureMcpInstalled,
   isMcpRunning,
-  mcpLabel,
-  mcpNeedsUpdate,
-  recordMcpInstalled,
-  stageMcp,
   startMcpServer,
   stopMcpServer,
 } from './mcp';
@@ -648,14 +644,7 @@ async function ensureMcpServing(
   }
 
   try {
-    if (mcpNeedsUpdate(extensionPath)) {
-      const stamp = bundledMcpStamp(extensionPath);
-      log(`Installing the MCP server ${mcpLabel(stamp)} into the database.`);
-      progress?.report({ message: 'Installing the MCP server…' });
-      stageMcp(extensionPath);
-      await installMcp(extensionPath, progress);
-      recordMcpInstalled(extensionPath);
-    }
+    await ensureMcpInstalled(extensionPath, progress);
     progress?.report({ message: 'Starting the MCP server…' });
     return await startMcpServer();
   } catch (e) {

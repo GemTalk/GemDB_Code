@@ -110,8 +110,12 @@ export function grailStagedByPath(): string {
 
 /** Which GemDB staged the Grail on disk, or undefined if none recorded it. */
 export function stagedGrailStamp(): string | undefined {
+  return readFile(grailStagedByPath());
+}
+
+function readFile(file: string): string | undefined {
   try {
-    return fs.readFileSync(grailStagedByPath(), 'utf8').trim();
+    return fs.readFileSync(file, 'utf8').trim();
   } catch {
     return undefined;
   }
@@ -281,16 +285,26 @@ export function mcpPath(): string {
 }
 
 /**
- * Marker recording which MCP build is filed into the database.
- *
- * Inside the payload directory, like Grail's, which means the same ordering
- * rule applies: stage first, stamp second, because staging replaces the
- * directory wholesale. Here that ordering is structural rather than something
- * to remember — the stamp is written only after a successful file-in, and a
- * file-in needs the payload already on disk.
+ * Marker recording which MCP build is filed into the database, and which
+ * GemDB filed it in. Beside the database, for the reasons Grail's is.
  */
 export function mcpStampPath(): string {
+  return path.join(databasePath(), '.gemdb-mcp-installed');
+}
+
+/** Where GemDB kept the MCP stamp before it moved beside the database. Read, never written. */
+export function legacyMcpStampPath(): string {
   return path.join(mcpPath(), '.gemdb-mcp-stamp');
+}
+
+/** Marker recording which GemDB staged the MCP payload on disk, like Grail's. */
+export function mcpStagedByPath(): string {
+  return path.join(mcpPath(), '.gemdb-staged-by');
+}
+
+/** Which GemDB staged the MCP payload on disk, or undefined if none recorded it. */
+export function stagedMcpStamp(): string | undefined {
+  return readFile(mcpStagedByPath());
 }
 
 /** True when the MCP payload has been copied out of the extension. */
@@ -300,16 +314,18 @@ export function mcpStagedOnDisk(): boolean {
 
 /** True when the MCP classes have been filed into the database. */
 export function mcpInstalled(): boolean {
-  return fs.existsSync(mcpStampPath());
+  return fs.existsSync(mcpStampPath()) || fs.existsSync(legacyMcpStampPath());
 }
 
 /** The MCP build currently installed in the database, or undefined. */
 export function installedMcpStamp(): string | undefined {
-  try {
-    return fs.readFileSync(mcpStampPath(), 'utf8').trim();
-  } catch {
-    return undefined;
-  }
+  return readStamp(mcpStampPath(), legacyMcpStampPath());
+}
+
+/** Forget that the MCP server is filed in, wherever any GemDB recorded it. */
+export function removeMcpStamps(): void {
+  fs.rmSync(mcpStampPath(), { force: true });
+  fs.rmSync(legacyMcpStampPath(), { force: true });
 }
 
 /**

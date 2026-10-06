@@ -8,6 +8,7 @@ import { __setSetting } from '../__mocks__/vscode';
 import { DEFAULT_MCP_PORT, mcpEnabled, mcpPort, mcpReadOnly } from '../config';
 import {
   bundledMcpStamp,
+  ensureMcpInstalled,
   isPortOpen,
   listeningPid,
   mcpLabel,
@@ -18,7 +19,17 @@ import {
   recordMcpInstalled,
   stageMcp,
 } from '../mcp';
-import { installedMcpStamp, mcpPath, mcpRouterStatePath, mcpStagedOnDisk } from '../paths';
+import {
+  databasePath,
+  installedMcpStamp,
+  legacyMcpStampPath,
+  mcpInstalled,
+  mcpPath,
+  mcpRouterStatePath,
+  mcpStagedByPath,
+  mcpStagedOnDisk,
+  mcpStampPath,
+} from '../paths';
 import { clientRecipesFor } from '../mcpRegistration';
 
 const hasLsof = (() => {
@@ -44,6 +55,9 @@ let root: string;
 let ext: string;
 
 const BUNDLED = 'mcp=0.5.0-3-g89246e1\ncommit=89246e1\n';
+/** What this GemDB records once BUNDLED is filed in. */
+const RECORDED = `${BUNDLED}extension=1.6.0`;
+const NEWER = 'mcp=0.6.0-1-gnewer\nextension=1.7.0';
 
 /** A stand-in extension directory carrying an MCP payload. */
 function makeExtensionDir(stamp: string): string {
@@ -52,6 +66,7 @@ function makeExtensionDir(stamp: string): string {
   fs.writeFileSync(path.join(dir, 'mcp', 'MCP_VERSION'), stamp);
   fs.writeFileSync(path.join(dir, 'mcp', 'src', 'core', 'McpServer.gs'), '! staged\n');
   fs.writeFileSync(path.join(dir, 'mcp', 'install.sh'), '#!/bin/bash\nexit 0\n');
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ version: '1.6.0' }));
   return dir;
 }
 
@@ -93,7 +108,7 @@ describe('the payload stamp', () => {
   it('is satisfied once the staged payload is recorded as installed', () => {
     stageMcp(ext);
     recordMcpInstalled(ext);
-    expect(installedMcpStamp()).toBe(BUNDLED.trim());
+    expect(installedMcpStamp()).toBe(RECORDED);
     expect(mcpNeedsUpdate(ext)).toBe(false);
   });
 
@@ -120,16 +135,23 @@ describe('staging', () => {
     expect(fs.existsSync(path.join(mcpPath(), 'src', 'core', 'McpServer.gs'))).toBe(true);
   });
 
-  // Staging replaces the directory wholesale, which is what makes the
-  // stage-then-stamp order load-bearing — the same lesson Grail's installer
-  // learned in the field.
-  it('replaces a previous payload, stamp included', () => {
+  // Staging replaces the directory wholesale. The stamp lives beside the
+  // database, so a restage no longer forgets what the database holds.
+  it('replaces a previous payload, and keeps the record of what is filed in', () => {
     stageMcp(ext);
     recordMcpInstalled(ext);
     fs.writeFileSync(path.join(mcpPath(), 'leftover.gs'), '! from the last version\n');
+
     stageMcp(ext);
+
     expect(fs.existsSync(path.join(mcpPath(), 'leftover.gs'))).toBe(false);
-    expect(installedMcpStamp()).toBeUndefined();
+    expect(installedMcpStamp()).toBe(RECORDED);
+  });
+
+  it('records which GemDB staged it, in the stamp format', () => {
+    stageMcp(ext);
+
+    expect(fs.readFileSync(mcpStagedByPath(), 'utf8')).toBe(`${RECORDED}\n`);
   });
 
   it('refuses a build with no payload, naming the script that makes one', () => {
@@ -145,6 +167,99 @@ describe('staging', () => {
     );
     stageMcp(ext);
     expect(readRouterState()?.pid).toBe(4242);
+  });
+});
+
+describe('the record of which MCP build is filed in', () => {
+  /** Write a stamp, dated `ageSeconds` ago so the two locations can be ordered. */
+  function writeStamp(file: string, text: string, ageSeconds: number): void {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${text}\n`);
+    const when = new Date(Date.now() - ageSeconds * 1000);
+    fs.utimesSync(file, when, when);
+  }
+
+  it('lives beside the database, which it creates for an external database', () => {
+    recordMcpInstalled(ext);
+
+    expect(path.dirname(mcpStampPath())).toBe(databasePath());
+    expect(installedMcpStamp()).toBe(RECORDED);
+  });
+
+  it('still counts as filed in when only an older GemDB has recorded it', () => {
+    writeStamp(legacyMcpStampPath(), BUNDLED.trim(), 0);
+
+    expect(mcpInstalled()).toBe(true);
+    expect(installedMcpStamp()).toBe(BUNDLED.trim());
+  });
+
+  it('needs an install when an older GemDB has filed its build in since', () => {
+    writeStamp(mcpStampPath(), RECORDED, 60);
+    writeStamp(legacyMcpStampPath(), 'mcp=0.4.0', 0);
+
+    expect(mcpNeedsUpdate(ext)).toBe(true);
+  });
+
+  it('ignores an old-location stamp written before the current one', () => {
+    writeStamp(legacyMcpStampPath(), 'mcp=0.4.0', 60);
+    writeStamp(mcpStampPath(), RECORDED, 0);
+
+    expect(mcpNeedsUpdate(ext)).toBe(false);
+  });
+
+  it('leaves a build a newer GemDB filed in where it is', () => {
+    writeStamp(mcpStampPath(), NEWER, 0);
+
+    expect(mcpNeedsUpdate(ext)).toBe(false);
+  });
+});
+
+describe('staging beside a newer GemDB', () => {
+  beforeEach(() => {
+    fs.mkdirSync(mcpPath(), { recursive: true });
+    fs.writeFileSync(path.join(mcpPath(), 'newer-only.gs'), '! newer\n');
+  });
+
+  it('leaves alone a payload a newer GemDB staged', () => {
+    fs.writeFileSync(mcpStagedByPath(), `${NEWER}\n`);
+
+    expect(stageMcp(ext)).toBe(false);
+
+    expect(fs.existsSync(path.join(mcpPath(), 'newer-only.gs'))).toBe(true);
+  });
+
+  it('leaves alone the files when a newer GemDB filed its build in', () => {
+    fs.mkdirSync(databasePath(), { recursive: true });
+    fs.writeFileSync(mcpStampPath(), `${NEWER}\n`);
+
+    expect(stageMcp(ext)).toBe(false);
+
+    expect(fs.existsSync(path.join(mcpPath(), 'newer-only.gs'))).toBe(true);
+  });
+
+  it('files nothing in over a payload a newer GemDB staged', async () => {
+    // The database holds an older build, so it needs an install; the staged
+    // copy is a newer GemDB's, about to be filed in by it.
+    fs.writeFileSync(mcpStagedByPath(), `${NEWER}\n`);
+    fs.mkdirSync(databasePath(), { recursive: true });
+    fs.writeFileSync(mcpStampPath(), 'mcp=0.4.0\nextension=1.5.4\n');
+
+    await ensureMcpInstalled(ext);
+
+    expect(installedMcpStamp()).toBe('mcp=0.4.0\nextension=1.5.4');
+    expect(fs.existsSync(path.join(mcpPath(), 'newer-only.gs'))).toBe(true);
+  });
+});
+
+describe('a staged copy that has gone missing', () => {
+  it('is put back without filing anything in again', async () => {
+    // Uninstall with "Keep my database" removes mcp/ and keeps the stamp.
+    recordMcpInstalled(ext);
+
+    await ensureMcpInstalled(ext);
+
+    expect(mcpStagedOnDisk()).toBe(true);
+    expect(installedMcpStamp()).toBe(RECORDED);
   });
 });
 

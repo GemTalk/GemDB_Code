@@ -66,7 +66,7 @@ vi.mock('../mcp', async (importOriginal) => {
   return {
     ...actual,
     bundledMcpStamp: () => 'mcp=abc\n',
-    mcpNeedsUpdate: () => false,
+    ensureMcpInstalled: async () => {},
     isMcpRunning: () => isMcpRunning(),
     startMcpServer: () => startMcpServer(),
   };

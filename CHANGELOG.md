@@ -81,6 +81,11 @@ this one does not look.
   "installed by a newer GemDB", and **Reinstall the Python Execution Engine** refuses and asks you
   to update GemDB Code in that editor. Releases before this one cannot tell, so they can still
   replace a newer version's, and the newer one puts its own back at its next start.
+- **The MCP server gets the same treatment.** Its record of what is installed also moved to
+  `~/GemDB/db`, so copying its files again no longer reinstalls it, and an editor on an older GemDB
+  Code leaves a newer version's MCP server alone. The GemDB panel's **AI agent access** row notes
+  when a newer GemDB installed it. If `~/GemDB/mcp` goes missing, for example after **Uninstall**
+  with **Keep my database**, GemDB puts it back at the next start without reinstalling anything.
 
 ## [1.5.4] - 2026-10-01
 
