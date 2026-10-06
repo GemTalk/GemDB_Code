@@ -222,12 +222,16 @@ is committing past holds nothing back, so it is left alone.
    `Repository>>_mfcWithMaxThreads:waitForLock:...`). So an earlier vote held
    open by an idle notebook keeps the lock from a new mark, which waits two
    minutes and fails with 2501, "Waited too long to get gcLock". It failed that
-   way once on a CI runner, and `space.test.ts` reproduces it on purpose:
-   another session marks and logs out, leaving the vote waiting on an idle
-   notebook. So the collection also aborts this window's clean sessions just
-   before the mark and every five seconds while it waits for the lock. A
-   session outside this window can still hold the vote open; the collection
-   then fails, naming the sessions holding the oldest commit record.
+   way once on a CI runner. So the collection also aborts this window's clean
+   sessions just before the mark, and every five seconds while it waits for
+   the lock. The repeat is for a notebook that was mid-cell at the first
+   sweep, which `abortIfClean` skips as busy. `space.test.ts` sets that up:
+   another session marks and logs out, leaving its vote waiting on a notebook
+   that is running a ten-second cell when the collection starts. With the
+   repeat the mark gets the lock; without it, the mark failed after two
+   minutes. A session outside this window can still hold the vote open; the
+   collection then fails, naming the sessions holding the oldest commit
+   record.
 3. **Reclaim**, then a **checkpoint**: freed pages are not counted as free until
    one. Measured: 69 MB free after reclaim, 144 MB after `startCheckpointSync`.
 4. **Wait for every view to move past the reclaim.** Vote state,

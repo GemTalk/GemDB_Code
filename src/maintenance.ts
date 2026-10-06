@@ -754,11 +754,14 @@ export type GcOutcome =
 /**
  * Mark, let every session vote, wait for reclaim, checkpoint.
  *
- * Each step is there because leaving it out was measured to free nothing:
- * the garbage a mark finds is reclaimed only once every session has voted,
- * which an idle `autoBegin` session never does by itself (so this window's
- * clean ones are aborted straight after the mark), and pages reclaim frees
- * count as free only after the next checkpoint.
+ * Each step is there because leaving it out was measured to free nothing or
+ * to fail. A vote waits for every session to commit or abort, which an idle
+ * `autoBegin` session never does by itself, so this window's clean sessions
+ * are aborted just before the mark, every few seconds while the mark waits
+ * for the GC lock (an earlier mark's open vote withholds it), and on every
+ * poll of this mark's own vote. Pages reclaim frees are not free until every
+ * view, the SymbolGem's included, is newer than the reclaim, and count as
+ * free only after the next checkpoint.
  */
 export async function collectGarbage(
   reason: GcRecord['reason'],
@@ -795,12 +798,14 @@ export async function collectGarbage(
 
     // The mark waits for the GC lock, which is not granted while an earlier
     // mark's vote is still open — one from topaz, another window, or the
-    // last collection — and that vote can be waiting on an idle session in
-    // this window. So this window's clean sessions are aborted before the
-    // mark and every few seconds while it waits, however recently used: an
-    // abort that loses nothing is invisible to them. Without it, a notebook
-    // left idle held the lock away for the mark's whole two minutes, and the
-    // mark failed with 2501 (measured).
+    // last collection — and that vote can be waiting on a session in this
+    // window. Without a sweep, a notebook left idle held the lock away for
+    // the mark's whole two minutes, and the mark failed with 2501 (measured).
+    // The sweep before the mark aborts every session that is clean and not
+    // running anything. The interval is for one that was mid-cell then, which
+    // `abortIfClean` skips as busy: when the cell finishes, nothing else
+    // would make it vote during the wait. Both ignore the idle-time setting
+    // (`sweep(0)`): an abort that loses nothing is invisible to the notebook.
     sweep(0);
     const voting = setInterval(() => sweep(0), POLL_MS);
     let report: string;
