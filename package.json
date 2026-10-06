@@ -216,21 +216,6 @@
         "when": "gemdb.running && gemdb.hasSavedStacks"
       }
     ],
-    "customEditors": [
-      {
-        "viewType": "gemdb.statistics",
-        "displayName": "GemDB Stats",
-        "selector": [
-          {
-            "filenamePattern": "*.out"
-          },
-          {
-            "filenamePattern": "*.out.gz"
-          }
-        ],
-        "priority": "option"
-      }
-    ],
     "commands": [
       {
         "command": "gemdb.install",
@@ -341,6 +326,12 @@
       {
         "command": "gemdb.openStatistics",
         "title": "Open Statistics File…",
+        "category": "GemDB",
+        "icon": "$(graph-line)"
+      },
+      {
+        "command": "gemdb.openInStats",
+        "title": "Open in GemDB Stats",
         "category": "GemDB",
         "icon": "$(graph-line)"
       },
@@ -592,6 +583,10 @@
         {
           "command": "gemdb.restoreStack",
           "when": "gemdb.running && gemdb.hasSavedStacks"
+        },
+        {
+          "command": "gemdb.openInStats",
+          "when": "false"
         }
       ],
       "debug/variables/context": [
@@ -643,6 +638,13 @@
           "command": "gemdb.saveStack",
           "when": "debugType == gemdb && !gemdb.savedStackOpen",
           "group": "z_gemdb@1"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "gemdb.openInStats",
+          "when": "resourceFilename =~ /\\.out(\\.gz)?$/",
+          "group": "navigation@9"
         }
       ]
     },

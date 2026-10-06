@@ -246,6 +246,13 @@ jobs:
           MCP_REF: ${{ inputs.mcp-ref }}
         run: npm run bundle:mcp
 
+      # The GemDB Stats web build, downloaded from the GemDB Stats release
+      # pinned in vendor-pins.sh and refused unless its SHA-256 matches. No
+      # Flutter SDK here: GemDB Stats builds it and publishes it. Platform-
+      # neutral like the MCP payload, and fetched per leg for the same reason.
+      - name: Fetch the GemDB Stats web build
+        run: npm run bundle:stats
+
       # Not a shipped artifact: GemDB installs Grail into whatever database the
       # user already has, so nothing here ships an extent. This one exists so
       # the tests that need Python but are not testing the file-in do not pay

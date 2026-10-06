@@ -94,6 +94,11 @@ REQUIRED=(
   "extension/mcp/MCP_VERSION|the MCP server payload"
   "extension/mcp/install.sh|the MCP installer the extension runs"
   "extension/mcp/src/core/McpRouter.gs|the MCP front end the extension forks"
+  "extension/stats/host.html|the GemDB Stats page, made hostable by bundle-stats.mjs"
+  "extension/stats/flutter_bootstrap.js|what starts GemDB Stats"
+  "extension/stats/main.dart.js|GemDB Stats itself"
+  "extension/stats/canvaskit/canvaskit.wasm|GemDB Stats' renderer, for browsers other than Chromium"
+  "extension/stats/canvaskit/chromium/canvaskit.wasm|GemDB Stats' renderer, for VS Code's own window"
 )
 
 # Platform-specific extras: the OS-configuration script this target's users are
@@ -171,13 +176,18 @@ check_absent '^extension/grail/src/python/stdlib/test/certdata/' "CPython's TLS 
 check_absent '^extension/mcp/\.git' "a whole mcp_server clone would ship"
 check_absent '^extension/mcp/\.topazini' "stray topaz credentials"
 check_absent '^extension/mcp/.*\.out$' "a file-in log from a previous install"
+# What bundle-stats.mjs leaves out of a Flutter web build. A stats/ assembled
+# by hand, or by an older script, would carry them.
+check_absent '^extension/stats/.*\.symbols$' "debug symbols for the Flutter engine"
+check_absent '^extension/stats/canvaskit/(skwasm|wimp)' "Wasm renderers a JS build never loads"
+check_absent '^extension/stats/flutter_service_worker\.js$' "a service worker a webview cannot host"
 
 size_mb=$(( $(wc -c <"$VSIX") / 1024 / 1024 ))
 echo "$(basename "$VSIX"): $(wc -l <<<"$LISTING" | tr -d ' ') files, ${size_mb} MB"
 
 if [ "$missing" -ne 0 ] || [ "$unwanted" -ne 0 ]; then
   echo "ERROR: $missing required path(s) missing, $unwanted unwanted group(s) present." >&2
-  [ "$missing" -eq 0 ] || echo "       A missing artifact usually means 'npm run bundle:grail' was not run on $PLATFORM_KEY, or 'npm run bundle:mcp' was never run." >&2
+  [ "$missing" -eq 0 ] || echo "       A missing artifact usually means 'npm run bundle:grail' was not run on $PLATFORM_KEY, or 'npm run bundle:mcp' or 'npm run bundle:stats' was never run." >&2
   exit 1
 fi
 

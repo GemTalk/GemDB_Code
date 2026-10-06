@@ -1,5 +1,8 @@
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
+import * as http from 'http';
+import type { AddressInfo } from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -43,15 +46,18 @@ const BUILD_CONFIG = {
   useLocalCanvasKit: true,
 };
 
-function bootstrap(config: unknown): string {
+/**
+ * flutter_bootstrap.js: flutter.js inlined, then the config, then the load
+ * call — GemDB Stats' own template, which registers no service worker, unless
+ * `load` says otherwise.
+ */
+function bootstrap(config: unknown, load = '_flutter.loader.load();'): string {
   return [
-    '/* flutter.js */',
-    '',
+    // The inlined flutter.js mentions service workers in its own code.
+    'async load({serviceWorkerSettings:e}={}){ /* flutter.js */ }',
     `_flutter.buildConfig = ${JSON.stringify(config)};`,
     '',
-    '_flutter.loader.load({',
-    '  serviceWorkerSettings: { serviceWorkerVersion: "1105577256" }',
-    '});',
+    load,
   ].join('\n');
 }
 
@@ -65,12 +71,29 @@ function write(relative: string, content = 'x'): void {
   fs.writeFileSync(file, content);
 }
 
-function bundle(): { status: number | null; stderr: string } {
+function bundle(env: Record<string, string> = { STATS_WEB: web }): {
+  status: number | null;
+  stderr: string;
+} {
   const result = spawnSync(process.execPath, [SCRIPT], {
-    env: { ...process.env, STATS_WEB: web, STATS_OUT: out },
+    env: { ...process.env, STATS_OUT: out, ...env },
     encoding: 'utf8',
   });
   return { status: result.status, stderr: result.stderr };
+}
+
+/** The same, without blocking this process, which may be serving the download. */
+function bundleAsync(
+  env: Record<string, string>,
+): Promise<{ status: number | null; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [SCRIPT], {
+      env: { ...process.env, STATS_OUT: out, ...env },
+    });
+    let stderr = '';
+    child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
+    child.on('close', (status) => resolve({ status, stderr }));
+  });
 }
 
 const shipped = (relative: string) => fs.existsSync(path.join(out, relative));
@@ -82,7 +105,7 @@ beforeEach(() => {
   out = path.join(dir, 'out');
   write('index.html', INDEX_HTML);
   write('flutter_bootstrap.js', bootstrap(BUILD_CONFIG));
-  write('version.json', JSON.stringify({ app_name: 'vsd', version: '0.1.0' }));
+  write('version.json', JSON.stringify({ app_name: 'vsd', version: '1.0.0' }));
   for (const file of [
     'flutter.js',
     'main.dart.js',
@@ -119,6 +142,7 @@ describe('bundle-stats.mjs', () => {
     for (const file of [
       'host.html',
       'flutter.js',
+      'flutter_bootstrap.js',
       'main.dart.js',
       'logo.svg',
       'assets/fonts/MaterialIcons-Regular.otf',
@@ -129,7 +153,6 @@ describe('bundle-stats.mjs', () => {
     }
     for (const file of [
       'index.html',
-      'flutter_bootstrap.js',
       'flutter_service_worker.js',
       'manifest.json',
       'icons/Icon-192.png',
@@ -165,45 +188,31 @@ describe('bundle-stats.mjs', () => {
     expect(html).not.toContain('manifest.json');
   });
 
-  it('starts Flutter without the bootstrap, so no service worker is registered', () => {
-    bundle();
-    const html = hostHtml();
-
-    expect(html).not.toContain('flutter_bootstrap.js');
-    expect(html).not.toContain('serviceWorker');
-    expect(html).toContain('<script nonce="{{GEMDB_NONCE}}" src="flutter.js"></script>');
-    expect(html).toContain("_flutter.loader.load({ nonce: '{{GEMDB_NONCE}}' });");
-  });
-
-  it('keeps only the dart2js build in the loader’s config', () => {
-    bundle();
-    const config = /_flutter\.buildConfig = (\{.*\});/.exec(hostHtml())?.[1];
-
-    expect(JSON.parse(config ?? 'null')).toEqual({
-      ...BUILD_CONFIG,
-      builds: [BUILD_CONFIG.builds[0]],
-    });
-  });
-
-  it('puts the nonce on every script, the page’s own included', () => {
+  it('starts the app with its own bootstrap, under the nonce like every script', () => {
     bundle();
     const scripts = hostHtml().match(/<script\b[^>]*>/g) ?? [];
 
-    // The host's settings, the loading screen's, and the loader's two.
-    expect(scripts).toHaveLength(4);
+    // The loading screen's, and the bootstrap.
+    expect(scripts).toHaveLength(2);
     expect(scripts.every((tag) => tag.includes('nonce="{{GEMDB_NONCE}}"'))).toBe(true);
+    expect(scripts[1]).toContain('src="flutter_bootstrap.js"');
   });
 
-  it('keeps Flutter’s history updates on the page’s own origin', () => {
-    // The base is the webview's resource origin, so a URL Flutter resolves
-    // against it is cross-origin, and the browser refuses it -- which stops
-    // the app before its first frame.
-    bundle();
-    const html = hostHtml();
-    const shim = html.indexOf("for (const name of ['pushState', 'replaceState'])");
+  it('refuses a bootstrap that registers a service worker', () => {
+    // Flutter's stock template; GemDB Stats replaced it in PR #10.
+    write(
+      'flutter_bootstrap.js',
+      bootstrap(
+        BUILD_CONFIG,
+        '_flutter.loader.load({ serviceWorkerSettings: { serviceWorkerVersion: "1" } });',
+      ),
+    );
 
-    expect(shim).toBeGreaterThan(-1);
-    expect(shim).toBeLessThan(html.indexOf('src="flutter.js"'));
+    const result = bundle();
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('service worker');
+    expect(shipped('host.html')).toBe(false);
   });
 
   it('refuses a build that loads CanvasKit from a CDN', () => {
@@ -213,16 +222,21 @@ describe('bundle-stats.mjs', () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('--no-web-resources-cdn');
-    expect(shipped('host.html')).toBe(false);
   });
 
-  it('refuses a Wasm-only build, whose renderer it leaves out', () => {
+  it('refuses a build that offers Wasm, whose renderers it leaves out', () => {
     write(
       'flutter_bootstrap.js',
-      bootstrap({ ...BUILD_CONFIG, builds: [{ compileTarget: 'dart2wasm', renderer: 'skwasm' }] }),
+      bootstrap({
+        ...BUILD_CONFIG,
+        builds: [{ compileTarget: 'dart2wasm', renderer: 'skwasm' }, ...BUILD_CONFIG.builds],
+      }),
     );
 
-    expect(bundle().status).toBe(1);
+    const result = bundle();
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('--wasm');
   });
 
   it('names what a build is missing', () => {
@@ -249,24 +263,67 @@ describe('bundle-stats.mjs', () => {
       base: 'https://file.example/stats/',
       cspSource: 'https://file.example',
       nonce: 'n0nce',
-      host: { file: { url: 'https://file.example/statmon.out', name: 'statmon.out' } },
     });
 
     expect(page).not.toMatch(/\{\{GEMDB_/);
     expect(page).toContain('<base href="https://file.example/stats/">');
-    expect(page).toContain(
-      'window.gemdbStatsHost = {"file":{"url":"https://file.example/statmon.out","name":"statmon.out"}};',
-    );
+    expect(page).toContain('<script nonce="n0nce" src="flutter_bootstrap.js" async>');
+  });
+
+  describe('a release asset', () => {
+    let server: http.Server;
+    let url: string;
+    let sha256: string;
+
+    /** The build above as GemDB Stats' release would publish it: one folder in a .tar.gz. */
+    beforeEach(async () => {
+      const archive = path.join(dir, 'GemDB-Stats-1.0.0-web.tar.gz');
+      fs.renameSync(web, path.join(dir, 'GemDB-Stats-1.0.0-web'));
+      spawnSync('tar', ['-czf', archive, '-C', dir, 'GemDB-Stats-1.0.0-web']);
+      const bytes = fs.readFileSync(archive);
+      sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+      server = http.createServer((request, response) => {
+        if (request.url === '/web.tar.gz') {
+          response.end(bytes);
+        } else {
+          response.writeHead(404).end();
+        }
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/web.tar.gz`;
+    });
+
+    afterEach(async () => {
+      await new Promise((resolve) => server.close(resolve));
+    });
+
+    it('is downloaded, checked and unpacked', async () => {
+      const result = await bundleAsync({ STATS_URL: url, STATS_SHA256: sha256 });
+
+      expect(result.status).toBe(0);
+      expect(shipped('host.html')).toBe(true);
+      expect(fs.readFileSync(path.join(out, 'STATS_VERSION'), 'utf8')).toContain(`source=${url}`);
+    });
+
+    it('is refused when its SHA-256 is not the pinned one', async () => {
+      const result = await bundleAsync({ STATS_URL: url, STATS_SHA256: '0'.repeat(64) });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(sha256);
+      expect(shipped('host.html')).toBe(false);
+    });
+
+    it('is refused when the server has no such file', async () => {
+      const result = await bundleAsync({ STATS_URL: url.replace('web.tar.gz', 'gone.tar.gz') });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('404');
+    });
   });
 });
 
 describe('fillHostPage', () => {
-  const values = {
-    base: 'B/',
-    cspSource: 'C',
-    nonce: 'N',
-    host: { file: { url: 'U', name: 'statmon.out' } },
-  };
+  const values = { base: 'B/', cspSource: 'C', nonce: 'N' };
 
   it('fills every occurrence of each placeholder', () => {
     expect(fillHostPage('{{GEMDB_NONCE}} {{GEMDB_NONCE}} {{GEMDB_CSP_SOURCE}}', values)).toBe(
@@ -274,23 +331,10 @@ describe('fillHostPage', () => {
     );
   });
 
-  it('keeps a file name from closing the script it sits in', () => {
-    const page = fillHostPage('<script>x = {{GEMDB_HOST}};</script>', {
-      ...values,
-      host: { file: { url: 'U', name: '</script><script>alert(1)</script>' } },
-    });
-
-    expect(page.match(/<\/script>/g)).toHaveLength(1);
-    expect(page).toContain('\\u003c/script>');
-  });
-
   it('does not fill a placeholder that arrives inside a value', () => {
-    const page = fillHostPage('{{GEMDB_HOST}}', {
-      ...values,
-      host: { file: { url: 'U', name: '{{GEMDB_NONCE}}' } },
-    });
-
-    expect(page).toContain('{{GEMDB_NONCE}}');
+    expect(fillHostPage('{{GEMDB_BASE}}', { ...values, base: '{{GEMDB_NONCE}}' })).toBe(
+      '{{GEMDB_NONCE}}',
+    );
   });
 });
 

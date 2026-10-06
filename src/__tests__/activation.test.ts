@@ -5,7 +5,6 @@ import { join } from 'path';
 import {
   __changeSetting,
   __commands,
-  __customEditors,
   __resetSettings,
   __setSetting,
   env,
@@ -164,7 +163,7 @@ describe('activate()', () => {
     activate(fakeExtensionContext());
 
     expect(__commands.has('gemdb.openStatistics')).toBe(true);
-    expect([...__customEditors.keys()]).toEqual(['gemdb.statistics']);
+    expect(__commands.has('gemdb.openInStats')).toBe(true);
   });
 
   describe('activated.state', () => {

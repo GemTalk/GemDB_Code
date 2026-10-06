@@ -19,7 +19,7 @@ npm run test:integration   # a real database in a temp root path; seconds
 npm run bundle             # esbuild -> out/extension.js
 npm run bundle:grail       # assemble the Grail payload (needs a C toolchain)
 npm run bundle:mcp         # assemble the MCP server payload (needs nothing)
-npm run bundle:stats       # make a GemDB Stats web build hostable (STATS_WEB=<build/web>)
+npm run bundle:stats       # fetch the pinned GemDB Stats web build (or STATS_WEB=<build/web>)
 npm run test:extent        # build the extent the integration suite starts from
 npm run package            # .vsix
 npm run dev:fresh          # this checkout in a throwaway profile + empty root path (also :cached-engine, :keep-root)

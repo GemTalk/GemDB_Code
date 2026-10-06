@@ -1,8 +1,8 @@
 #!/bin/sh
 #
 # Pinned upstream commits for the payloads GemDB bundles into the .vsix.
-# Sourced by scripts/bundle-grail.sh and scripts/bundle-mcp.sh; not meant to
-# be run on its own.
+# Sourced by scripts/bundle-grail.sh and scripts/bundle-mcp.sh, and read as
+# text by scripts/bundle-stats.mjs; not meant to be run on its own.
 #
 # Full 40-character shas, not tags for now: neither upstream publishes tags worth
 # tracking yet. Override per-build with GRAIL_REF/MCP_REF -- these are read only
@@ -61,3 +61,16 @@ PINNED_GRAIL_REF=9f8b1161101608cb57d696887c672a3a5c5ce9f2
 #   with its own line (#46, #51) instead of one `line ?` per method, and
 #   eval_python runs as `__main__` (#52).
 PINNED_MCP_REF=d836520816d47bc5b8bb43386293f1b9dffbefce
+
+# GemDB Stats: a release asset, not a commit. Its web build needs the Flutter
+# SDK to compile, which GemDB Code's CI does not carry, so GemDB Stats'
+# release.yml publishes it as GemDB-Stats-<version>-web.tar.gz beside the
+# desktop builds, and bundle-stats.mjs downloads this one and refuses it unless
+# the SHA-256 matches (the release's SHA256SUMS.txt carries the value). Override
+# per-build with STATS_URL (and STATS_SHA256), or STATS_WEB for a local build.
+#
+# Empty until GemDB Stats publishes a release with the web build in it: one
+# that includes GemDB_Stats PR #10, which is what lets GemDB Code choose the
+# file and starts Flutter without a service worker.
+PINNED_STATS_URL=
+PINNED_STATS_SHA256=

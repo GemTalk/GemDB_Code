@@ -2,7 +2,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { DEBUG_TYPE } from '../debugger';
-import { STATISTICS_VIEW_TYPE } from '../statistics';
 
 /**
  * What package.json promises VS Code about trust, held to it.
@@ -34,11 +33,6 @@ interface Manifest {
     menus: Record<string, Array<{ command: string; when?: string; group?: string }>>;
     viewsWelcome: Array<{ view: string; contents: string; when?: string }>;
     walkthroughs: { steps: WalkthroughStep[] }[];
-    customEditors: Array<{
-      viewType: string;
-      selector: Array<{ filenamePattern: string }>;
-      priority?: string;
-    }>;
   };
 }
 
@@ -223,17 +217,23 @@ describe('restoring a saved stack', () => {
 });
 
 describe('GemDB Stats', () => {
-  const { customEditors } = manifest.contributes;
+  const { commands, menus } = manifest.contributes;
+  const entry = menus['explorer/context']?.find((e) => e.command === 'gemdb.openInStats');
 
-  it('declares the editor under the view type the code registers', () => {
-    // A mismatch fails silently: Open With… offers an editor nothing resolves.
-    expect(customEditors.map((e) => e.viewType)).toEqual([STATISTICS_VIEW_TYPE]);
+  it('offers Open in GemDB Stats on statmon files in the explorer, and nothing else', () => {
+    // The `when` clause's regular expression, as VS Code reads it.
+    const pattern = /^resourceFilename =~ \/(.*)\/$/.exec(entry?.when ?? '')?.[1];
+    const offered = (name: string) => new RegExp(pattern ?? '(?!)').test(name);
+
+    expect(['statmon76637.out', 'statmonitor_tanistone.out.gz'].every(offered)).toBe(true);
+    expect(['notes.output', 'archive.gz', 'run.out.txt'].some(offered)).toBe(false);
   });
 
-  it('is offered for statmon files without taking over every .out file', () => {
-    // `.out` is a common extension, so GemDB Stats is a choice under Open
-    // With…, never what a click on one opens.
-    expect(customEditors[0].priority).toBe('option');
-    expect(customEditors[0].selector.map((s) => s.filenamePattern)).toEqual(['*.out', '*.out.gz']);
+  it('keeps the explorer’s command out of the Command Palette, which has its own', () => {
+    // Without a file it has nothing to open; Open Statistics File… asks for one.
+    const hidden = menus.commandPalette.find((e) => e.command === 'gemdb.openInStats');
+
+    expect(hidden?.when).toBe('false');
+    expect(commands.map((c) => c.command)).toContain('gemdb.openStatistics');
   });
 });
