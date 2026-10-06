@@ -98,6 +98,19 @@ Its own list, from `system.conf`, with what each item means for GemDB:
    (`fetchAskingAgain`, `askingAgain` in `maintenance.ts`). That matters because
    a session that logs in below the threshold gets the notice on its first
    request.
+
+   Asking again is only right for a request the notice replaced. One that
+   arrives *while* a request runs does not replace it, and the mark is not
+   safe to repeat: on a CI runner the stone logged two marks by the
+   collection's session, with the crossing between the first mark's start and
+   finish. The second mark waited for the GC lock, held by the first mark's
+   vote, which waited for the collection's session, stuck in the second mark,
+   until the lock wait gave up two minutes later. Once the first vote could
+   finish (#101's sweeps), the second mark got the lock and found nothing new,
+   so the collection skipped the reclaim wait and freed nothing. So the mark
+   resumes past 2338 in its own Smalltalk (`MFC_QUERY`), as the spaceFull
+   filler does, and a notice that still reaches GemDB means the mark did not
+   run.
 5. After `STN_DISKFULL_TERMINATION_INTERVAL` (default 3 minutes), it begins
    **terminating sessions that hold the oldest commit record**. It spares
    DataCurator: an idle DataCurator session holding the oldest record 35
@@ -135,7 +148,10 @@ The way back is to lower the threshold under what is free. Only SystemUser may
 (`System configurationAt: #StnFreeSpaceThreshold put:`). Measured: lowered to
 16 MB with 19 MB free, the reclaim gem resumed, and free space went 19 → 41 →
 84 MB within ten seconds. `collectGarbage` does exactly this when it finds free
-space below the threshold. It sets the threshold to half of what is free, as
+space below the threshold. It sets the threshold to a quarter of what is free
+(`thresholdToReclaimUnder`), since the mark borrows space while it runs: on a
+CI runner with 40 MB free, a threshold of half was crossed when the mark took
+free space to 19 MB for a moment. It does this as
 SystemUser with the stock password (the same login `install-grail.sh`
 makes), and puts back the value it read once reclaim settles. The change is
 runtime-only, so a stone restart restores the configured value whatever
@@ -213,8 +229,25 @@ is committing past holds nothing back, so it is left alone.
    24 million characters), so GemDB shows the counts and measures what came
    back from free space rather than repeating that figure.
 2. **Every session votes**, by committing or aborting. The collection aborts
-   this window's clean sessions straight after the mark, and its own session on
-   every poll.
+   this window's clean sessions and its own session on every poll.
+
+   The vote matters *before* the mark too. A mark needs the GC lock, which is
+   not granted while an earlier mark's possible dead objects are still being
+   voted on ("There also must be no outstanding possible dead objects in the
+   system for the GC lock to be granted", in the method comment of
+   `Repository>>_mfcWithMaxThreads:waitForLock:...`). So an earlier vote held
+   open by an idle notebook keeps the lock from a new mark, which waits two
+   minutes and fails with 2501, "Waited too long to get gcLock". It failed that
+   way once on a CI runner. So the collection also aborts this window's clean
+   sessions just before the mark, and every five seconds while it waits for
+   the lock. The repeat is for a notebook that was mid-cell at the first
+   sweep, which `abortIfClean` skips as busy. `space.test.ts` sets that up:
+   another session marks and logs out, leaving its vote waiting on a notebook
+   that is running a ten-second cell when the collection starts. With the
+   repeat the mark gets the lock; without it, the mark failed after two
+   minutes. A session outside this window can still hold the vote open; the
+   collection then fails, naming the sessions holding the oldest commit
+   record.
 3. **Reclaim**, then a **checkpoint**: freed pages are not counted as free until
    one. Measured: 69 MB free after reclaim, 144 MB after `startCheckpointSync`.
 4. **Wait for every view to move past the reclaim.** Vote state,

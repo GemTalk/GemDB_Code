@@ -109,6 +109,13 @@ export const BACKLOG_WORTH_ASKING = 20;
 const RECLAIM_WAIT_MS = 10 * 60_000;
 const POLL_MS = 5_000;
 
+/**
+ * GemStone error 2501: a mark that waited too long for the GC lock. The lock
+ * is not granted while an earlier mark's vote is open, and the vote waits for
+ * every session to commit or abort.
+ */
+const GC_LOCK_TIMED_OUT = /\(error 2501\)/;
+
 // ---------------------------------------------------------------------------
 // The decisions, kept free of the database so they can be tested without one.
 // ---------------------------------------------------------------------------
@@ -257,12 +264,16 @@ export function gcDue(facts: {
  * The threshold to set so reclaim can run again with `freeMb` free.
  *
  * The reclaim gem suspends while free space is below the threshold, so the
- * threshold has to go under what is free; half leaves room for the copies
- * reclaim makes. Never 0, which the stone reads as "a tenth of a percent of
- * the repository" rather than "none".
+ * threshold has to go well under what is free: the mark itself borrows space
+ * while it runs. Measured on a CI runner with 40 MB free: a threshold of half
+ * (20 MB) was crossed when the mark took free space down to 19 MB for a
+ * moment, which suspended reclaim and sent the collection's session the
+ * stone's 2338 notice. A quarter would have left 9 MB to spare. Never 0,
+ * which the stone reads as "a tenth of a percent of the repository" rather
+ * than "none".
  */
 export function thresholdToReclaimUnder(freeMb: number): number {
-  return Math.max(1, Math.floor(freeMb / 2));
+  return Math.max(1, Math.floor(freeMb / 4));
 }
 
 /**
@@ -376,10 +387,24 @@ System currentSessions do: [:id | | d |
     print: (d at: 17) notNil; lf].
 w contents`;
 
-/** markForCollection on 4.0 answers a Warning carrying the report; older engines signal it. */
-const MFC_QUERY =
-  '| r | r := [SystemRepository markForCollection] on: Warning do: [:w | w messageText]. ' +
-  '(r isKindOf: Exception) ifTrue: [r messageText asString] ifFalse: [r asString]';
+/**
+ * The mark. On 4.0 markForCollection answers a Warning carrying the report;
+ * older engines signal it.
+ *
+ * The stone's free-space notice (2338) is resumed past inside it, not left to
+ * `askingAgain`. A notice that arrives while the mark runs does not replace
+ * it the way one arriving before a request does: the mark completes, and
+ * asking again starts a second mark (measured on a CI runner, two marks by
+ * one session). That second mark waits for the GC lock, which the first
+ * mark's vote holds, and that vote waits for this session, stuck in the
+ * second mark — for the lock wait's full two minutes. With the notice handled
+ * here, one that still reaches GemDB means the mark did not run, and asking
+ * again is right.
+ */
+export const MFC_QUERY =
+  '[| r | r := [SystemRepository markForCollection] on: Warning do: [:w | w messageText]. ' +
+  '(r isKindOf: Exception) ifTrue: [r messageText asString] ifFalse: [r asString]] ' +
+  'on: Error do: [:e | e number = 2338 ifTrue: [e resume: nil] ifFalse: [e pass]]';
 
 /**
  * One look at the vote and the reclaim behind it — vote state, then objects
@@ -747,11 +772,14 @@ export type GcOutcome =
 /**
  * Mark, let every session vote, wait for reclaim, checkpoint.
  *
- * Each step is there because leaving it out was measured to free nothing:
- * the garbage a mark finds is reclaimed only once every session has voted,
- * which an idle `autoBegin` session never does by itself (so this window's
- * clean ones are aborted straight after the mark), and pages reclaim frees
- * count as free only after the next checkpoint.
+ * Each step is there because leaving it out was measured to free nothing or
+ * to fail. A vote waits for every session to commit or abort, which an idle
+ * `autoBegin` session never does by itself, so this window's clean sessions
+ * are aborted just before the mark, every few seconds while the mark waits
+ * for the GC lock (an earlier mark's open vote withholds it), and on every
+ * poll of this mark's own vote. Pages reclaim frees are not free until every
+ * view, the SymbolGem's included, is newer than the reclaim, and count as
+ * free only after the next checkpoint.
  */
 export async function collectGarbage(
   reason: GcRecord['reason'],
@@ -786,18 +814,45 @@ export async function collectGarbage(
       restoreThreshold = threshold;
     }
 
-    const report = await askingAgain(session, MFC_QUERY);
+    // The mark waits for the GC lock, which is not granted while an earlier
+    // mark's vote is still open — one from topaz, another window, or the
+    // last collection — and that vote can be waiting on a session in this
+    // window. Without a sweep, a notebook left idle held the lock away for
+    // the mark's whole two minutes, and the mark failed with 2501 (measured).
+    // The sweep before the mark aborts every session that is clean and not
+    // running anything. The interval is for one that was mid-cell then, which
+    // `abortIfClean` skips as busy: when the cell finishes, nothing else
+    // would make it vote during the wait. Both ignore the idle-time setting
+    // (`sweep(0)`): an abort that loses nothing is invisible to the notebook.
+    sweep(0);
+    const voting = setInterval(() => sweep(0), POLL_MS);
+    let report: string;
+    try {
+      report = await askingAgain(session, MFC_QUERY);
+    } catch (e) {
+      if (!GC_LOCK_TIMED_OUT.test(errorMessage(e))) throw e;
+      const own = session.serial;
+      const holders = parseSessions(await askingAgain(session, SESSIONS_QUERY))
+        .filter((s) => s.holdsOldest && !s.system && s.id !== own)
+        .map((s) => s.name || `${s.user} (session ${s.id})`);
+      const message =
+        'An earlier garbage collection is still waiting for ' +
+        `${holders.join(', ') || 'a session'} to commit or abort, so this one could not start.`;
+      log(`${message} (${errorMessage(e)})`);
+      return { kind: 'failed', message };
+    } finally {
+      clearInterval(voting);
+    }
     const { live, dead } = parseMfcReport(report);
     log(report);
 
     if (dead !== 0) {
-      // The vote: this window's clean sessions now, however recently used —
-      // an abort that loses nothing is invisible to them — and the
-      // collection's own session on every poll.
-      sweep(0);
+      // The vote on what this mark found: the same sweep, and the
+      // collection's own session aborting, on every poll.
       const deadline = Date.now() + RECLAIM_WAIT_MS;
       let state = '';
       for (;;) {
+        sweep(0);
         state = await askingAgain(session, RECLAIM_QUERY);
         if (/^IDLE 0 0 0$/.test(state.trim())) break;
         if (Date.now() > deadline) {

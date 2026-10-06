@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { STONE_NAME } from '../config';
+import { STONE_NAME, adminAccount } from '../config';
 import { FREE_SPACE_THRESHOLD_MB, REPOSITORY_LIMIT_MB } from '../database';
 import { stageGrail } from '../grail';
 import {
@@ -14,7 +14,14 @@ import {
 import { databaseLogPath, extentPath } from '../paths';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
 import { isErrorResult, runPython } from '../pythonQueries';
-import { SessionOwner, closeSessionFor, execute, logoutAll, sessionForIfOpen } from '../session';
+import {
+  GciSession,
+  SessionOwner,
+  closeSessionFor,
+  execute,
+  logoutAll,
+  sessionForIfOpen,
+} from '../session';
 import {
   createDatabaseWithPython,
   Fixture,
@@ -206,6 +213,40 @@ describe.skipIf(!haveExtent || !canMakeFixture())('collecting garbage', () => {
     expect(outcome.kind === 'done' && (outcome.record.dead ?? 0)).toBeGreaterThanOrEqual(50_001);
     expect(outcome.kind === 'done' && (outcome.record.freedMb ?? 0)).toBeGreaterThan(0);
     // Up to a minute of that is the SymbolGem's view moving past the reclaim.
+  }, 240_000);
+
+  it('gets the GC lock though an earlier vote waits on a notebook that was mid-cell', async () => {
+    // The GC lock is not granted while a mark's possible dead objects are
+    // still being voted on, and the vote waits for every session to commit
+    // or abort. Here another session's mark leaves a vote open that B holds
+    // up — as a notebook in this window can hold up a mark run from topaz, or
+    // the one before. B is running a cell when the collection starts, so the
+    // sweep before the mark skips it as busy; what lets the mark have the
+    // lock is the sweep repeated while it waits, which aborts B once the cell
+    // is done. Without either sweep, the mark waited out its two minutes and
+    // failed with 2501, "Waited too long to get gcLock"; without the repeat,
+    // it does the same here.
+    await runPython('import time', B);
+    expect(sessionForIfOpen(B.key)?.abortIfClean()).toBe('aborted');
+    await runPython(
+      'import gemdb\ngemdb.root["it_space_vote"] = [str(i) for i in range(20000)]\ngemdb.commit()',
+      J,
+    );
+    await runPython('del gemdb.root["it_space_vote"]\ngemdb.commit()', J);
+    closeSessionFor(J.key);
+    const busy = runPython('time.sleep(10)', B);
+    const other = GciSession.login(
+      { key: 'it-other-mark', kind: 'extension', label: 'other mark' },
+      adminAccount(),
+    );
+    other.execute("SystemRepository markForCollection. 'marked'");
+    other.logout();
+    expect(execute('System abortTransaction. System voteStateString')).toBe('VOTING');
+
+    const outcome = await collectGarbage('command', hooks);
+
+    expect(outcome.kind === 'failed' ? outcome.message : outcome.kind).toBe('done');
+    await busy;
   }, 240_000);
 
   it('logs its own session out afterwards', async () => {
