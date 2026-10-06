@@ -50,7 +50,7 @@ whether the reload happens.
 ## The build
 
 A GemDB Stats release publishes `GemDB-Stats-<version>-web.tar.gz` beside its
-desktop builds. `vendor-pins.sh` pins its URL and SHA-256, and
+desktop builds, from v1.1.0 on. `vendor-pins.sh` pins its URL and SHA-256, and
 `npm run bundle:stats` downloads it, checks it and assembles `stats/`. GemDB
 Code's CI does not carry the Flutter SDK, which is why it uses a release asset
 rather than building a pinned commit, as Grail and the MCP server do. For a
@@ -90,9 +90,6 @@ those files are not.
 
 ## Open
 
-- **No GemDB Stats release has the web build yet.** Until one does, the pins in
-  `vendor-pins.sh` are empty, `bundle:stats` needs `STATS_WEB`, and the CI
-  integration legs fail at it.
 - **Not yet seen in code-server.**
 - **Large files through VS Code's resource loader.** A 216 MB `.out.gz` takes
   about 23 s to parse in Chrome. Whether the webview's resource loader streams
