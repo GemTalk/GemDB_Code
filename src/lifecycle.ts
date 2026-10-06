@@ -24,7 +24,14 @@ import {
   removeDatabase,
 } from './database';
 import { Progress, installEngine, removeEngine } from './engine';
-import { bundledGrailStamp, fileInGrail, grailLabel, grailNeedsUpdate, stageGrail } from './grail';
+import {
+  bundledGrailStamp,
+  fileInGrail,
+  grailLabel,
+  grailNeedsUpdate,
+  newerGrail,
+  stageGrail,
+} from './grail';
 import { errorMessage, log, logStep, showLog } from './log';
 import {
   bundledMcpStamp,
@@ -584,8 +591,9 @@ export async function ensureRunning(extensionPath: string, trigger: Trigger): Pr
           progress.report({
             message: firstTime ? 'Installing Python support…' : 'Updating Python support…',
           });
-          await fileInGrail(extensionPath, progress);
-          filedGrail = firstTime ? FILED_GRAIL.firstTime : FILED_GRAIL.update;
+          if (await fileInGrail(extensionPath, progress)) {
+            filedGrail = firstTime ? FILED_GRAIL.firstTime : FILED_GRAIL.update;
+          }
         }
 
         await ensureMcpServing(extensionPath, progress);
@@ -891,6 +899,20 @@ export async function reinstallGrail(extensionPath: string): Promise<void> {
     void vscode.window.showErrorMessage('GemDB is not installed yet.');
     return;
   }
+  // Another editor on this root path runs a newer GemDB, and reinstalling
+  // from here would downgrade what it put in place.
+  const newer = newerGrail(extensionPath);
+  if (newer) {
+    const version = newer.version ?? 'unknown';
+    void vscode.window.showErrorMessage(
+      newer.where === 'installed'
+        ? `Python support was installed by GemDB ${version}, newer than this editor's GemDB. ` +
+            'Update GemDB here to reinstall.'
+        : `A newer GemDB (${version}) has prepared Python support for this database. ` +
+            'Update GemDB here to reinstall.',
+    );
+    return;
+  }
   if (!findStone()) {
     void vscode.window.showErrorMessage(
       'Start GemDB first — installing Python support needs a running database.',
@@ -901,8 +923,9 @@ export async function reinstallGrail(extensionPath: string): Promise<void> {
     { location: vscode.ProgressLocation.Notification, title: 'Reinstalling Python support' },
     async (progress) => {
       try {
-        await fileInGrail(extensionPath, progress);
-        void vscode.window.showInformationMessage('Python support reinstalled.');
+        if (await fileInGrail(extensionPath, progress)) {
+          void vscode.window.showInformationMessage('Python support reinstalled.');
+        }
       } catch (e) {
         void vscode.window
           .showErrorMessage(`Reinstalling Python support failed: ${errorMessage(e)}`, 'Show Log')

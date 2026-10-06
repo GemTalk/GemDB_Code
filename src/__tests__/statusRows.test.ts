@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { GrailInstallFailure } from '../grail';
+import { STAMP_ORDER } from '../stamps';
 import { pythonRow, runningRow } from '../statusView';
 
 /**
@@ -13,6 +14,7 @@ import { pythonRow, runningRow } from '../statusView';
 
 const BUNDLED = 'grail=0.1-2200-gnew\ncommit=new\nengine=4.0.0.a3';
 const OLDER = 'grail=0.1-2100-gold\ncommit=old\nengine=4.0.0.a3';
+const NEWER = 'grail=0.1-2300-gnewer\ncommit=newer\nengine=4.0.0.a3';
 
 const failure: GrailInstallFailure = {
   stamp: BUNDLED,
@@ -22,7 +24,13 @@ const failure: GrailInstallFailure = {
 
 describe('the Python row', () => {
   it('says the install failed, and shows why', () => {
-    const row = pythonRow({ installed: undefined, bundled: BUNDLED, failure, running: true });
+    const row = pythonRow({
+      installed: undefined,
+      bundled: BUNDLED,
+      order: STAMP_ORDER.older,
+      failure,
+      running: true,
+    });
 
     expect(row.description).toBe('install failed — see the GemDB output');
     expect(row.tooltip).toContain('exit code 1');
@@ -30,13 +38,25 @@ describe('the Python row', () => {
   });
 
   it('retries the install when the database is running', () => {
-    const row = pythonRow({ installed: undefined, bundled: BUNDLED, failure, running: true });
+    const row = pythonRow({
+      installed: undefined,
+      bundled: BUNDLED,
+      order: STAMP_ORDER.older,
+      failure,
+      running: true,
+    });
 
     expect(row.command?.command).toBe('gemdb.reinstallPython');
   });
 
   it('starts the database when it is stopped, since starting retries the install', () => {
-    const row = pythonRow({ installed: undefined, bundled: BUNDLED, failure, running: false });
+    const row = pythonRow({
+      installed: undefined,
+      bundled: BUNDLED,
+      order: STAMP_ORDER.older,
+      failure,
+      running: false,
+    });
 
     expect(row.command?.command).toBe('gemdb.start');
     expect(row.tooltip).toContain('tries again the next time it starts');
@@ -46,7 +66,13 @@ describe('the Python row', () => {
     // A failed update is recorded against the new build, and the old stamp
     // may or may not have survived; either way the row must not say Python
     // is waiting to be installed for the first time.
-    const row = pythonRow({ installed: OLDER, bundled: BUNDLED, failure, running: true });
+    const row = pythonRow({
+      installed: OLDER,
+      bundled: BUNDLED,
+      order: STAMP_ORDER.older,
+      failure,
+      running: true,
+    });
 
     expect(row.description).toBe('install failed — see the GemDB output');
   });
@@ -55,6 +81,7 @@ describe('the Python row', () => {
     const row = pythonRow({
       installed: undefined,
       bundled: BUNDLED,
+      order: STAMP_ORDER.older,
       failure: undefined,
       running: true,
     });
@@ -67,6 +94,7 @@ describe('the Python row', () => {
     const row = pythonRow({
       installed: BUNDLED,
       bundled: BUNDLED,
+      order: STAMP_ORDER.same,
       failure: undefined,
       running: true,
     });
@@ -79,12 +107,41 @@ describe('the Python row', () => {
     const row = pythonRow({
       installed: OLDER,
       bundled: BUNDLED,
+      order: STAMP_ORDER.older,
       failure: undefined,
       running: true,
     });
 
     expect(row.description).toBe('0.1-2100-gold — update available');
     expect(row.command?.command).toBe('gemdb.reinstallPython');
+  });
+
+  it('offers to replace a different build recorded at the same GemDB version', () => {
+    const row = pythonRow({
+      installed: OLDER,
+      bundled: BUNDLED,
+      order: STAMP_ORDER.sameVersionDifferent,
+      failure: undefined,
+      running: true,
+    });
+
+    expect(row.description).toBe('0.1-2100-gold — update available');
+  });
+
+  it('leaves alone, and offers nothing for, a build a newer GemDB installed', () => {
+    // Another editor on the same root path runs a newer GemDB. Reinstalling
+    // from here would downgrade what it filed in.
+    const row = pythonRow({
+      installed: `${NEWER}\nextension=1.7.0`,
+      bundled: BUNDLED,
+      order: STAMP_ORDER.newer,
+      failure: undefined,
+      running: true,
+    });
+
+    expect(row.description).toBe('0.1-2300-gnewer — installed by a newer GemDB');
+    expect(row.tooltip).toContain('GemDB 1.7.0');
+    expect(row.command).toBeUndefined();
   });
 });
 

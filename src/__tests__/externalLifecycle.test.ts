@@ -11,8 +11,9 @@ vi.mock('../cli', () => ({ writeCliScripts: () => {}, ensureCliCurrent: () => tr
 vi.mock('../grail', () => ({
   grailLabel: () => 'grail 0.1',
   grailNeedsUpdate: () => false,
-  stageGrail: () => {},
-  fileInGrail: async () => {},
+  newerGrail: () => undefined,
+  stageGrail: () => true,
+  fileInGrail: async () => true,
   bundledGrailStamp: () => 'grail=0.1-1-gabc\n',
 }));
 

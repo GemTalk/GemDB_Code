@@ -71,7 +71,7 @@ vi.mock('../database', async (importOriginal) => ({
 }));
 vi.mock('../grail', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../grail')>()),
-  stageGrail: () => {},
+  stageGrail: () => true,
 }));
 
 // A change of database settings ends what was bound to the old database.

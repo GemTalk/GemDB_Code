@@ -17,8 +17,9 @@ const grailNeedsUpdate = vi.fn(() => false);
 vi.mock('../grail', () => ({
   grailLabel: () => 'grail 0.1',
   grailNeedsUpdate: () => grailNeedsUpdate(),
-  stageGrail: () => {},
-  fileInGrail: async () => {},
+  newerGrail: () => undefined,
+  stageGrail: () => true,
+  fileInGrail: async () => true,
   bundledGrailStamp: () => bundledGrailStamp(),
 }));
 

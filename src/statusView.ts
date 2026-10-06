@@ -6,7 +6,13 @@ import {
   mcpEnabled,
   mcpReadOnly,
 } from './config';
-import { GrailInstallFailure, bundledGrailStamp, grailInstallFailure, grailLabel } from './grail';
+import {
+  GrailInstallFailure,
+  bundledGrailStamp,
+  grailInstallFailure,
+  grailLabel,
+  installedGrailOrder,
+} from './grail';
 import { isInstalled } from './lifecycle';
 import { bundledMcpStamp, mcpLabel, mcpServerState, mcpUrl } from './mcp';
 import { FREE_SPACE_THRESHOLD_MB, REPOSITORY_LIMIT_MB } from './database';
@@ -34,7 +40,7 @@ import { isSupportedPlatform, setContext } from './platform';
 import { isListening, isRunning, listProcesses } from './processes';
 import { knownSavedStacks } from './savedStacks';
 import { sessionRegistry } from './session';
-import { stampFor } from './stamps';
+import { STAMP_ORDER, StampOrder, parseStamp } from './stamps';
 
 /** "20 min" — the same scale the session-limit message uses. */
 function humanIdle(ms: number): string {
@@ -100,10 +106,12 @@ export function runningRow(facts: { listening: boolean; pythonFailed: boolean })
 export function pythonRow(facts: {
   installed: string | undefined;
   bundled: string | undefined;
+  /** How `installed` compares with what this GemDB would file in; undefined when it ships none. */
+  order: StampOrder | undefined;
   failure: GrailInstallFailure | undefined;
   running: boolean;
 }): Row {
-  const { installed, bundled, failure, running } = facts;
+  const { installed, bundled, order, failure, running } = facts;
   if (failure) {
     return {
       label: 'Python',
@@ -122,7 +130,21 @@ export function pythonRow(facts: {
     };
   }
   const neverInstalled = installed === undefined;
-  const outdated = !neverInstalled && bundled !== undefined && installed !== bundled;
+  if (!neverInstalled && order === STAMP_ORDER.newer) {
+    // Another editor on this root path runs a newer GemDB. Its Python works
+    // here, and offering to reinstall this one's would offer a downgrade.
+    return {
+      label: 'Python',
+      description: `${grailLabel(installed)} — installed by a newer GemDB`,
+      tooltip:
+        `Python support ${grailLabel(installed)} was installed by GemDB ` +
+        `${parseStamp(installed).extension ?? 'unknown'}, newer than this editor's GemDB ` +
+        `(which ships ${grailLabel(bundled)}). It is left as it is; update GemDB here to manage it.`,
+      icon: ok('symbol-namespace'),
+    };
+  }
+  const outdated =
+    !neverInstalled && (order === STAMP_ORDER.older || order === STAMP_ORDER.sameVersionDifferent);
   return {
     label: 'Python',
     description: neverInstalled
@@ -327,11 +349,11 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
       if (space) rows.push(space);
     }
 
-    const bundledGrail = bundledGrailStamp(this.extensionPath);
     rows.push(
       pythonRow({
         installed: installedGrailStamp(),
-        bundled: bundledGrail && stampFor(this.extensionPath, bundledGrail),
+        bundled: bundledGrailStamp(this.extensionPath),
+        order: installedGrailOrder(this.extensionPath),
         failure,
         running: state === 'running',
       }),

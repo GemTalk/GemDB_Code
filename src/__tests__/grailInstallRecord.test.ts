@@ -16,6 +16,7 @@ import {
   expectedEnginePath,
   grailInstalled,
   grailPath,
+  grailStagedByPath,
   grailStampPath,
   installedGrailStamp,
   legacyGrailStampPath,
@@ -216,5 +217,31 @@ describe('the record of which Grail is filed in', () => {
 
     expect(fs.existsSync(legacyGrailStampPath())).toBe(false);
     expect(fs.existsSync(grailPath())).toBe(true);
+  });
+});
+
+describe('filing Grail in beside a newer GemDB', () => {
+  const NEWER = 'grail=0.1-2300-gnewer\nextension=1.7.0';
+
+  it('leaves a Grail a newer GemDB staged for it to file in', async () => {
+    // The installer would fail if it ran; it must not run at all.
+    ext = makeExtensionDir(BUNDLED, 1);
+    fs.mkdirSync(grailPath(), { recursive: true });
+    fs.writeFileSync(grailStagedByPath(), `${NEWER}\n`);
+    fs.writeFileSync(grailStampPath(), `${BUNDLED}extension=1.5.4\n`);
+
+    expect(await fileInGrail(ext, noProgress)).toBe(false);
+
+    expect(grailInstallFailure(ext)).toBeUndefined();
+    expect(installedGrailStamp()).toBe(`${BUNDLED}extension=1.5.4`);
+  });
+
+  it('leaves a Grail a newer GemDB filed in', async () => {
+    ext = makeExtensionDir(BUNDLED, 1);
+    fs.writeFileSync(grailStampPath(), `${NEWER}\n`);
+
+    expect(await fileInGrail(ext, noProgress)).toBe(false);
+
+    expect(installedGrailStamp()).toBe(NEWER);
   });
 });

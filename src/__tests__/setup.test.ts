@@ -44,7 +44,7 @@ vi.mock('../database', async (importOriginal) => {
   };
 });
 
-const stageGrail = vi.fn((_extensionPath: string) => {});
+const stageGrail = vi.fn((_extensionPath: string) => true);
 vi.mock('../grail', () => ({
   stageGrail: (extensionPath: string) => stageGrail(extensionPath),
 }));

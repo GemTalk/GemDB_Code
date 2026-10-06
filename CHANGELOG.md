@@ -74,6 +74,13 @@ this one does not look.
   support again. The record now lives in `~/GemDB/db`, beside the database it describes. One effect
   is visible: after **Uninstall** with **Keep my database**, installing again no longer reinstalls
   Python support into a database that already has it.
+- **Two editors on different GemDB Code versions no longer swap Python support back and forth.**
+  With, say, VS Code on this release and Cursor on an older one using the same GemDB folder, each
+  replaced the other's Python support whenever it started. GemDB now records which version
+  installed it and leaves alone what a newer version put there. The GemDB panel says
+  "installed by a newer GemDB", and **Reinstall the Python Execution Engine** refuses and asks you
+  to update GemDB Code in that editor. Releases before this one cannot tell, so they can still
+  replace a newer version's, and the newer one puts its own back at its next start.
 
 ## [1.5.4] - 2026-10-01
 

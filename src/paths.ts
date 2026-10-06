@@ -98,6 +98,26 @@ export function grailStampPath(): string {
 }
 
 /**
+ * Marker recording which GemDB staged the Grail on disk, in the stamp's format.
+ *
+ * Inside `grail/` deliberately, unlike the stamp: it describes those files,
+ * and goes when they do. Written last, so a staging that dies partway leaves
+ * none, and reads as older than any GemDB that comes after it.
+ */
+export function grailStagedByPath(): string {
+  return path.join(grailPath(), '.gemdb-staged-by');
+}
+
+/** Which GemDB staged the Grail on disk, or undefined if none recorded it. */
+export function stagedGrailStamp(): string | undefined {
+  try {
+    return fs.readFileSync(grailStagedByPath(), 'utf8').trim();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Where GemDB kept the Grail stamp before it moved beside the database.
  *
  * Read, never written: an older GemDB sharing this root path still writes

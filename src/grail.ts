@@ -11,9 +11,11 @@ import {
   grailPath,
   grailStampPath,
   installedGrailStamp,
+  grailStagedByPath,
   removeGrailStamps,
+  stagedGrailStamp,
 } from './paths';
-import { STAMP_ORDER, compareStamps, stampFor } from './stamps';
+import { STAMP_ORDER, StampOrder, compareStamps, parseStamp, stampFor } from './stamps';
 import { logoutAll } from './session';
 import { writeCliScripts } from './cli';
 
@@ -46,24 +48,66 @@ export function grailLabel(stamp: string | undefined): string {
 }
 
 /**
+ * How the Grail filed into the database compares with this extension's, or
+ * undefined when this build ships none.
+ */
+export function installedGrailOrder(extensionPath: string): StampOrder | undefined {
+  const bundled = bundledGrailStamp(extensionPath);
+  if (!bundled) return undefined;
+  return compareStamps(installedGrailStamp(), stampFor(extensionPath, bundled));
+}
+
+/**
  * True when the Grail in the database should be replaced by this extension's.
  *
  * Not merely "different": one filed in by a newer GemDB, from another editor
  * on the same root path, is left where it is (`stamps.ts`).
  */
 export function grailNeedsUpdate(extensionPath: string): boolean {
-  const bundled = bundledGrailStamp(extensionPath);
-  if (!bundled) return false; // nothing to stage; reported separately
-  const order = compareStamps(installedGrailStamp(), stampFor(extensionPath, bundled));
+  const order = installedGrailOrder(extensionPath); // undefined: nothing to stage; reported separately
   return order === STAMP_ORDER.older || order === STAMP_ORDER.sameVersionDifferent;
+}
+
+/** A Grail a newer GemDB put in place, which this one must leave alone. */
+export interface NewerGrail {
+  /** Filed into the database, or only staged on disk so far. */
+  where: 'installed' | 'staged';
+  /** The GemDB that did it, as its stamp records. */
+  version: string | undefined;
+}
+
+/**
+ * The Grail a newer GemDB filed in or staged, if there is one.
+ *
+ * Both count. Filed in, replacing it would downgrade the database; staged
+ * only, a newer GemDB is about to file it in, and replacing the files under
+ * it would hand its install an older payload.
+ */
+export function newerGrail(extensionPath: string): NewerGrail | undefined {
+  const bundled = bundledGrailStamp(extensionPath);
+  if (!bundled) return undefined;
+  const ours = stampFor(extensionPath, bundled);
+  const records: [NewerGrail['where'], string | undefined][] = [
+    ['installed', installedGrailStamp()],
+    ['staged', stagedGrailStamp()],
+  ];
+  for (const [where, record] of records) {
+    if (record !== undefined && compareStamps(record, ours) === STAMP_ORDER.newer) {
+      return { where, version: parseStamp(record).extension };
+    }
+  }
+  return undefined;
 }
 
 /**
  * Copy the bundled Grail to the root path, together with the prebuilt CPython
  * shim for this platform. Replaces any previously staged copy wholesale — a
  * partial overlay of one Grail on another is not a state worth supporting.
+ *
+ * Unless a newer GemDB staged or filed in the one there (`newerGrail`): then
+ * nothing is touched, and this returns false.
  */
-export function stageGrail(extensionPath: string): void {
+export function stageGrail(extensionPath: string): boolean {
   const source = path.join(extensionPath, 'grail');
   const stamp = bundledGrailStamp(extensionPath);
   if (!stamp) {
@@ -71,6 +115,15 @@ export function stageGrail(extensionPath: string): void {
       'This build of GemDB ships no Python payload, so Python cannot be installed. ' +
         'Run "npm run bundle:grail" before packaging the extension.',
     );
+  }
+
+  const newer = newerGrail(extensionPath);
+  if (newer) {
+    log(
+      `Skipped staging Grail: GemDB ${newer.version ?? 'unknown'} ` +
+        (newer.where === 'installed' ? 'filed a newer one in.' : 'staged a newer one.'),
+    );
+    return false;
   }
 
   logStep(`Staging Grail ${grailLabel(stamp)}`);
@@ -119,7 +172,10 @@ export function stageGrail(extensionPath: string): void {
 
   // Deliberately NOT stamped here. The stamp means "this Grail is installed in
   // the database", and copying files is only half of that — see recordGrailInstalled.
+  // What is recorded is who staged it, and last, once the copy is complete.
+  fs.writeFileSync(grailStagedByPath(), `${stampFor(extensionPath, stamp)}\n`);
   log(`Grail staged at ${dest}`);
+  return true;
 }
 
 /**
@@ -172,16 +228,23 @@ export const onDidAttemptGrailInstall = installAttempts.event;
  * The stamps are removed just before the installer runs, so that one which
  * dies partway reads as "not filed in" rather than as whatever was there
  * before. Both of them: a legacy stamp left behind would be read in its place.
+ *
+ * Returns false, having changed nothing, when a newer GemDB staged or filed in
+ * the Grail already there.
  */
 export async function fileInGrail(
   extensionPath: string,
   progress: vscode.Progress<{ message?: string }>,
-): Promise<void> {
+): Promise<boolean> {
   try {
-    stageGrail(extensionPath);
+    if (!stageGrail(extensionPath)) {
+      log('Skipped filing Grail in: a newer GemDB manages it.');
+      return false;
+    }
     removeGrailStamps();
     await installGrail(extensionPath, progress);
     recordGrailInstalled(extensionPath);
+    return true;
   } catch (e) {
     recordGrailFailed(extensionPath, e);
     throw e;

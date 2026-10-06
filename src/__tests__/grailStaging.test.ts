@@ -8,6 +8,7 @@ import {
   databasePath,
   expectedEnginePath,
   grailPath,
+  grailStagedByPath,
   grailStampPath,
   installedGrailStamp,
   legacyGrailStampPath,
@@ -111,5 +112,67 @@ describe('staging Grail over a previous version', () => {
 
     expect(installedGrailStamp()).toBe(`${BUNDLED}extension=1.6.0`);
     expect(grailNeedsUpdate(ext)).toBe(false);
+  });
+});
+
+describe('staging Grail beside a newer GemDB', () => {
+  // Another editor on the same root path runs a newer GemDB. Replacing what
+  // it put in place would downgrade it, and it would upgrade again at its
+  // next start: the ping-pong this guards against.
+  const NEWER = 'grail=0.1-2300-gnewer\ncommit=newer\nengine=4.0.0.a4\nextension=1.7.0\n';
+
+  beforeEach(() => {
+    fs.mkdirSync(path.join(grailPath(), 'src', 'python'), { recursive: true });
+    fs.writeFileSync(path.join(grailPath(), 'src', 'python', 'newer-only.py'), '# newer\n');
+  });
+
+  it('leaves alone a Grail a newer GemDB staged', () => {
+    fs.writeFileSync(grailStagedByPath(), NEWER);
+
+    expect(stageGrail(ext)).toBe(false);
+
+    expect(fs.existsSync(path.join(grailPath(), 'src', 'python', 'newer-only.py'))).toBe(true);
+    expect(fs.readFileSync(grailStagedByPath(), 'utf8')).toBe(NEWER);
+  });
+
+  it('leaves alone the files when a newer GemDB filed its Grail in', () => {
+    fs.mkdirSync(databasePath(), { recursive: true });
+    fs.writeFileSync(grailStampPath(), NEWER);
+
+    expect(stageGrail(ext)).toBe(false);
+
+    expect(fs.existsSync(path.join(grailPath(), 'src', 'python', 'newer-only.py'))).toBe(true);
+  });
+
+  it('replaces a Grail an older GemDB staged', () => {
+    fs.writeFileSync(grailStagedByPath(), 'grail=0.1-1570-gold\nextension=1.5.4\n');
+
+    expect(stageGrail(ext)).toBe(true);
+
+    expect(fs.existsSync(path.join(grailPath(), 'src', 'python', 'newer-only.py'))).toBe(false);
+  });
+
+  it('replaces a Grail nobody recorded staging, as an older GemDB or an interrupted one leaves', () => {
+    expect(stageGrail(ext)).toBe(true);
+
+    expect(fs.existsSync(path.join(grailPath(), 'src', 'python', 'marker.py'))).toBe(true);
+  });
+});
+
+describe('recording who staged Grail', () => {
+  it('names this GemDB, in the stamp format', () => {
+    stageGrail(ext);
+
+    expect(fs.readFileSync(grailStagedByPath(), 'utf8')).toBe(`${BUNDLED}extension=1.6.0\n`);
+  });
+
+  it('records nothing when staging fails partway, so the next GemDB stages again', () => {
+    // The marker is written last; a staging that dies leaves none behind.
+    // Here the last step before it fails: the shell command needs an engine.
+    fs.rmSync(expectedEnginePath(), { recursive: true });
+
+    expect(() => stageGrail(ext)).toThrow();
+
+    expect(fs.existsSync(grailStagedByPath())).toBe(false);
   });
 });
