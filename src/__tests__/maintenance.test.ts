@@ -11,6 +11,7 @@ import {
   QUIET_MS,
   SPACE_GC_SPACING_MS,
   LAST_CALL_MS,
+  MFC_QUERY,
   describeFound,
   formatMb,
   gcDue,
@@ -112,8 +113,11 @@ describe('when to collect garbage', () => {
 });
 
 describe('getting reclaim going again', () => {
-  it('lowers the threshold under what is free', () => {
-    expect(thresholdToReclaimUnder(300)).toBe(150);
+  it('lowers the threshold well under what is free, leaving the mark room to borrow', () => {
+    // A CI runner with 40 MB free: the mark took it to 19 MB for a moment,
+    // under a threshold of half. A quarter is 10.
+    expect(thresholdToReclaimUnder(40)).toBe(10);
+    expect(thresholdToReclaimUnder(300)).toBe(75);
   });
 
   it('never sets 0, which the stone reads as a fraction of the repository', () => {
@@ -133,6 +137,13 @@ describe('waiting for reclaim to give pages back', () => {
     expect(query).toContain('t > 1791210000]');
     // Its own view must not be the one that is old.
     expect(query.startsWith('System abortTransaction.')).toBe(true);
+  });
+});
+
+describe('the mark', () => {
+  it('resumes past the free-space notice rather than letting it start a second mark', () => {
+    expect(MFC_QUERY).toContain('SystemRepository markForCollection');
+    expect(MFC_QUERY).toContain('e number = 2338 ifTrue: [e resume: nil] ifFalse: [e pass]');
   });
 });
 

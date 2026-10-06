@@ -264,12 +264,16 @@ export function gcDue(facts: {
  * The threshold to set so reclaim can run again with `freeMb` free.
  *
  * The reclaim gem suspends while free space is below the threshold, so the
- * threshold has to go under what is free; half leaves room for the copies
- * reclaim makes. Never 0, which the stone reads as "a tenth of a percent of
- * the repository" rather than "none".
+ * threshold has to go well under what is free: the mark itself borrows space
+ * while it runs. Measured on a CI runner with 40 MB free: a threshold of half
+ * (20 MB) was crossed when the mark took free space down to 19 MB for a
+ * moment, which suspended reclaim and sent the collection's session the
+ * stone's 2338 notice. A quarter would have left 9 MB to spare. Never 0,
+ * which the stone reads as "a tenth of a percent of the repository" rather
+ * than "none".
  */
 export function thresholdToReclaimUnder(freeMb: number): number {
-  return Math.max(1, Math.floor(freeMb / 2));
+  return Math.max(1, Math.floor(freeMb / 4));
 }
 
 /**
@@ -383,10 +387,24 @@ System currentSessions do: [:id | | d |
     print: (d at: 17) notNil; lf].
 w contents`;
 
-/** markForCollection on 4.0 answers a Warning carrying the report; older engines signal it. */
-const MFC_QUERY =
-  '| r | r := [SystemRepository markForCollection] on: Warning do: [:w | w messageText]. ' +
-  '(r isKindOf: Exception) ifTrue: [r messageText asString] ifFalse: [r asString]';
+/**
+ * The mark. On 4.0 markForCollection answers a Warning carrying the report;
+ * older engines signal it.
+ *
+ * The stone's free-space notice (2338) is resumed past inside it, not left to
+ * `askingAgain`. A notice that arrives while the mark runs does not replace
+ * it the way one arriving before a request does: the mark completes, and
+ * asking again starts a second mark (measured on a CI runner, two marks by
+ * one session). That second mark waits for the GC lock, which the first
+ * mark's vote holds, and that vote waits for this session, stuck in the
+ * second mark — for the lock wait's full two minutes. With the notice handled
+ * here, one that still reaches GemDB means the mark did not run, and asking
+ * again is right.
+ */
+export const MFC_QUERY =
+  '[| r | r := [SystemRepository markForCollection] on: Warning do: [:w | w messageText]. ' +
+  '(r isKindOf: Exception) ifTrue: [r messageText asString] ifFalse: [r asString]] ' +
+  'on: Error do: [:e | e number = 2338 ifTrue: [e resume: nil] ifFalse: [e pass]]';
 
 /**
  * One look at the vote and the reclaim behind it — vote state, then objects
