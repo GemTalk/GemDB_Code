@@ -166,9 +166,9 @@ export function createDatabase(enginePath: string): boolean {
 /**
  * Remove a `db/` that holds no extent, unless something in it is not GemDB's.
  *
- * GemDB keeps per-database records in `db/` (`.gemdb-grail-failed` today, the
- * "filed in" stamps soon), and writes them there for an external database
- * too, whose extent is elsewhere. Switching back to a local database then finds
+ * GemDB keeps per-database records in `db/` (`.gemdb-grail-failed` and the
+ * "filed in" stamps), and writes them there for an external database too,
+ * whose extent is elsewhere. Switching back to a local database then finds
  * a `db/` with no extent in it. Those records describe the other database, so
  * they are discarded rather than carried into the new one: a stamp saying Grail
  * is filed in would be false of a fresh extent. Finder's `.DS_Store` and the

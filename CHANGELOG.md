@@ -68,6 +68,12 @@ this one does not look.
   place only once complete, so closing the window part way through means the next start redoes that
   step instead of failing later with a half-extracted engine or a truncated database. What an
   interrupted run leaves behind is removed the next time setup runs.
+- **GemDB no longer forgets that Python support is in the database when its files are copied
+  again.** The record of what the database holds was kept in the folder that every update, and
+  every other editor using the same GemDB folder, replaces, so GemDB lost it and installed Python
+  support again. The record now lives in `~/GemDB/db`, beside the database it describes. One effect
+  is visible: after **Uninstall** with **Keep my database**, installing again no longer reinstalls
+  Python support into a database that already has it.
 
 ## [1.5.4] - 2026-10-01
 

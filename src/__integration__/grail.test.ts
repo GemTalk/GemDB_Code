@@ -4,7 +4,7 @@ import { ensureDatabaseAccount } from '../account';
 import { createDatabase } from '../database';
 import { bundledGrailStamp, installGrail, recordGrailInstalled, stageGrail } from '../grail';
 import { isSharedMemoryConfigured } from '../osConfig';
-import { grailInstalled, grailStagedOnDisk } from '../paths';
+import { grailInstalled, grailStagedOnDisk, installedGrailStamp } from '../paths';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
 import {
   isErrorResult,
@@ -98,6 +98,9 @@ describe.skipIf(!havePayload || !canMakeFixture())('Grail in a real database', (
     // about why. Hand the tail to whoever has to read the failure.
     expect(isGrailInstalled(), installLog()).toBe(true);
     expect(grailInstalled()).toBe(true);
+    // Recorded with the GemDB that filed it in, so another editor on this
+    // root path can tell whether it is older or newer than its own.
+    expect(installedGrailStamp()).toMatch(/^extension=\d+\.\d+\.\d+/m);
   }, 600_000);
 
   it('runs Python through the shim', async () => {

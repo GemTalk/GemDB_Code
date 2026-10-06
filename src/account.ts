@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import { ADMIN_PASSWORD, ADMIN_USER, DB_USER, databasePasswordPath } from './config';
 import { ensurePasswordFile } from './database';
 import { log, logStep } from './log';
-import { grailStampPath, mcpStampPath } from './paths';
+import { mcpStampPath, removeGrailStamps } from './paths';
 import { GciSession, SessionOwner } from './session';
 
 /**
@@ -73,7 +73,7 @@ export function ensureDatabaseAccount(): void {
 
   if (outcome === 'created') {
     logStep(`Created the ${DB_USER} database account`);
-    fs.rmSync(grailStampPath(), { force: true });
+    removeGrailStamps();
     fs.rmSync(mcpStampPath(), { force: true });
   } else if (outcome === 'reset') {
     log(`Gave the ${DB_USER} account a new password: ${file} was missing.`);

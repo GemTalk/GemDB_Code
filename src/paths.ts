@@ -9,6 +9,7 @@ import { platformKey } from './platform';
  *   GemStone64Bit<version>-<platform>/   the database engine, as extracted
  *   db/                                  the one database GemDB manages
  *     conf/  data/  log/  stat/
+ *     .gemdb-*                           what GemDB has filed into it, and failed to
  *   grail/                               Grail, staged out of the extension
  *   mcp/                                 the MCP server, staged out of the extension
  *   bin/                                 the generated `gemdb` command
@@ -55,10 +56,11 @@ export function databasePath(): string {
 /**
  * Record of the last failed attempt to file Grail into the database.
  *
- * Beside the database rather than beside the stamp: staging deletes the Grail
- * directory wholesale, and first-run preparation stages at activation, so a
- * record kept there would vanish before anyone looked at it. What failed is
- * the database's Python, so it lives, and is deleted, with the database.
+ * Beside the database, like the stamp, rather than in `grail/`: staging deletes
+ * the Grail directory wholesale, and first-run preparation stages at
+ * activation, so a record kept there would vanish before anyone looked at it.
+ * What failed is the database's Python, so it lives, and is deleted, with the
+ * database.
  */
 export function grailFailurePath(): string {
   return path.join(databasePath(), '.gemdb-grail-failed');
@@ -82,12 +84,26 @@ export function grailPath(): string {
 }
 
 /**
- * Marker recording which Grail build is filed into the database.
+ * Marker recording which Grail build is filed into the database, and which
+ * GemDB filed it in (`stamps.ts`).
  *
  * Written only after a successful install, never merely after the files are
  * copied — the copy is on disk, but what matters is what is in the database.
+ * Beside the database for the same reason, and for the reason the failure
+ * record is: staging replaces `grail/` wholesale, and a record kept there
+ * forgot what the database holds every time any GemDB restaged.
  */
 export function grailStampPath(): string {
+  return path.join(databasePath(), '.gemdb-grail-installed');
+}
+
+/**
+ * Where GemDB kept the Grail stamp before it moved beside the database.
+ *
+ * Read, never written: an older GemDB sharing this root path still writes
+ * here, and what it writes is the newest record whenever its mtime says so.
+ */
+export function legacyGrailStampPath(): string {
   return path.join(grailPath(), '.gemdb-grail-stamp');
 }
 
@@ -190,16 +206,42 @@ function engineOnDisk(): EngineOnDisk {
  * first-run preparation, since filing Grail in needs a running database.
  */
 export function grailInstalled(): boolean {
-  return fs.existsSync(grailStampPath());
+  return fs.existsSync(grailStampPath()) || fs.existsSync(legacyGrailStampPath());
 }
 
 /** The Grail build currently installed in the database, or undefined. */
 export function installedGrailStamp(): string | undefined {
-  try {
-    return fs.readFileSync(grailStampPath(), 'utf8').trim();
-  } catch {
-    return undefined;
-  }
+  return readStamp(grailStampPath(), legacyGrailStampPath());
+}
+
+/**
+ * A "filed in" stamp, from beside the database or from where an older GemDB
+ * keeps it.
+ *
+ * When both exist the more recently written wins. The only GemDB that writes
+ * the legacy one is an older one, so a legacy stamp newer than the current
+ * one means an older GemDB filed its payload in since, over a newer one — and
+ * the legacy stamp, which carries no version, is what then says the database
+ * needs upgrading again.
+ */
+function readStamp(current: string, legacy: string): string | undefined {
+  const read = (file: string): { text: string; mtimeMs: number } | undefined => {
+    try {
+      return { text: fs.readFileSync(file, 'utf8').trim(), mtimeMs: fs.statSync(file).mtimeMs };
+    } catch {
+      return undefined;
+    }
+  };
+  const ours = read(current);
+  const theirs = read(legacy);
+  if (ours && theirs) return theirs.mtimeMs > ours.mtimeMs ? theirs.text : ours.text;
+  return (ours ?? theirs)?.text;
+}
+
+/** Forget that Grail is filed in, wherever any GemDB recorded it. */
+export function removeGrailStamps(): void {
+  fs.rmSync(grailStampPath(), { force: true });
+  fs.rmSync(legacyGrailStampPath(), { force: true });
 }
 
 /**

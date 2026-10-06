@@ -6,7 +6,14 @@ import { dbPassword, dbUser, rootPath, stoneName } from './config';
 import { platformKey, sharedLibraryExtension } from './platform';
 import { errorMessage, log, logStep } from './log';
 import { engineEnvironment, shimLibraryPath } from './processes';
-import { grailFailurePath, grailPath, grailStampPath, installedGrailStamp } from './paths';
+import {
+  grailFailurePath,
+  grailPath,
+  grailStampPath,
+  installedGrailStamp,
+  removeGrailStamps,
+} from './paths';
+import { STAMP_ORDER, compareStamps, stampFor } from './stamps';
 import { logoutAll } from './session';
 import { writeCliScripts } from './cli';
 
@@ -38,11 +45,17 @@ export function grailLabel(stamp: string | undefined): string {
   return match ? match[1] : 'unknown';
 }
 
-/** True when the staged Grail is not the one this extension ships. */
+/**
+ * True when the Grail in the database should be replaced by this extension's.
+ *
+ * Not merely "different": one filed in by a newer GemDB, from another editor
+ * on the same root path, is left where it is (`stamps.ts`).
+ */
 export function grailNeedsUpdate(extensionPath: string): boolean {
   const bundled = bundledGrailStamp(extensionPath);
   if (!bundled) return false; // nothing to stage; reported separately
-  return installedGrailStamp() !== bundled;
+  const order = compareStamps(installedGrailStamp(), stampFor(extensionPath, bundled));
+  return order === STAMP_ORDER.older || order === STAMP_ORDER.sameVersionDifferent;
 }
 
 /**
@@ -121,7 +134,10 @@ export function stageGrail(extensionPath: string): void {
 export function recordGrailInstalled(extensionPath: string): void {
   const stamp = bundledGrailStamp(extensionPath);
   if (!stamp) return;
-  fs.writeFileSync(grailStampPath(), `${stamp}\n`);
+  // The database directory exists for GemDB's own database, but not for an
+  // external one, whose extent is elsewhere; the stamp still lives here.
+  fs.mkdirSync(path.dirname(grailStampPath()), { recursive: true });
+  fs.writeFileSync(grailStampPath(), `${stampFor(extensionPath, stamp)}\n`);
   fs.rmSync(grailFailurePath(), { force: true });
 }
 
@@ -151,7 +167,11 @@ export const onDidAttemptGrailInstall = installAttempts.event;
  *
  * The one path both callers take, so neither can forget the failure record:
  * without it the status view read a failed install as a fresh one ("installs
- * when you first run Python"), since staging had already deleted the stamp.
+ * when you first run Python"), since the stamp is already gone by then.
+ *
+ * The stamps are removed just before the installer runs, so that one which
+ * dies partway reads as "not filed in" rather than as whatever was there
+ * before. Both of them: a legacy stamp left behind would be read in its place.
  */
 export async function fileInGrail(
   extensionPath: string,
@@ -159,6 +179,7 @@ export async function fileInGrail(
 ): Promise<void> {
   try {
     stageGrail(extensionPath);
+    removeGrailStamps();
     await installGrail(extensionPath, progress);
     recordGrailInstalled(extensionPath);
   } catch (e) {

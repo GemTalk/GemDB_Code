@@ -4,7 +4,14 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { __setSetting } from '../__mocks__/vscode';
 import { grailNeedsUpdate, stageGrail } from '../grail';
-import { expectedEnginePath, grailPath, grailStampPath, installedGrailStamp } from '../paths';
+import {
+  databasePath,
+  expectedEnginePath,
+  grailPath,
+  grailStampPath,
+  installedGrailStamp,
+  legacyGrailStampPath,
+} from '../paths';
 
 /**
  * Getting Grail onto disk, and saying so afterwards.
@@ -36,6 +43,7 @@ function makeExtensionDir(stamp: string): string {
   fs.mkdirSync(path.join(dir, 'grail', 'src', 'python'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'grail', 'GRAIL_VERSION'), stamp);
   fs.writeFileSync(path.join(dir, 'grail', 'src', 'python', 'marker.py'), '# staged\n');
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ version: '1.6.0' }));
   fs.mkdirSync(path.join(dir, 'out'), { recursive: true });
   return dir;
 }
@@ -74,11 +82,12 @@ describe('staging Grail on a machine that has never had it', () => {
 
 describe('staging Grail over a previous version', () => {
   beforeEach(() => {
-    // What an upgrade finds: a complete older Grail, stamped as filed in.
+    // What an upgrade from a GemDB that kept its stamp inside grail/ finds: a
+    // complete older Grail, stamped there as filed in.
     fs.mkdirSync(path.join(grailPath(), 'src', 'python'), { recursive: true });
     fs.writeFileSync(path.join(grailPath(), 'GRAIL_VERSION'), 'grail=0.1-1570-gold\n');
     fs.writeFileSync(path.join(grailPath(), 'src', 'python', 'old-only.py'), '# stale\n');
-    fs.writeFileSync(grailStampPath(), 'grail=0.1-1570-gold\n');
+    fs.writeFileSync(legacyGrailStampPath(), 'grail=0.1-1570-gold\n');
   });
 
   it('replaces the old payload rather than declaring it current', () => {
@@ -91,12 +100,16 @@ describe('staging Grail over a previous version', () => {
     expect(fs.readFileSync(path.join(grailPath(), 'GRAIL_VERSION'), 'utf8')).toBe(BUNDLED);
   });
 
-  it('drops the old stamp, so the new Grail gets filed into the old database', () => {
-    // Staging replaces the directory wholesale, stamp included. That is what
-    // makes isInstalled() false and sends ensureRunning to install the new
-    // Grail — the upgrade path the stamp is for.
+  it('keeps the record of what the database holds, since staging changes nothing in it', () => {
+    // Staging replaces grail/ wholesale, and every GemDB on this root path
+    // stages. A stamp kept there was forgotten each time, so the next start
+    // filed Grail in again whether or not the database already had it.
+    fs.mkdirSync(databasePath(), { recursive: true });
+    fs.writeFileSync(grailStampPath(), `${BUNDLED}extension=1.6.0\n`);
+
     stageGrail(ext);
 
-    expect(fs.existsSync(grailStampPath())).toBe(false);
+    expect(installedGrailStamp()).toBe(`${BUNDLED}extension=1.6.0`);
+    expect(grailNeedsUpdate(ext)).toBe(false);
   });
 });

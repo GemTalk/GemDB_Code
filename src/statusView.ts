@@ -34,6 +34,7 @@ import { isSupportedPlatform, setContext } from './platform';
 import { isListening, isRunning, listProcesses } from './processes';
 import { knownSavedStacks } from './savedStacks';
 import { sessionRegistry } from './session';
+import { stampFor } from './stamps';
 
 /** "20 min" — the same scale the session-limit message uses. */
 function humanIdle(ms: number): string {
@@ -326,10 +327,11 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
       if (space) rows.push(space);
     }
 
+    const bundledGrail = bundledGrailStamp(this.extensionPath);
     rows.push(
       pythonRow({
         installed: installedGrailStamp(),
-        bundled: bundledGrailStamp(this.extensionPath),
+        bundled: bundledGrail && stampFor(this.extensionPath, bundledGrail),
         failure,
         running: state === 'running',
       }),
