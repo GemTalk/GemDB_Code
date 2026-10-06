@@ -57,6 +57,7 @@ export function __resetSettings(): void {
   __log.length = 0;
   __controllers.length = 0;
   __commands.clear();
+  __customEditors.clear();
   __telemetry.length = 0;
 }
 
@@ -151,6 +152,9 @@ export const env = {
   },
 };
 
+/** Custom editors registered so far, by view type, with the options they were registered with. */
+export const __customEditors = new Map<string, { provider: unknown; options: unknown }>();
+
 /** A tree view as created, recording what it was asked to reveal. */
 export interface FakeTreeView {
   id: string;
@@ -190,6 +194,10 @@ export const window = {
   },
   registerTreeDataProvider(_viewId: string, _provider: unknown): Disposable {
     return new Disposable(() => {});
+  },
+  registerCustomEditorProvider(viewType: string, provider: unknown, options?: unknown): Disposable {
+    __customEditors.set(viewType, { provider, options });
+    return new Disposable(() => __customEditors.delete(viewType));
   },
   createTreeView(viewId: string, options: unknown): FakeTreeView {
     const view: FakeTreeView = {

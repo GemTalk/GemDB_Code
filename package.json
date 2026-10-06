@@ -216,6 +216,21 @@
         "when": "gemdb.running && gemdb.hasSavedStacks"
       }
     ],
+    "customEditors": [
+      {
+        "viewType": "gemdb.statistics",
+        "displayName": "GemDB Stats",
+        "selector": [
+          {
+            "filenamePattern": "*.out.gz"
+          },
+          {
+            "filenamePattern": "statmon*.out"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
     "commands": [
       {
         "command": "gemdb.install",

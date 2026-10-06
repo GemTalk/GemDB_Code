@@ -13,12 +13,13 @@ this one does not look.
 
 ### Added
 
-- **Statmon files open in GemDB Stats, inside the editor.** Right-click a `.out` or `.out.gz` in
-  the explorer and choose **Open in GemDB Stats**, or run **GemDB: Open Statistics File…**, and the
-  file opens in a tab of GemTalk's statmon viewer: browse processes, plot statistics, compare them
-  on one chart. Clicking the file name opens another file in the same tab, through VS Code's own
-  dialog, so under code-server it browses the server where the files are. Large files load in the
-  background with a progress bar. It needs no database, so it works before GemDB is set up.
+- **Statmon files open in GemDB Stats, inside the editor.** Click a `.out.gz` or a `statmon….out`
+  file, right-click any `.out` and choose **Open in GemDB Stats**, or run
+  **GemDB: Open Statistics File…**, and the file opens in a tab of GemTalk's statmon viewer: browse
+  processes, plot statistics, compare them on one chart. Clicking the file name opens another file
+  in its place, through VS Code's own dialog, so under code-server it browses the server where the
+  files are. Large files load in the background with a progress bar, and the tabs come back when
+  the window reloads. It needs no database, so it works before GemDB is set up.
 - **The database reserves the free license's full 10 GB, with room to collect its garbage.** GemDB
   Code caps the database at the license's 10 GB (until now it stopped at 8 GB), reserves all of it
   on disk when the database first starts, and keeps 500 MB of it free, so the database protects

@@ -5,6 +5,7 @@ import { join } from 'path';
 import {
   __changeSetting,
   __commands,
+  __customEditors,
   __resetSettings,
   __setSetting,
   env,
@@ -164,6 +165,7 @@ describe('activate()', () => {
 
     expect(__commands.has('gemdb.openStatistics')).toBe(true);
     expect(__commands.has('gemdb.openInStats')).toBe(true);
+    expect([...__customEditors.keys()]).toEqual(['gemdb.statistics']);
   });
 
   describe('activated.state', () => {

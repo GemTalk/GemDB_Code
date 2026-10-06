@@ -19,14 +19,28 @@ platform gate, so they work on machines that cannot host a database.
 
 ## Opening a file
 
+GemDB Stats is a read-only custom editor, `gemdb.statistics`, and the default
+editor for `*.out.gz` and `statmon*.out`, so a click on either opens it. A
+`.out.gz` is unreadable in the text editor anyway, and statmon names its files
+`statmon<pid>.out` or `statmonitor_<stone>_<date>.out`. Any other `.out` (such
+as `a.out`, a compiled program) still opens as text. It was `option` for every
+`.out` at first, and a click on a `.out.gz` then showed the text editor's
+"binary or unsupported encoding" page.
+
 - **GemDB: Open Statistics File…** shows VS Code's open dialog, then opens a
   tab on the file.
 - **Open in GemDB Stats** opens a `.out` or `.out.gz` from the explorer's
   right-click menu: every selected file, or, run without one (from a
   keybinding), a file picked in the dialog.
-- A file already open in a tab is brought forward, not parsed a second time.
-- Each tab is a `WebviewPanel` with `retainContextWhenHidden`. Bringing a
-  discarded tab back would mean starting Flutter and parsing the file again.
+- **Open With… → GemDB Stats** is offered for the same files.
+- Each file gets one tab (`supportsMultipleEditorsPerDocument: false`), so a
+  file already open is brought forward, not parsed a second time. Tabs open
+  out of preview mode, or opening several from the explorer would leave only
+  the last.
+- `retainContextWhenHidden` keeps a hidden tab's page alive. Bringing a
+  discarded one back would mean starting Flutter and parsing the file again.
+- VS Code brings the tabs back after a window reload by resolving the editor
+  again: the page is rebuilt, says `ready`, and is sent its file.
 
 ## The protocol
 
@@ -100,5 +114,3 @@ those files are not.
   streams files in chunks rather than reading them whole first (read in its
   source, 2026-10-06), so the progress bar should move there too. Not yet
   watched in VS Code.
-- **Reopening after a window reload.** A `WebviewPanel` does not come back
-  after a reload without a `WebviewPanelSerializer`, and there is none yet.
