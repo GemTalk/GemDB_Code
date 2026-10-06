@@ -7,7 +7,7 @@ import { pythonRow, runningRow } from '../statusView';
  * The status view's two rows about Python, decided without a database.
  *
  * What these guard is the state that used to look healthy: a failed Python
- * install leaves the stone and listener up, and staging has already deleted
+ * install leaves the stone and listener up, and the file-in has already removed
  * the stamp, so both rows read exactly as they do on a fresh install. Once
  * the notification was dismissed nothing said anything was wrong.
  */

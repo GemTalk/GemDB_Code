@@ -57,7 +57,9 @@ than going through `prepare`, which is why `src/__tests__/grailStaging.test.ts`
 starts from a root path that does not exist. Since GemDB stopped shipping an
 extent there is only one answer to *when* the stamp may be written — after a
 successful file-in, by `recordGrailInstalled`, and nowhere else — so staging no
-longer stamps at all and the ordering question has gone with it.
+longer stamps at all and the ordering question has gone with it. The stamp has
+since moved out of `grail/` altogether, to `db/.gemdb-grail-installed`; see
+[`shared-root-path.md`](shared-root-path.md).
 
 ## The Python↔GCI bridge
 

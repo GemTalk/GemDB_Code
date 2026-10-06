@@ -239,6 +239,13 @@ first-install path, and `startProcesses` before the stone starts, because an
 extension update reaches that line without preparing anything — engine
 downloaded, database present, Grail staged, so `isInstalled()` is true.
 
+**Several GemDB versions can share one root path** (VS Code on one release,
+Cursor on another, both on `~/GemDB`). Any new file GemDB writes there needs an
+answer before it ships: what an older GemDB does when it finds the new file,
+and what this one does with the old one. **Touching payload stamps, staging, or
+adding a file under the root path? Read
+[`docs/shared-root-path.md`](docs/shared-root-path.md) first.**
+
 **Below its free-space threshold the stone stops collecting garbage.** GemDB
 caps the extent at the license's 10240 MB, reserves it on disk, and sets a
 500 MB threshold (`withSpaceLimits` in `database.ts`). The threshold is not a

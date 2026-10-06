@@ -100,7 +100,7 @@ export function runningRow(facts: { listening: boolean; pythonFailed: boolean })
  * Grail is filed into the database only once the database has run, so
  * "prepared but never started" is a normal state, not a fault — said plainly
  * rather than shown as missing. A failed install is the fault that state used
- * to hide: staging deletes the stamp first, so without the failure record a
+ * to hide: a file-in removes the stamp first, so without the failure record a
  * failed first install, and a failed update, both read as never installed.
  */
 export function pythonRow(facts: {
