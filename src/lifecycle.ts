@@ -574,7 +574,7 @@ export async function ensureRunning(extensionPath: string, trigger: Trigger): Pr
         // build on disk differs from the one recorded in the database.
         const firstTime = !grailInstalled();
         let filedGrail: FiledGrail = FILED_GRAIL.no;
-        if (grailNeedsUpdate(extensionPath) && (firstTime || reinstallPythonOnUpdate())) {
+        if (grailFileInDue(extensionPath)) {
           const stamp = bundledGrailStamp(extensionPath);
           log(
             firstTime
@@ -605,6 +605,14 @@ export async function ensureRunning(extensionPath: string, trigger: Trigger): Pr
       }
     },
   );
+}
+
+/**
+ * Whether `ensureRunning` would file Grail in: never filed in yet, or an update
+ * the user lets through (`reinstallPythonOnUpdate`).
+ */
+function grailFileInDue(extensionPath: string): boolean {
+  return grailNeedsUpdate(extensionPath) && (!grailInstalled() || reinstallPythonOnUpdate());
 }
 
 /**
