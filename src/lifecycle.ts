@@ -37,7 +37,12 @@ import {
   startMcpServer,
   stopMcpServer,
 } from './mcp';
-import { OS_CONFIG_RESULT, ensureOsConfigured, osConfigAllowsStart } from './osConfig';
+import {
+  OS_CONFIG_RESULT,
+  ensureOsConfigured,
+  isSharedMemoryConfigured,
+  osConfigAllowsStart,
+} from './osConfig';
 import {
   databaseExists,
   databasePath,
@@ -699,6 +704,40 @@ export async function resumeMcpServing(extensionPath: string): Promise<boolean> 
   if (!mcpEnabled() || !isInstalled() || !isRunning()) return false;
   if (await isMcpRunning()) return true;
   return ensureMcpServing(extensionPath);
+}
+
+/**
+ * Finish bringing up a database `autoStart` found already running.
+ *
+ * Usually only the MCP server is outstanding, which is `resumeMcpServing`. But
+ * a stone started by anything other than `ensureRunning` — the `gemdb` command,
+ * the GemDB Shell — comes up without Grail filed in, and nothing on those paths
+ * files it in. Left to `resumeMcpServing`, every later activation would find it
+ * running and repair nothing, and Python would fail with a GemStone error for
+ * anyone who never presses Start or runs a cell (#91). So when `ensureRunning`
+ * would file Grail in, it goes through `ensureRunning`, which finds the
+ * processes up and does the rest — the same thing auto-start does for a
+ * database it found stopped.
+ *
+ * Never for an external database: filing Python into an administrator's
+ * database is not something to do unasked. And not when shared memory is
+ * short, which a running stone does not rule out: `ensureRunning` would put a
+ * sudo prompt in front of someone who only opened an editor.
+ */
+export async function resumeRunning(extensionPath: string): Promise<boolean> {
+  if (
+    !isExternalDatabase() &&
+    grailFileInDue(extensionPath) &&
+    (await isSharedMemoryConfigured())
+  ) {
+    log(
+      grailInstalled()
+        ? 'The database is already running, but Python support in it is not up to date.'
+        : 'The database is already running, but Python support has not been installed into it.',
+    );
+    return ensureRunning(extensionPath, TRIGGER.autoStart);
+  }
+  return resumeMcpServing(extensionPath);
 }
 
 /** Start whichever of the two processes is not already up. */

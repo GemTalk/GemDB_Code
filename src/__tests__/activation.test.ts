@@ -23,11 +23,12 @@ import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 const isInstalled = vi.fn(() => true);
 const uninstall = vi.fn(async () => true);
 const prepare = vi.fn(async (): Promise<string> => 'failed');
+const resumeRunning = vi.fn(async (_extensionPath: string) => false);
 vi.mock('../lifecycle', () => ({
   isInstalled: () => isInstalled(),
   ensureMcpRunning: async () => false,
   ensureRunning: async () => false,
-  resumeMcpServing: async () => false,
+  resumeRunning: (extensionPath: string) => resumeRunning(extensionPath),
   install: async () => {},
   prepare: () => prepare(),
   reinstallGrail: async () => {},
@@ -35,8 +36,9 @@ vi.mock('../lifecycle', () => ({
   stop: async () => {},
   uninstall: () => uninstall(),
 }));
+const autoStartSuppressed = vi.fn(() => true);
 vi.mock('../autoStart', () => ({
-  autoStartSuppressed: () => true,
+  autoStartSuppressed: () => autoStartSuppressed(),
   initAutoStart: () => {},
   suppressAutoStart: () => {},
 }));
@@ -48,12 +50,13 @@ vi.mock('../processes', () => ({
   listProcesses: () => [],
 }));
 const ensureOsConfigured = vi.fn(async (): Promise<string> => 'alreadyConfigured');
+const isSharedMemoryConfigured = vi.fn(async () => false);
 vi.mock('../osConfig', async (importOriginal) => ({
   osConfigAllowsStart: (await importOriginal<typeof import('../osConfig')>()).osConfigAllowsStart,
   configureSharedMemory: async () => {},
   configureRemoveIpc: async () => {},
   ensureOsConfigured: () => ensureOsConfigured(),
-  isSharedMemoryConfigured: async () => false,
+  isSharedMemoryConfigured: () => isSharedMemoryConfigured(),
   isRemoveIpcConfigured: () => false,
   sharedMemoryLabel: async () => '',
 }));
@@ -114,6 +117,9 @@ describe('activate()', () => {
     prepare.mockReset().mockResolvedValue('failed');
     ensureOsConfigured.mockReset().mockResolvedValue('alreadyConfigured');
     isRunning.mockReset().mockReturnValue(false);
+    resumeRunning.mockReset().mockResolvedValue(false);
+    isSharedMemoryConfigured.mockReset().mockResolvedValue(false);
+    autoStartSuppressed.mockReset().mockReturnValue(true);
     Object.defineProperty(process, 'platform', { value: 'darwin' });
     Object.defineProperty(process, 'arch', { value: 'arm64' });
   });
@@ -190,6 +196,38 @@ describe('activate()', () => {
 
       const [activated] = eventsNamed('activated');
       expect(activated.properties.state).toBe('running');
+    });
+  });
+
+  describe('auto-start', () => {
+    // What it does with the database is `resumeRunning`'s, and tested there
+    // (databaseStarted.test.ts). What matters here is that a database found
+    // running goes to it rather than to the MCP server alone, which left a
+    // stone the `gemdb` command started without Python support for good (#91).
+    it('finishes setting up a database it finds running', async () => {
+      autoStartSuppressed.mockReturnValue(false);
+      isInstalled.mockReturnValue(true);
+      isRunning.mockReturnValue(true);
+
+      activate(fakeExtensionContext());
+
+      await expect.poll(() => resumeRunning.mock.calls).toHaveLength(1);
+    });
+
+    // The same state, reached by a race: stopped when activation looked, then
+    // started by the `gemdb` command while this window waited for the lock.
+    it('finishes setting up a database started while it waited for the lock', async () => {
+      autoStartSuppressed.mockReturnValue(false);
+      isInstalled.mockReturnValue(true);
+      // Stopped when auto-start first looks; up by the time it holds the lock.
+      isSharedMemoryConfigured.mockImplementation(async () => {
+        isRunning.mockReturnValue(true);
+        return true;
+      });
+
+      activate(fakeExtensionContext());
+
+      await expect.poll(() => resumeRunning.mock.calls).toHaveLength(1);
     });
   });
 
