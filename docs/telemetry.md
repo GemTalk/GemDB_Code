@@ -40,7 +40,7 @@ Several events carry `trigger`, which records what the user did to cause it:
 | Value                 | The user…                                               |
 | --------------------- | ------------------------------------------------------- |
 | `firstRun`            | installed the extension; setup ran by itself            |
-| `autoStart`           | opened VS Code; the database started by itself          |
+| `autoStart`           | opened VS Code; the database started by itself, or was already running and GemDB Code set up what it lacked (Python support, the NetLDI, the MCP server) |
 | `installCommand`      | ran **GemDB: Set Up GemDB**                                  |
 | `startCommand`        | ran **GemDB: Start GemDB**                               |
 | `sharedMemoryCommand` | ran **GemDB: Configure Shared Memory**                  |

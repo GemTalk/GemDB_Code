@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { __resetSettings } from '../__mocks__/vscode';
+import { __resetSettings, __setSetting } from '../__mocks__/vscode';
 import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 
 // `databaseStarted` is reported from inside `ensureRunning`, the one path
@@ -14,11 +14,12 @@ vi.mock('../account', () => ({ ensureDatabaseAccount: () => {} }));
 
 const bundledGrailStamp = vi.fn(() => 'grail=0.1-1-gabc\n');
 const grailNeedsUpdate = vi.fn(() => false);
+const fileInGrail = vi.fn(async () => {});
 vi.mock('../grail', () => ({
   grailLabel: () => 'grail 0.1',
   grailNeedsUpdate: () => grailNeedsUpdate(),
   stageGrail: () => {},
-  fileInGrail: async () => {},
+  fileInGrail: () => fileInGrail(),
   bundledGrailStamp: () => bundledGrailStamp(),
 }));
 
@@ -37,6 +38,7 @@ vi.mock('../paths', () => ({
 const ensureOsConfigured = vi.fn(
   async (_extensionPath: string, _trigger: string): Promise<string> => 'alreadyConfigured',
 );
+const isSharedMemoryConfigured = vi.fn(async () => true);
 vi.mock('../osConfig', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../osConfig')>();
   return {
@@ -44,6 +46,7 @@ vi.mock('../osConfig', async (importOriginal) => {
     osConfigAllowsStart: actual.osConfigAllowsStart,
     ensureOsConfigured: (extensionPath: string, trigger: string) =>
       ensureOsConfigured(extensionPath, trigger),
+    isSharedMemoryConfigured: () => isSharedMemoryConfigured(),
   };
 });
 
@@ -71,7 +74,7 @@ vi.mock('../autoStart', () => ({
   suppressAutoStart: () => {},
 }));
 
-const { ensureRunning } = await import('../lifecycle');
+const { ensureRunning, resumeRunning } = await import('../lifecycle');
 // Constants on the act side, literals on the assert side: the expectations pin
 // the wire value, so renaming one must fail here rather than silently split a
 // series in App Insights.
@@ -85,7 +88,9 @@ describe('databaseStarted', () => {
     grailNeedsUpdate.mockReturnValue(false);
     grailInstalled.mockReturnValue(true);
     isInstalled.mockReturnValue(true);
-    ensureOsConfigured.mockResolvedValue('alreadyConfigured');
+    ensureOsConfigured.mockReset().mockResolvedValue('alreadyConfigured');
+    isSharedMemoryConfigured.mockReset().mockResolvedValue(true);
+    fileInGrail.mockClear();
     findStone.mockReturnValue(true);
     findNetldi.mockReturnValue(true);
 
@@ -180,5 +185,89 @@ describe('databaseStarted', () => {
     await ensureRunning('/ext', TRIGGER.notebook);
     expect(eventsNamed('databaseStarted')).toHaveLength(4);
     expect(eventsNamed('databaseStarted')[3].properties).toMatchObject({ outcome: 'started' });
+  });
+});
+
+// `autoStart` hands a database it found running to `resumeRunning`. A stone the
+// `gemdb` command or the GemDB Shell started has no Grail filed in, and only
+// `ensureRunning` files it in, so without this a CLI-only user stayed without
+// Python support for good (#91).
+describe('resumeRunning', () => {
+  beforeEach(() => {
+    __resetSettings();
+    grailNeedsUpdate.mockReturnValue(false);
+    grailInstalled.mockReturnValue(true);
+    isInstalled.mockReturnValue(true);
+    findStone.mockReturnValue(true);
+    findNetldi.mockReturnValue(true);
+    ensureOsConfigured.mockReset().mockResolvedValue('alreadyConfigured');
+    isSharedMemoryConfigured.mockReset().mockResolvedValue(true);
+    fileInGrail.mockClear();
+    startStone.mockClear();
+    initTelemetry(fakeExtensionContext(), false);
+  });
+
+  it('files Grail in when the database is running without it', async () => {
+    grailInstalled.mockReturnValue(false);
+    grailNeedsUpdate.mockReturnValue(true);
+
+    expect(await resumeRunning('/ext')).toBe(true);
+
+    expect(fileInGrail).toHaveBeenCalledTimes(1);
+    expect(startStone).not.toHaveBeenCalled();
+    expect(eventsNamed('databaseStarted').map((e) => e.properties)).toEqual([
+      expect.objectContaining({
+        trigger: 'autoStart',
+        outcome: 'started',
+        filedGrail: 'firstTime',
+      }),
+    ]);
+  });
+
+  it('files in an update when updates are allowed, as a start would', async () => {
+    grailNeedsUpdate.mockReturnValue(true);
+
+    await resumeRunning('/ext');
+
+    expect(fileInGrail).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves an update alone when updates are turned off', async () => {
+    grailNeedsUpdate.mockReturnValue(true);
+    __setSetting('gemdb.reinstallPythonOnUpdate', false);
+
+    await resumeRunning('/ext');
+
+    expect(fileInGrail).not.toHaveBeenCalled();
+    expect(eventsNamed('databaseStarted')).toHaveLength(0);
+  });
+
+  it('leaves a database with current Python support to the MCP server alone', async () => {
+    await resumeRunning('/ext');
+
+    expect(fileInGrail).not.toHaveBeenCalled();
+    expect(ensureOsConfigured).not.toHaveBeenCalled();
+    expect(eventsNamed('databaseStarted')).toHaveLength(0);
+  });
+
+  it('never asks for shared memory: short, it leaves Grail for an explicit start', async () => {
+    grailInstalled.mockReturnValue(false);
+    grailNeedsUpdate.mockReturnValue(true);
+    isSharedMemoryConfigured.mockResolvedValue(false);
+
+    await resumeRunning('/ext');
+
+    expect(ensureOsConfigured).not.toHaveBeenCalled();
+    expect(fileInGrail).not.toHaveBeenCalled();
+  });
+
+  it('never files Grail into an external database', async () => {
+    __setSetting('gemdb.externalDatabase.gemstone', '/opt/gemstone/product');
+    grailInstalled.mockReturnValue(false);
+    grailNeedsUpdate.mockReturnValue(true);
+
+    await resumeRunning('/ext');
+
+    expect(fileInGrail).not.toHaveBeenCalled();
   });
 });

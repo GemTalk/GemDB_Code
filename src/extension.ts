@@ -6,7 +6,7 @@ import {
   isInstalled,
   prepare,
   reinstallGrail,
-  resumeMcpServing,
+  resumeRunning,
   start,
   stop,
   uninstall,
@@ -617,15 +617,23 @@ async function autoStart(extensionPath: string, refresh: () => void): Promise<vo
   if (autoStartSuppressed()) return;
   if (isRunning()) {
     // Up already — an external database always is — but the MCP server it had
-    // may not be. Under the lock, so two windows do not both fork one.
-    await withSetupLock(() => resumeMcpServing(extensionPath));
+    // may not be, and Grail may never have been filed in if something other
+    // than GemDB Code started it. Under the lock, so two windows' auto-starts
+    // do not both fork one or file Grail in twice. Only auto-starts: a cell,
+    // Start or the MCP hook in another window does not take this lock.
+    await withSetupLock(() => resumeRunning(extensionPath));
     refresh();
     return;
   }
   if (!(await isSharedMemoryConfigured())) return;
 
   await withSetupLock(async () => {
-    if (isRunning()) return;
+    // Something else may have started it while this waited for the lock, and
+    // that something is usually the `gemdb` command, which files nothing in.
+    if (isRunning()) {
+      await resumeRunning(extensionPath);
+      return;
+    }
     log('Starting the database, so it is ready when you are.');
     await ensureRunning(extensionPath, TRIGGER.autoStart);
   });

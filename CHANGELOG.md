@@ -68,6 +68,15 @@ this one does not look.
   place only once complete, so closing the window part way through means the next start redoes that
   step instead of failing later with a half-extracted engine or a truncated database. What an
   interrupted run leaves behind is removed the next time setup runs.
+- **A database the `gemdb` command started gets Python support when GemDB Code next opens.** The
+  `gemdb` command and the GemDB Shell start the database if it is not running, but only GemDB
+  Code installs Python support into it. A database started that way before Python support was ever
+  installed, for example a fresh setup whose shared memory was raised by hand and then used from a
+  terminal, stayed without it until you pressed Start or ran a notebook cell, and `gemdb` failed
+  with a GemStone error in the meantime. GemDB Code now installs it when it opens and finds the
+  database running, as it already did when it found the database stopped. For the same reason, a
+  running database whose Python support is older than the one GemDB Code ships now gets the update
+  when GemDB Code opens, unless `gemdb.reinstallPythonOnUpdate` is off.
 
 ## [1.5.4] - 2026-10-01
 
