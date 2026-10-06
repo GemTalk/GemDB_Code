@@ -81,85 +81,93 @@ export function unavailablePage(nonce: string, message: string): string {
 </html>`;
 }
 
-/** VS Code's open dialog, for a statmon file. */
-async function pickStatmonFile(near?: vscode.Uri): Promise<vscode.Uri | undefined> {
-  const picked = await vscode.window.showOpenDialog({
-    title: 'Open Statistics File',
-    openLabel: 'Open',
-    canSelectMany: false,
-    defaultUri: near,
-    filters: { 'statmon files': ['out', 'gz'], 'All files': ['*'] },
-  });
-  return picked?.[0];
+/**
+ * What the tabs need from VS Code, passed in so the unit tests can stand in
+ * for it.
+ */
+export interface StatisticsWorld {
+  /** The bundled build: `stats/` in the extension. */
+  build(): vscode.Uri;
+  /** `host.html` from the build; throws when the build is not there. */
+  hostTemplate(): string;
+  /** A tab for `file`, whose page may fetch the build and that file. */
+  createPanel(file: vscode.Uri, column: vscode.ViewColumn | undefined): vscode.WebviewPanel;
+  /** VS Code's open dialog, for a statmon file. */
+  pickFile(near?: vscode.Uri): Promise<vscode.Uri | undefined>;
 }
 
-const folderOf = (file: vscode.Uri): vscode.Uri => vscode.Uri.joinPath(file, '..');
-const nameOf = (file: vscode.Uri): string => path.posix.basename(file.path);
+function vscodeWorld(extensionUri: vscode.Uri): StatisticsWorld {
+  const build = () => vscode.Uri.joinPath(extensionUri, 'stats');
+  return {
+    build,
+    hostTemplate: () => fs.readFileSync(path.join(build().fsPath, 'host.html'), 'utf8'),
+    createPanel: (file, column) =>
+      vscode.window.createWebviewPanel(
+        STATISTICS_VIEW_TYPE,
+        nameOf(file),
+        column ?? vscode.ViewColumn.Active,
+        {
+          enableScripts: true,
+          // A hidden webview is discarded by default, and bringing it back would
+          // start Flutter and parse the file again — tens of seconds for a large
+          // one. Kept, at the cost of its memory.
+          retainContextWhenHidden: true,
+          // The file's folder, not the file: VS Code refuses a request for a
+          // resource that is itself a root, so a root has to be a folder above
+          // it (read in VS Code 1.140's loader, 2026-10-06). The folder is as
+          // narrow as the page's access can be.
+          localResourceRoots: [build(), vscode.Uri.joinPath(file, '..')],
+        },
+      ),
+    pickFile: async (near) =>
+      (
+        await vscode.window.showOpenDialog({
+          title: 'Open Statistics File',
+          openLabel: 'Open',
+          canSelectMany: false,
+          defaultUri: near,
+          filters: { 'statmon files': ['out', 'gz'], 'All files': ['*'] },
+        })
+      )?.[0],
+  };
+}
 
-/** One GemDB Stats tab, and the file it is showing. */
+const nameOf = (file: vscode.Uri): string => path.posix.basename(file.path);
+const same = (a: vscode.Uri, b: vscode.Uri): boolean => a.toString() === b.toString();
+
+/**
+ * One GemDB Stats tab, showing one file for as long as it is open.
+ *
+ * A file picked from inside the tab gets a tab of its own, opened where this
+ * one is, which then closes. Widening this page's resource roots to the new
+ * file's folder instead would reload the page anyway, would leave it able to
+ * read every folder it had ever been shown, and whether VS Code delivered a
+ * message posted across that reload would decide whether a large file was
+ * parsed once or twice.
+ */
 class StatisticsPanel {
-  private readonly panel: vscode.WebviewPanel;
-  /** Every folder a file has been opened from, beside the build itself. */
-  private readonly roots: vscode.Uri[];
+  readonly panel: vscode.WebviewPanel;
 
   constructor(
-    private readonly build: vscode.Uri,
-    private file: vscode.Uri,
-    onDidDispose: () => void,
+    private readonly world: StatisticsWorld,
+    readonly file: vscode.Uri,
+    column: vscode.ViewColumn | undefined,
+    tabs: StatisticsTabs,
   ) {
-    this.roots = [build, folderOf(file)];
-    this.panel = vscode.window.createWebviewPanel(
-      STATISTICS_VIEW_TYPE,
-      nameOf(file),
-      vscode.ViewColumn.Active,
-      {
-        enableScripts: true,
-        // A hidden webview is discarded by default, and bringing it back would
-        // start Flutter and parse the file again — tens of seconds for a large
-        // one. Kept, at the cost of its memory.
-        retainContextWhenHidden: true,
-        localResourceRoots: this.roots,
-      },
-    );
-    this.panel.onDidDispose(onDidDispose);
+    this.panel = world.createPanel(file, column);
+    this.panel.onDidDispose(() => tabs.closed(this));
     this.panel.webview.onDidReceiveMessage((message: { type?: unknown }) => {
       if (message.type === 'ready') {
         // Every time, not just the first: a page that reloads says `ready`
         // again and has to be told its file again.
         this.post();
       } else if (message.type === 'pickFile') {
-        void pickStatmonFile(folderOf(this.file)).then((picked) => {
-          if (picked) this.show(picked);
+        void world.pickFile(file).then((picked) => {
+          if (picked) tabs.picked(this, picked);
         });
       }
     });
     this.panel.webview.html = this.page();
-  }
-
-  get showing(): vscode.Uri {
-    return this.file;
-  }
-
-  reveal(): void {
-    this.panel.reveal();
-  }
-
-  /** Show `file` in this tab, in place of the one it was showing. */
-  show(file: vscode.Uri): void {
-    this.file = file;
-    this.panel.title = nameOf(file);
-    const folder = folderOf(file);
-    if (!this.roots.some((root) => root.toString() === folder.toString())) {
-      // The page may only fetch under its roots. Changing them reloads the
-      // page, and the reloaded page says `ready`, which sends the file; the
-      // `open` below then goes to the page being replaced and is lost.
-      this.roots.push(folder);
-      this.panel.webview.options = {
-        ...this.panel.webview.options,
-        localResourceRoots: this.roots,
-      };
-    }
-    this.post();
   }
 
   private post(): void {
@@ -176,7 +184,7 @@ class StatisticsPanel {
     const nonce = crypto.randomBytes(16).toString('base64');
     let template: string;
     try {
-      template = fs.readFileSync(path.join(this.build.fsPath, 'host.html'), 'utf8');
+      template = this.world.hostTemplate();
     } catch (error) {
       log(`GemDB Stats is not in this build: ${errorMessage(error)}`);
       return unavailablePage(
@@ -186,38 +194,78 @@ class StatisticsPanel {
       );
     }
     return fillHostPage(template, {
-      base: `${webview.asWebviewUri(this.build).toString()}/`,
+      base: `${webview.asWebviewUri(this.world.build()).toString()}/`,
       cspSource: webview.cspSource,
       nonce,
     });
   }
 }
 
-export function registerStatistics(extensionUri: vscode.Uri): vscode.Disposable {
-  const panels = new Set<StatisticsPanel>();
+/**
+ * Every open GemDB Stats tab. A file already open in one is brought forward
+ * rather than opened again: a second tab would parse it again and hold a
+ * second copy in memory.
+ */
+class StatisticsTabs {
+  private readonly tabs = new Set<StatisticsPanel>();
 
-  // A file already open in a tab is brought forward rather than opened twice:
-  // a second tab would parse it again and hold a second copy in memory.
-  const open = (file: vscode.Uri): void => {
-    const existing = [...panels].find((p) => p.showing.toString() === file.toString());
+  constructor(private readonly world: StatisticsWorld) {}
+
+  open(file: vscode.Uri, column?: vscode.ViewColumn): void {
+    const existing = this.showing(file);
     if (existing) {
-      existing.reveal();
+      existing.panel.reveal();
       return;
     }
-    const build = vscode.Uri.joinPath(extensionUri, 'stats');
-    const panel: StatisticsPanel = new StatisticsPanel(build, file, () => panels.delete(panel));
-    panels.add(panel);
-  };
+    this.tabs.add(new StatisticsPanel(this.world, file, column, this));
+  }
 
+  /** A file picked from inside `tab`: shown in its place. */
+  picked(tab: StatisticsPanel, file: vscode.Uri): void {
+    if (same(tab.file, file)) return;
+    const existing = this.showing(file);
+    if (existing) {
+      // Open in another tab already: that one comes forward, and this one
+      // keeps its file.
+      existing.panel.reveal();
+      return;
+    }
+    this.open(file, tab.panel.viewColumn);
+    tab.panel.dispose();
+  }
+
+  closed(tab: StatisticsPanel): void {
+    this.tabs.delete(tab);
+  }
+
+  private showing(file: vscode.Uri): StatisticsPanel | undefined {
+    return [...this.tabs].find((tab) => same(tab.file, file));
+  }
+}
+
+export function registerStatistics(
+  extensionUri: vscode.Uri,
+  world: StatisticsWorld = vscodeWorld(extensionUri),
+): vscode.Disposable {
+  const tabs = new StatisticsTabs(world);
   return vscode.Disposable.from(
     // From the Command Palette: pick a file first.
     vscode.commands.registerCommand('gemdb.openStatistics', async () => {
-      const file = await pickStatmonFile();
-      if (file) open(file);
+      const file = await world.pickFile();
+      if (file) tabs.open(file);
     }),
-    // From a .out or .out.gz in the explorer: that file.
-    vscode.commands.registerCommand('gemdb.openInStats', (file?: vscode.Uri) => {
-      if (file) open(file);
-    }),
+    // From the explorer: every selected file, or, with none (a keybinding),
+    // one the user picks.
+    vscode.commands.registerCommand(
+      'gemdb.openInStats',
+      async (file?: vscode.Uri, selected?: vscode.Uri[]) => {
+        const files = selected?.length ? selected : file ? [file] : [];
+        if (files.length === 0) {
+          const picked = await world.pickFile();
+          if (picked) files.push(picked);
+        }
+        for (const each of files) tabs.open(each);
+      },
+    ),
   );
 }

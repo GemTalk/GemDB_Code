@@ -257,6 +257,14 @@ describe('bundle-stats.mjs', () => {
     expect(result.stderr).toContain('flutter_bootstrap.js');
   });
 
+  it('refuses to assemble over the build it is reading', () => {
+    const result = bundle({ STATS_WEB: web, STATS_OUT: web });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('overlap');
+    expect(fs.existsSync(path.join(web, 'index.html'))).toBe(true);
+  });
+
   it('leaves exactly the placeholders statistics.ts fills', () => {
     bundle();
     const page = fillHostPage(hostHtml(), {

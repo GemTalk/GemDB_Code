@@ -22,7 +22,8 @@ platform gate, so they work on machines that cannot host a database.
 - **GemDB: Open Statistics File…** shows VS Code's open dialog, then opens a
   tab on the file.
 - **Open in GemDB Stats** opens a `.out` or `.out.gz` from the explorer's
-  right-click menu.
+  right-click menu: every selected file, or, run without one (from a
+  keybinding), a file picked in the dialog.
 - A file already open in a tab is brought forward, not parsed a second time.
 - Each tab is a `WebviewPanel` with `retainContextWhenHidden`. Bringing a
   discarded tab back would mean starting Flutter and parsing the file again.
@@ -34,18 +35,21 @@ Three messages, as GemDB Stats' `docs/embedding.md` specifies:
 | Message | Direction | GemDB Code's part |
 | --- | --- | --- |
 | `{type: 'ready'}` | app → GemDB Code | Answer with `open` for the tab's file, every time: a reloaded page says `ready` again. |
-| `{type: 'open', url, name}` | GemDB Code → app | `url` is `asWebviewUri(file)`. A later `open` replaces the file. |
-| `{type: 'pickFile'}` | app → GemDB Code | The user clicked the file name. Show VS Code's open dialog, then `open` the file in the same tab. |
+| `{type: 'open', url, name}` | GemDB Code → app | `url` is `asWebviewUri(file)`. Sent only in answer to `ready`. |
+| `{type: 'pickFile'}` | app → GemDB Code | The user clicked the file name. Show VS Code's open dialog, then show the picked file in a new tab in the same place, and close this one. |
 
 `pickFile` uses VS Code's dialog rather than the browser's because under
 code-server the browser's dialog browses the user's own machine, not the
 server where the statmon files are.
 
-The page can fetch only under the panel's `localResourceRoots`: the build and
-the folder of every file opened in that tab. A picked file in a new folder
-adds its folder, and changing the roots reloads the page. The reloaded page
-says `ready` and gets its file then, so the extension does not depend on
-whether the reload happens.
+Each tab shows one file for as long as it is open, and its page can fetch
+only under the panel's `localResourceRoots`: the build and that file's
+folder. The folder is as narrow as it can be: VS Code refuses a request for a
+resource that is itself a root (read in VS Code 1.140's loader). A picked file
+gets a new tab rather than widening this one's roots, because widening them
+reloads the page, leaves it able to read every folder it was ever shown, and
+an `open` posted across the reload could make the app parse a large file
+twice. A picked file already open in another tab brings that tab forward.
 
 ## The build
 
@@ -91,8 +95,10 @@ those files are not.
 ## Open
 
 - **Not yet seen in code-server.**
-- **Large files through VS Code's resource loader.** A 216 MB `.out.gz` takes
-  about 23 s to parse in Chrome. Whether the webview's resource loader streams
-  it, and whether the app's progress shows, is unmeasured.
+- **Progress on a large file in VS Code.** A 258 MB `.out.gz` showed progress
+  and loaded in under 40 s in Chrome. VS Code 1.140's webview resource loader
+  streams files in chunks rather than reading them whole first (read in its
+  source, 2026-10-06), so the progress bar should move there too. Not yet
+  watched in VS Code.
 - **Reopening after a window reload.** A `WebviewPanel` does not come back
   after a reload without a `WebviewPanelSerializer`, and there is none yet.

@@ -205,10 +205,16 @@ function filesUnder(dir, prefix = '') {
   });
 }
 
-/** `PINNED_<name>` from vendor-pins.sh, which is shell and so read as text. */
+/**
+ * `PINNED_<name>` from vendor-pins.sh, read by sourcing it in `sh` as
+ * bundle-grail.sh and bundle-mcp.sh do, so quoting and trailing comments mean
+ * what they mean there.
+ */
 function pin(name) {
-  const pins = fs.readFileSync(path.join(REPO, 'vendor-pins.sh'), 'utf8');
-  return new RegExp(`^PINNED_${name}=(.*)$`, 'm').exec(pins)?.[1].trim() ?? '';
+  return execFileSync('sh', ['-c', `. ./vendor-pins.sh && printf '%s' "$PINNED_${name}"`], {
+    cwd: REPO,
+    encoding: 'utf8',
+  });
 }
 
 /**
@@ -241,7 +247,19 @@ async function download(url, sha256, workdir) {
   throw new Error(`${url} holds neither a web build nor one folder with a web build in it.`);
 }
 
+/** Whether `inner` is `outer` or somewhere under it. */
+function within(inner, outer) {
+  const relative = path.relative(outer, inner);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
 function assemble(web, dest) {
+  // dest is emptied first, so it must not hold the build, nor sit inside it.
+  if (within(web, dest) || within(dest, web)) {
+    throw new Error(
+      `STATS_OUT (${dest}) and the build (${web}) overlap; one would delete the other.`,
+    );
+  }
   const missing = REQUIRED.filter((file) => !fs.existsSync(path.join(web, file)));
   if (missing.length) {
     throw new Error(
