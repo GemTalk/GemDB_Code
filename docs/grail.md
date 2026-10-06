@@ -253,9 +253,10 @@ issue rather than rediscovered:
   the process, by way of a catchable `KeyError` from `%(key)s` formatting and a
   real root logger. Both are upstream's claims and have not been re-measured
   here.
-- **`gemdb file.py` does not put the script's directory on `sys.path`** the way
-  `python3 file.py` does, and `sys.path` is otherwise empty, so a script cannot
-  import the file next to it until it inserts its own directory. (Grail #847.)
+- ~~`gemdb file.py` does not put the script's directory on `sys.path`~~ --
+  **fixed**: measured 2026-10-02 on 1.5.4 (Grail `9f8b116`), `gemdb sub/main.py`
+  run from the parent directory has `sub/` as `sys.path[0]` and imports the
+  file next to it, as `python3` does. (Grail #847.)
 - Two sessions racing to compile the same never-before-called method collide
   on a method neither of them typed, so the commit that settles a session has
   to abort on conflict or the app wedges for good. (Grail #851, #850 for
