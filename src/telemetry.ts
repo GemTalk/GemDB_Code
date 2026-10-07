@@ -87,9 +87,10 @@ let reporter: TelemetryReporter | undefined;
  * VS Code version in `common.vscodeversion`, and no `common.*` property names
  * the app, so without these a fork's users read as VS Code users stuck on an
  * old release. Sent as raw strings, not mapped to a list, so a new fork shows
- * up without a release. In a remote window they are still the client's app:
- * the remote extension host is handed the client's product values (read from
- * VS Code's `remoteExtensionHost.ts`, not measured). VS Code's own `common.*`
+ * up without a release. In a remote window they are still the desktop app's:
+ * the desktop builds the remote extension host's init data from its own
+ * product info (`remoteExtensionHost.ts`) and the server never overrides
+ * `appName` or `appUriScheme`. VS Code's own `common.*`
  * properties are mixed in by the extension host and are not repeated here.
  */
 let baseProperties: Record<string, string> = {};
