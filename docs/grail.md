@@ -256,6 +256,13 @@ issue rather than rediscovered:
 - **`gemdb file.py` does not put the script's directory on `sys.path`** the way
   `python3 file.py` does, and `sys.path` is otherwise empty, so a script cannot
   import the file next to it until it inserts its own directory. (Grail #847.)
+- **A second application cannot reuse a module name the first one deployed.**
+  From `beef473` on, importing a different file with different source under a
+  module name already deployed raises `ImportError` instead of replacing it,
+  so two projects that each have a `models.py` collide. The message names
+  `gemdb.modules.relocate()` and `gemdb.modules.forget()`, and
+  `gemdb.use_namespace()` gives each application its own modules. (Grail #1297,
+  #1324.) Upstream's claim; not re-measured here.
 - Two sessions racing to compile the same never-before-called method collide
   on a method neither of them typed, so the commit that settles a session has
   to abort on conflict or the app wedges for good. (Grail #851, #850 for
