@@ -115,6 +115,24 @@ for the duration and puts the value back. That runtime-only change is reverted
 at the end and by any stone restart, and without it the collection frees
 nothing, because the reclaim gem stops below the threshold.
 
+**Recording statistics** (`statmonitor.ts`, `gemdb.statistics.collect`, on
+by default). Before every start, GemDB writes a block of its own into
+`conf/system.conf`, and the stone starts a statmonitor that records to
+`<root>/db/stat`. It is on by default because statistics only help if they
+were already being recorded when something went wrong. Four things keep it on
+this side:
+
+- the statmonitor is the stone's child and exits with it (measured);
+- it takes none of the ten sessions (measured);
+- it writes only under the root path, a few MB a day;
+- GemDB deletes files older than `gemdb.statistics.keepDays`, and never a
+  file it did not name.
+
+Turning it off removes the block at the next start. A value the developer
+sets in any configuration file wins, and the block is removed in favour of
+it. Never on an external database. See
+[`statistics.md`](statistics.md), "Recording statistics".
+
 ## Asked
 
 **Raising shared memory — always prompts; never automate it.** It needs

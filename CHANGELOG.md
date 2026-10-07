@@ -20,6 +20,14 @@ this one does not look.
   in its place, through VS Code's own dialog, so under code-server it browses the server where the
   files are. Large files load in the background with a progress bar, and the tabs come back when
   the window reloads. It needs no database, so it works before GemDB is set up.
+- **The database records its own statistics, for GemDB Stats.** While it runs, the database
+  records what it and the machine are doing every 20 seconds: sessions, commits, the cache, garbage
+  collection, CPU and memory. It writes to `db/stat` under the root path, a new file each day,
+  using no database session and a few MB a day. Files are deleted after 14 days. The GemDB panel's
+  **Statistics** row, or **GemDB: Open Today's Statistics**, opens the current file in GemDB
+  Stats. `gemdb.statistics.collect`, `gemdb.statistics.intervalSeconds` and
+  `gemdb.statistics.keepDays` change this from the database's next start. A database GemDB Code
+  does not run is left alone.
 - **The database reserves the free license's full 10 GB, with room to collect its garbage.** GemDB
   Code caps the database at the license's 10 GB (until now it stopped at 8 GB), reserves all of it
   on disk when the database first starts, and keeps 500 MB of it free, so the database protects

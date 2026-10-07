@@ -1,10 +1,14 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import {
+  collectStatistics,
   engineVersion,
   externalDatabase,
   isEngineVersionOverridden,
+  keepStatisticsDays,
   mcpEnabled,
   mcpReadOnly,
+  statisticsIntervalSeconds,
 } from './config';
 import { GrailInstallFailure, bundledGrailStamp, grailInstallFailure, grailLabel } from './grail';
 import { isInstalled } from './lifecycle';
@@ -34,6 +38,7 @@ import { isSupportedPlatform, setContext } from './platform';
 import { isListening, isRunning, listProcesses } from './processes';
 import { knownSavedStacks } from './savedStacks';
 import { sessionRegistry } from './session';
+import { RecordedFile, recordedFiles } from './statmonitor';
 
 /** "20 min" — the same scale the session-limit message uses. */
 function humanIdle(ms: number): string {
@@ -198,6 +203,81 @@ export function spaceRow(facts: {
 }
 
 /**
+ * The database's own statistics: whether they are being recorded, and the
+ * way to today's in GemDB Stats.
+ *
+ * "Recording" is read from the newest file rather than from the setting,
+ * because the setting only reaches the stone when it starts: a file written
+ * within the last few samples is the evidence. So the row can say both that
+ * a database started before recording was turned on is not yet recording, and
+ * that one is still recording after it was turned off.
+ */
+export function statisticsRow(facts: {
+  collect: boolean;
+  running: boolean;
+  intervalSeconds: number;
+  keepDays: number;
+  latest: RecordedFile | undefined;
+  now?: number;
+}): Row {
+  const { collect, running, intervalSeconds, keepDays, latest } = facts;
+  const now = facts.now ?? Date.now();
+  const recording =
+    running &&
+    latest !== undefined &&
+    now - latest.modifiedMs < Math.max(3 * intervalSeconds * 1000, 90_000);
+  const about =
+    'The database records what it and this machine are doing — sessions, commits, the ' +
+    'cache, garbage collection, CPU and memory — so a slowdown can be looked at afterwards. ' +
+    'Recording takes no database session and a few MB a day' +
+    (keepDays > 0
+      ? `, and files are deleted once they are ${keepDays} days old.`
+      : ', and files are kept until you delete them.');
+  const state = recording
+    ? collect
+      ? ''
+      : 'Recording was turned off, and stops the next time the database starts.\n\n'
+    : collect
+      ? running
+        ? 'The database was started before recording was turned on, and starts recording the ' +
+          'next time it starts.\n\n'
+        : ''
+      : 'Recording is off. Turn on gemdb.statistics.collect to record from the next time the ' +
+        'database starts.\n\n';
+  const newest = latest
+    ? `\n\nNewest: ${path.basename(latest.path)}, written ${humanIdle(now - latest.modifiedMs)} ` +
+      'ago. Click to open it in GemDB Stats.'
+    : '';
+  return {
+    label: 'Statistics',
+    description: recording
+      ? collect
+        ? `recording every ${intervalSeconds} s`
+        : 'recording until the database restarts'
+      : !collect
+        ? 'off'
+        : running
+          ? 'starts when the database restarts'
+          : 'recorded while the database runs',
+    tooltip: state + about + newest,
+    icon: recording
+      ? ok('graph-line')
+      : collect
+        ? new vscode.ThemeIcon('graph-line')
+        : new vscode.ThemeIcon('circle-slash'),
+    command: latest
+      ? { command: 'gemdb.openTodaysStatistics', title: "Open Today's Statistics" }
+      : collect
+        ? undefined
+        : {
+            command: 'workbench.action.openSettings',
+            title: 'Open Settings',
+            arguments: ['gemdb.statistics'],
+          },
+  };
+}
+
+/**
  * The whole GemDB view: a handful of rows saying what is installed, whether it
  * is running, and what to do next.
  *
@@ -324,6 +404,18 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
         collecting: isCollecting(),
       });
       if (space) rows.push(space);
+    }
+
+    if (!external) {
+      rows.push(
+        statisticsRow({
+          collect: collectStatistics(),
+          running: state === 'running',
+          intervalSeconds: statisticsIntervalSeconds(),
+          keepDays: keepStatisticsDays(),
+          latest: recordedFiles()[0],
+        }),
+      );
     }
 
     rows.push(

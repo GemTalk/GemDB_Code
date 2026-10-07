@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import { ensureDatabaseAccount } from '../account';
 import { createDatabase } from '../database';
 import { isSharedMemoryConfigured } from '../osConfig';
-import { databaseExists, extentPath } from '../paths';
+import { databaseExists, databaseStatPath, extentPath } from '../paths';
 import {
   findNetldi,
   findStone,
@@ -16,6 +16,7 @@ import {
   stopStone,
 } from '../processes';
 import { execute, isConnected, logout } from '../session';
+import { ensureStatmonitor, recordedFiles } from '../statmonitor';
 import { Fixture, TEST_CAP_MB, limitTestDatabase, makeFixture } from './fixture';
 
 /**
@@ -78,6 +79,8 @@ describe.skipIf(!makeFixtureIsPossible())('a real database', () => {
   });
 
   it('starts, and reports itself through gslist', async () => {
+    // As startProcesses does before every start.
+    ensureStatmonitor();
     await startStone();
     await startNetldi();
     ensureDatabaseAccount();
@@ -92,6 +95,22 @@ describe.skipIf(!makeFixtureIsPossible())('a real database', () => {
     // NRS string from what gslist reports. A missing port here is the failure
     // that would otherwise surface as an unexplained login error.
     expect(findNetldi(processes)?.port).toBeGreaterThan(0);
+  });
+
+  it('records statistics from the moment it starts, to a file GemDB Stats opens on a click', async () => {
+    // The first sample is written as statmonitor starts, a few seconds after
+    // the stone.
+    const deadline = Date.now() + 30_000;
+    while (recordedFiles().length === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+
+    const files = recordedFiles();
+
+    expect(files).toHaveLength(1);
+    expect(files[0].path.startsWith(databaseStatPath())).toBe(true);
+    expect(files[0].path).toMatch(/statmonitor_gemdb_\d{4}-\d\d-\d\d_\d{6}\.out\.gz$/);
+    expect(fs.statSync(files[0].path).size).toBeGreaterThan(0);
   });
 
   it('runs Smalltalk through a GCI session', () => {
