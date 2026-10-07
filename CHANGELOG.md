@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The engine is unchanged at GemStone 4.0.0.a4, but start with a fresh database: delete
 `~/GemDB/db` before starting this release. Your sessions now log in as a new `gemdb` account, and
-what an earlier release stored belongs to DataCurator, where this one does not look.
+what an earlier release stored belongs to DataCurator, where this one does not look. The bundled
+Python runtime moves forward.
 
 ### Added
 
@@ -67,6 +68,17 @@ what an earlier release stored belongs to DataCurator, where this one does not l
 
 ### Changed
 
+- **A newer Python runtime.** 213 commits across 78 pull requests since 1.5.4, and Python now
+  matches CPython 3.14.8. Syntax errors read as CPython's do and point at the same place, runaway
+  recursion raises a `RecursionError` you can catch, and `random`, `statistics`, `string` and
+  `str.format` are CPython's own, so a seeded `random` now gives CPython's sequence. A commit the
+  database refuses raises `gemdb.SessionStateError`, naming the object it could not store, where it
+  used to stop with a GemStone error. `gemdb.use_namespace()` gives an application its own
+  modules, and `__transient__` marks attributes that are never committed. Two things behave
+  differently: importing a file under a module name another file already deployed raises
+  `ImportError`, which names `gemdb.modules.relocate()` and `gemdb.modules.forget()`; and setting
+  a global of a built-in module, such as `gc.disable()`, lasts only for that session instead of
+  being committed for every later one.
 - **GemDB: Refresh is now called GemDB: Refresh Status**, which is what it does: it re-reads the
   GemDB panel. It never refreshed a notebook's view; **Refresh Notebook View** does that. Its
   command id is unchanged, so a key bound to it still works.
