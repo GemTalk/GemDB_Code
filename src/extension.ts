@@ -55,6 +55,7 @@ import { openRepl, runFile } from './repl';
 import { closeSessionFor, logoutAll, setInputHandler } from './session';
 import { GemDbStatusBar } from './statusBar';
 import { registerStatistics } from './statistics';
+import { openTodaysStatistics, startPruningStatistics } from './statmonitor';
 import { StatusViewProvider } from './statusView';
 import {
   SETUP_OUTCOME,
@@ -329,6 +330,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('gemdb.stopSession', () =>
       stopSessionCommand(maintenanceHooks),
     ),
+    vscode.commands.registerCommand('gemdb.openTodaysStatistics', () => openTodaysStatistics()),
   );
 
   // A change of root path or engine version invalidates everything the view
@@ -369,6 +371,9 @@ export function activate(context: vscode.ExtensionContext): void {
         if (isSupportedPlatform() && isInstalled()) ensureCliCurrent(extensionPath);
         status.refresh();
       }
+
+      // They reach the stone only when it next starts, which the row says.
+      if (event.affectsConfiguration('gemdb.statistics')) status.refresh();
 
       // The GemDB Shell reads the idle-abort setting from its wrapper's
       // environment, so a new value needs a new wrapper.
@@ -434,6 +439,7 @@ export function activate(context: vscode.ExtensionContext): void {
   putCliOnPath(context.environmentVariableCollection);
 
   context.subscriptions.push(startMaintenance(maintenanceHooks));
+  context.subscriptions.push(startPruningStatistics());
 
   status.refresh();
   // Reported off the synchronous activation path: `isRunningAsync()` spawns

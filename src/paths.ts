@@ -72,6 +72,11 @@ export function databaseLogPath(): string {
   return path.join(databasePath(), 'log');
 }
 
+/** Where the stone's statmonitor records statistics; see statmonitor.ts. */
+export function databaseStatPath(): string {
+  return path.join(databasePath(), 'stat');
+}
+
 export function extentPath(): string {
   return path.join(databasePath(), 'data', 'extent0.dbf');
 }

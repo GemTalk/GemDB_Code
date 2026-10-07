@@ -378,3 +378,28 @@ export function garbageCollectionIntervalHours(): number {
     DEFAULT_GARBAGE_COLLECTION_HOURS,
   );
 }
+
+export const DEFAULT_STATISTICS_INTERVAL_SECONDS = 20;
+export const DEFAULT_KEEP_STATISTICS_DAYS = 14;
+
+/** Whether the stone records statistics while it runs. See `statmonitor.ts`. */
+export function collectStatistics(): boolean {
+  return vscode.workspace.getConfiguration('gemdb').get<boolean>('statistics.collect', true);
+}
+
+/** Seconds between samples, in the whole seconds statmonitor takes: 1 to a day. */
+export function statisticsIntervalSeconds(): number {
+  const value = Number(
+    vscode.workspace
+      .getConfiguration('gemdb')
+      .get<unknown>('statistics.intervalSeconds', DEFAULT_STATISTICS_INTERVAL_SECONDS),
+  );
+  return Number.isInteger(value) && value >= 1 && value <= 86400
+    ? value
+    : DEFAULT_STATISTICS_INTERVAL_SECONDS;
+}
+
+/** Days a statistics file is kept once it is no longer written. 0 keeps them all. */
+export function keepStatisticsDays(): number {
+  return nonNegativeSetting('statistics.keepDays', DEFAULT_KEEP_STATISTICS_DAYS);
+}

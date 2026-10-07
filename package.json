@@ -79,6 +79,27 @@
           "minimum": 0,
           "markdownDescription": "Hours between garbage collections, which run once nothing in the window has run for a few minutes. GemDB also collects whenever less than 2 GB is left of the free license's 10 GB, so the database never reaches the point where it stops reclaiming garbage. `0` collects only when space runs short. **GemDB: Collect Garbage Now** runs one immediately."
         },
+        "gemdb.statistics.collect": {
+          "scope": "machine",
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Have the database record its own statistics while it runs — sessions, commits, the cache, garbage collection, CPU and memory — to `db/stat` under `#gemdb.rootPath#`, one file a day, so a slowdown can be looked at afterwards in GemDB Stats. Recording takes no database session and a few MB a day. Takes effect the next time the database starts. **GemDB: Open Today's Statistics** opens the newest file."
+        },
+        "gemdb.statistics.intervalSeconds": {
+          "scope": "machine",
+          "type": "integer",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 86400,
+          "markdownDescription": "Seconds between statistics samples. Halving it doubles the size of the files. Takes effect the next time the database starts."
+        },
+        "gemdb.statistics.keepDays": {
+          "scope": "machine",
+          "type": "number",
+          "default": 14,
+          "minimum": 0,
+          "markdownDescription": "Days to keep a statistics file once the database has stopped writing it. The newest file is always kept. `0` keeps them all."
+        },
         "gemdb.mcp.enabled": {
           "scope": "machine",
           "type": "boolean",
@@ -345,6 +366,12 @@
         "icon": "$(graph-line)"
       },
       {
+        "command": "gemdb.openTodaysStatistics",
+        "title": "Open Today's Statistics",
+        "category": "GemDB",
+        "icon": "$(graph-line)"
+      },
+      {
         "command": "gemdb.openInStats",
         "title": "Open in GemDB Stats",
         "category": "GemDB",
@@ -602,6 +629,10 @@
         {
           "command": "gemdb.openInStats",
           "when": "false"
+        },
+        {
+          "command": "gemdb.openTodaysStatistics",
+          "when": "!gemdb.externalDatabase"
         }
       ],
       "debug/variables/context": [

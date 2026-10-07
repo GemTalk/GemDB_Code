@@ -94,11 +94,73 @@ symbols, the service worker, and the PWA manifest and icons. That cuts the
 47 MB build to about 23 MB. `check-vsix.sh` asserts the payload is present and
 those files are not.
 
+## Recording statistics
+
+The database GemDB runs records its own statistics, so there is a file to
+open when something was slow (`src/statmonitor.ts`). The stone starts a
+statmonitor of its own for each string in `STN_STATMONITOR_ARGS`. That setting
+is documented in the engine's `bin/gemstone_data.conf`, not in the
+`data/system.conf` GemDB copies to `conf/default.conf`. That file only has
+`GEM_STATMONITOR_ARGS`, which is for remote page caches.
+
+Before every start, `ensureStatmonitor` writes a block of GemDB's own into
+`conf/system.conf`, between `# BEGIN GemDB statistics` and
+`# END GemDB statistics`, from the `gemdb.statistics.*` settings:
+
+```
+STN_STATMONITOR_ARGS = "-i20 -u0 -z -R -k '00:00' -F'<root>/db/stat/statmonitor_%%S_%Y-%m-%d_%H%M%S.out'";
+```
+
+- **The block is rewritten on every start, unlike the space limits, which
+  are added once.** Turning recording off has to take it out again.
+- **A value the developer sets wins.** If `STN_STATMONITOR_ARGS` appears in
+  `gemdb.conf`, `gem.conf` or elsewhere in `system.conf`, the block is removed
+  rather than left beside it. The stone would otherwise start both.
+- **`-u0` writes each sample as it is taken**, so today's file is at most one
+  sample behind for GemDB Stats.
+- **`-z` makes the name end `.out.gz`**, which opens in GemDB Stats on a
+  click.
+- **`-R -k '00:00'` starts a new file at midnight.** The time of day in the
+  name keeps a restart on the same day out of the earlier file.
+
+The settings reach the stone only when it starts. So the panel's Statistics
+row judges "recording" from the newest file, counted as current if it was
+written within the last three samples, and not from the setting.
+
+**Pruning is GemDB's.** statmonitor's `-K` deletes only the files of the
+process that wrote them, and every stone start is a new process. So
+`startPruningStatistics` deletes `statmonitor_*.out(.gz)` files not written
+for `gemdb.statistics.keepDays` (14). It runs at activation and every six
+hours, whether or not the database is running. It always keeps the newest
+file, and never touches a file of any other name.
+
+**GemDB: Open Today's Statistics** opens the newest file, which is the one
+being written while the database runs. GemDB Stats reads a file that is still
+being written, whose gzip stream has no end yet. It is meant to follow such a
+file live eventually.
+
+None of this applies to an external database, whose stone belongs to its
+administrator.
+
 ## Measured
 
 - **2026-10-04, headless Chrome 154.** The generated page, with the full CSP.
   Flutter drew its first frame, there were no CSP violations and no service
   worker, and the page could fetch a statmon file.
+- **2026-10-06, statmonitor on 4.0.0.a4.** These were run on a throwaway
+  stone with its own lock folder:
+  - The stone starts one statmonitor per `STN_STATMONITOR_ARGS` string and
+    passes it the stone's name. The statmonitor exits when the stone stops,
+    and leaves its file a complete gzip.
+  - It is in neither `System currentSessions` nor the cache's slots, so it
+    costs none of the ten sessions.
+  - On an idle database a sample is about 3.6 KB uncompressed or 300 B with
+    `-z`. At 20 s that is about 1.3 MB a day, more with active sessions.
+  - `-k` set a minute ahead started a new file in the same process, and closed
+    the old one complete.
+  - A folder with a space in it worked inside `-F'…'`.
+  - `gzip -t` refuses the file still being written ("unexpected end of
+    file"), but a streaming decoder recovers every sample flushed so far.
 - **2026-10-05, VS Code.** The app showed its loading screen, then grey.
   Chrome reproduced it once the page and the build were on different origins,
   as they are in a webview: Flutter's first `history.replaceState` resolved its

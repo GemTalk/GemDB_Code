@@ -69,8 +69,11 @@ PINNED_MCP_REF=d836520816d47bc5b8bb43386293f1b9dffbefce
 # the SHA-256 matches (the release's SHA256SUMS.txt carries the value). Override
 # per-build with STATS_URL (and STATS_SHA256), or STATS_WEB for a local build.
 #
-# v1.1.0 (3cc86a7), released 2026-10-06: the first release with the web build.
-# It includes GemDB_Stats PR #10, which lets GemDB Code choose the file
-# (ready / open / pickFile) and starts Flutter without a service worker.
-PINNED_STATS_URL=https://github.com/GemTalk/GemDB_Stats/releases/download/v1.1.0/GemDB-Stats-1.1.0-web.tar.gz
-PINNED_STATS_SHA256=1b748c36c0db9ef12fce563feb64ab8254fa8c8bd780d1d45bb514752d16f538
+# v1.1.1 (3f6487d), released 2026-10-06. v1.1.0 was the first release with the
+# web build, including GemDB_Stats PR #10, which lets GemDB Code choose the file
+# (ready / open / pickFile) and starts Flutter without a service worker. v1.1.1
+# adds PR #16: the web build opens a .gz that statmonitor is still writing,
+# with every sample so far, where v1.1.0 failed with "Compressed input was
+# truncated" -- which is today's file whenever the database is recording.
+PINNED_STATS_URL=https://github.com/GemTalk/GemDB_Stats/releases/download/v1.1.1/GemDB-Stats-1.1.1-web.tar.gz
+PINNED_STATS_SHA256=d319df2541482a5032e1d87255f2b6a3ed658fb3cd6f7a4ce7907b12e6f060b6

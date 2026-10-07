@@ -228,7 +228,7 @@ export const REPOSITORY_LIMIT_MB = 10240;
 export const FREE_SPACE_THRESHOLD_MB = 500;
 
 /** A setting given a value somewhere in `conf`, rather than commented out. */
-function setsOption(conf: string, option: string): boolean {
+export function setsOption(conf: string, option: string): boolean {
   return new RegExp(`^\\s*${option}\\s*=`, 'm').test(conf);
 }
 
@@ -287,6 +287,19 @@ export function withSpaceLimits(systemConf: string, otherConfs: string[] = []): 
 }
 
 /**
+ * The text of the database's other configuration files: the stone's own,
+ * which the stone reads after `system.conf`, and the sessions'. A setting
+ * either one makes is the developer's, and GemDB leaves it alone.
+ */
+export function confsBesideSystemConf(): string[] {
+  const conf = path.join(databasePath(), 'conf');
+  return [`${STONE_NAME}.conf`, 'gem.conf']
+    .map((name) => path.join(conf, name))
+    .filter((file) => fs.existsSync(file))
+    .map((file) => fs.readFileSync(file, 'utf-8'));
+}
+
+/**
  * Give an existing database the space limits a new one is created with.
  *
  * Called before the stone starts, because a database created by an earlier
@@ -296,15 +309,10 @@ export function withSpaceLimits(systemConf: string, otherConfs: string[] = []): 
  * starts without the limits is the one every earlier release ran.
  */
 export function ensureSpaceLimits(): void {
-  const conf = path.join(databasePath(), 'conf');
-  const systemConf = path.join(conf, 'system.conf');
+  const systemConf = path.join(databasePath(), 'conf', 'system.conf');
   try {
     if (!fs.existsSync(systemConf)) return;
-    const others = [`${STONE_NAME}.conf`, 'gem.conf']
-      .map((name) => path.join(conf, name))
-      .filter((file) => fs.existsSync(file))
-      .map((file) => fs.readFileSync(file, 'utf-8'));
-    const updated = withSpaceLimits(fs.readFileSync(systemConf, 'utf-8'), others);
+    const updated = withSpaceLimits(fs.readFileSync(systemConf, 'utf-8'), confsBesideSystemConf());
     if (updated === undefined) return;
     fs.writeFileSync(systemConf, updated);
     log(

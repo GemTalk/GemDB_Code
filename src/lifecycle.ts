@@ -68,6 +68,7 @@ import { isSupportedPlatform, setContext } from './platform';
 import { withSetupLockWhenFree } from './lock';
 import { isOnNfs } from './networkFileSystem';
 import { logoutAll } from './session';
+import { ensureStatmonitor } from './statmonitor';
 import { allowAutoStart } from './autoStart';
 import { readUnattendedSetupMarker, writeUnattendedSetupMarker } from './unattendedSetupMarker';
 import {
@@ -775,6 +776,8 @@ async function startProcesses(
     // A database an earlier GemDB created has no space limits yet, and the
     // stone reserves the extent's full size as it starts.
     ensureSpaceLimits();
+    // Every start, not once: the settings it is written from may have changed.
+    ensureStatmonitor();
     assertRoomForExtent();
     progress?.report({ message: 'Starting the database…' });
     await startStone();
