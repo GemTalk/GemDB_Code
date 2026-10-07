@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Start with a fresh database: delete `~/GemDB/db` before starting this release. Your sessions now
-log in as a new `gemdb` account, and what an earlier release stored belongs to DataCurator, where
-this one does not look.
+## [1.6.0] - 2026-10-07
+
+The engine is unchanged at GemStone 4.0.0.a4, but start with a fresh database: delete
+`~/GemDB/db` before starting this release. Your sessions now log in as a new `gemdb` account, and
+what an earlier release stored belongs to DataCurator, where this one does not look. The bundled
+Python runtime moves forward.
 
 ### Added
 
@@ -58,8 +61,31 @@ this one does not look.
   the clipboard, so you can ask for that data to be found or deleted.
   `USAGE_DATA.md` used to send you to Help: About for it, which does not show
   it. It works with telemetry turned off.
+- **GemDB: Refresh Notebook View** lets the active notebook see what other sessions have committed,
+  from the ↻ button in a GemDB notebook's toolbar or the Command Palette. It runs
+  `gemdb.refresh()` in that notebook's own session, so nothing has to be typed into a cell, and
+  with uncommitted changes it refuses and says what to do, as `gemdb.refresh()` does.
 
 ### Changed
+
+- **A newer Python runtime.** 213 commits across 78 pull requests since 1.5.4, and Python now
+  matches CPython 3.14.8. Syntax errors read as CPython's do and point at the same place, runaway
+  recursion raises a `RecursionError` you can catch, and `random`, `statistics`, `string` and
+  `str.format` are CPython's own, so a seeded `random` now gives CPython's sequence. A commit the
+  database refuses raises `gemdb.SessionStateError`, naming the object it could not store, where it
+  used to stop with a GemStone error. `gemdb.use_namespace()` gives an application its own
+  modules, and `__transient__` marks attributes that are never committed. Two things behave
+  differently: importing a file under a module name another file already deployed raises
+  `ImportError`, which names `gemdb.modules.relocate()` and `gemdb.modules.forget()`; and setting
+  a global of a built-in module, such as `gc.disable()`, lasts only for that session instead of
+  being committed for every later one.
+- **GemDB: Refresh is now called GemDB: Refresh Status**, which is what it does: it re-reads the
+  GemDB panel. It never refreshed a notebook's view; **Refresh Notebook View** does that. Its
+  command id is unchanged, so a key bound to it still works.
+- **When the database has no free sessions, the message says who else is holding them.** With
+  GemDB's MCP server running, it says the server holds a session and each connected AI agent holds
+  another, and suggests disconnecting an agent as well as closing a notebook. For GemDB's own
+  database it also says where the limit of 10 comes from: the Community Edition key GemDB installs.
 
 - **Your work runs as a `gemdb` database account, not DataCurator.** Notebooks, the GemDB Shell,
   Python files and AI agents log in as `gemdb`, which can define classes and run Python but has no
@@ -92,6 +118,10 @@ this one does not look.
   database running, as it already did when it found the database stopped. For the same reason, a
   running database whose Python support is older than the one GemDB Code ships now gets the update
   when GemDB Code opens, unless `gemdb.reinstallPythonOnUpdate` is off.
+- **Ctrl+C stops a `gemdb` run.** Interrupting `gemdb app.py`, or a file run with **Run Python File
+  in GemDB**, used to leave it at a `topaz 1>` prompt, still holding a database session. It now runs
+  the script's `finally` blocks, prints `KeyboardInterrupt` and exits with status 130, as Python
+  does.
 
 ## [1.5.4] - 2026-10-01
 
@@ -853,7 +883,11 @@ gets out of the way.
 - **`sys.exit(n)` exits 1 rather than `n`**, and **`input()` is not yet
   supported**. Both are upstream in Grail.
 
-[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.4...v1.6.0
+[1.5.4]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.3...v1.5.4
+[1.5.3]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.2...v1.5.3
+[1.5.2]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.3.0...v1.4.0
