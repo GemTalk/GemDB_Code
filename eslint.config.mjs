@@ -10,10 +10,19 @@ export default tseslint.config(
     // it. The rest are build artifacts that ESLint would otherwise walk on
     // its own, since (unlike Prettier 3) it does not read .gitignore: out/**
     // is this project's own bundle, grail/** and mcp/** are third-party
-    // payloads staged by bundle-grail.sh and bundle-mcp.sh, dist/** is
+    // payloads staged by bundle-grail.sh and bundle-mcp.sh, stats/** is the
+    // GemDB Stats web build staged by bundle-stats.mjs, dist/** is
     // packages fetched from CI by fetch-vsix.sh, and .test-extent/** is the
     // database extent build-test-extent.sh builds for the integration suite.
-    ignores: ['out/**', 'grail/**', 'mcp/**', 'dist/**', '.test-extent/**', 'src/gci/**'],
+    ignores: [
+      'out/**',
+      'grail/**',
+      'mcp/**',
+      'stats/**',
+      'dist/**',
+      '.test-extent/**',
+      'src/gci/**',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

@@ -5,6 +5,7 @@ import { join } from 'path';
 import {
   __changeSetting,
   __commands,
+  __customEditors,
   __resetSettings,
   __setSetting,
   env,
@@ -159,6 +160,18 @@ describe('activate()', () => {
     const activated = eventsNamed('activated');
     expect(activated).toHaveLength(1);
     expect(activated[0].properties.state).toBe('unsupportedPlatform');
+  });
+
+  it('offers GemDB Stats on a platform that cannot host a database', () => {
+    // Charting a statmon file reads a file and needs no database, so the
+    // platform gate is no reason to withhold it.
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+
+    activate(fakeExtensionContext());
+
+    expect(__commands.has('gemdb.openStatistics')).toBe(true);
+    expect(__commands.has('gemdb.openInStats')).toBe(true);
+    expect([...__customEditors.keys()]).toEqual(['gemdb.statistics']);
   });
 
   describe('activated.state', () => {

@@ -216,6 +216,21 @@
         "when": "gemdb.running && gemdb.hasSavedStacks"
       }
     ],
+    "customEditors": [
+      {
+        "viewType": "gemdb.statistics",
+        "displayName": "GemDB Stats",
+        "selector": [
+          {
+            "filenamePattern": "*.out.gz"
+          },
+          {
+            "filenamePattern": "statmon*.out"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
     "commands": [
       {
         "command": "gemdb.install",
@@ -322,6 +337,18 @@
         "title": "Show Log",
         "category": "GemDB",
         "icon": "$(output)"
+      },
+      {
+        "command": "gemdb.openStatistics",
+        "title": "Open Statistics File…",
+        "category": "GemDB",
+        "icon": "$(graph-line)"
+      },
+      {
+        "command": "gemdb.openInStats",
+        "title": "Open in GemDB Stats",
+        "category": "GemDB",
+        "icon": "$(graph-line)"
       },
       {
         "command": "gemdb.copyTelemetryId",
@@ -571,6 +598,10 @@
         {
           "command": "gemdb.restoreStack",
           "when": "gemdb.running && gemdb.hasSavedStacks"
+        },
+        {
+          "command": "gemdb.openInStats",
+          "when": "false"
         }
       ],
       "debug/variables/context": [
@@ -622,6 +653,13 @@
           "command": "gemdb.saveStack",
           "when": "debugType == gemdb && !gemdb.savedStackOpen",
           "group": "z_gemdb@1"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "gemdb.openInStats",
+          "when": "resourceFilename =~ /\\.out(\\.gz)?$/",
+          "group": "navigation@9"
         }
       ]
     },
@@ -719,6 +757,7 @@
     "test:integration": "vitest run --config vitest.integration.config.mts",
     "bundle:grail": "./scripts/bundle-grail.sh",
     "bundle:mcp": "./scripts/bundle-mcp.sh",
+    "bundle:stats": "node scripts/bundle-stats.mjs",
     "test:extent": "./scripts/build-test-extent.sh",
     "//dev:fresh": "Launch this working copy in a separate editor on a throwaway profile (empty global storage) and an empty gemdb.rootPath: a brand-new user's first run, engine download included. Machine-wide shared memory is not reset; see the script's header.",
     "dev:fresh": "bash scripts/dev-fresh.sh",
