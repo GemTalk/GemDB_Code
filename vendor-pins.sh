@@ -11,35 +11,37 @@
 # Bumping a pin is a one-line PR to this file; a green CI run on it is the
 # proof the new upstream commit works.
 
-# Grail: main as of 2026-10-01, 47 commits (21 PRs) on from the previous pin
-# (84821c1). Every script resources/install-grail.sh drives and the REQUIRED
-# list in bundle-grail.sh are untouched, and nothing was deleted or renamed.
-# The C shim's SOURCE changed, so every platform rebuilds it: cpython.cc grows,
-# and shim_pyo3.cc joins it, the CPython 3.14 entry points a PyO3 wheel such as
-# pydantic_core needs (#1277, #1282). Same toolchain, no new build dependency.
+# Grail: main as of 2026-10-07, 213 commits (78 PRs) on from the previous pin
+# (9f8b116). The scripts resources/install-grail.sh drives are byte-identical
+# apart from deployGemdb.gs, whose warm-deploy list gains gemdb.modules (#1297),
+# and every name in bundle-grail.sh's REQUIRED list is still there. install.gs
+# is mostly re-sorted (#1360); its real changes are four new runtime inputs and
+# five removed ones -- random, statistics, string, string_Formatter and
+# StatisticsError -- which CPython's own .py files under src/python replace
+# (#1301, #1305, #1329). Every `input` in it exists in the tree. The C shim's
+# SOURCE changed (cpython.cc, shim_pyo3.cc, shim_numpy.cc, _sre, for FastAPI,
+# pydantic and re), so every platform rebuilds it; the Makefile is unchanged
+# and its two new GCI calls (GciFetchOop, GciIsKindOfClass) are in a4's gci.hf.
 #
-# One addition GemDB does not take up: src/c/ssl, a second C library holding
-# the four OpenSSL callbacks _ssl.py cannot make through CCallout -- server-side
-# ALPN, msg_callback, keylog and PSK (#1266). Grail's install.sh builds it and
-# passes GRAIL_SSL_LIB_PATH; resources/install-grail.sh does neither, and
-# bundle-grail.sh ships no src/c. install.gs records an unset path as nil, so
-# the install succeeds and those four raise NotImplementedError, which is what
-# they did before #1266. The rest of ssl is unaffected.
+# Grail now targets CPython 3.14.8 (#1343, #1346, #1348, #1350, #1359):
+# SyntaxError messages and positions match CPython's (#1363), runaway recursion
+# is a catchable RecursionError (#1358), and random, statistics, string and
+# str.format are CPython's own (#1301, #1305, #1329, #1330). FastAPI and
+# starlette answer as CPython does for async endpoints (#1347, #1352).
 #
-# Session hygiene, which bears on any app with more than one gem: a module-level
-# lru_cache in a deployed module is per-session (#1279) -- a hit wrote a shared
-# object and a miss committed its arguments -- and `Cls.x = v` on a deployed
-# class stays session-local whichever name it uses (#1278), so two gems setting
-# Flask.secret_key no longer conflict. A committed WeakSet drops dead references
-# (#1283).
+# What the gemdb module adds: app namespaces, gemdb.use_namespace() (#1302,
+# #1324, #1361); gemdb.SessionStateError, a catchable error naming the object a
+# refused commit tripped on, where it was a Smalltalk error (#1319, #1336);
+# __transient__ attributes that are never committed (#1337, #1338); and
+# gemdb.modules (#1297). Nothing GemDB calls was removed or renamed.
 #
-# Also: a Flask view that raises answers 500 instead of ending the process
-# (#1284, by way of a catchable KeyError from `%(key)s` and a real root
-# logger), re.sub with a callable on a deployed pattern (#1285), a dotted import
-# of an unfindable package raises instead of answering nil (#1274), Fraction
-# hashing like the equal float (#1267), and statistics adding, sorting and
-# dividing as Python does (#1280).
-PINNED_GRAIL_REF=9f8b1161101608cb57d696887c672a3a5c5ce9f2
+# Behaviour changes a user can meet: importing a different file under a module
+# name already deployed raises ImportError, naming gemdb.modules.relocate() and
+# forget() (#1297); setting a global of one of Grail's own modules, such as
+# gc.disable(), lasts for the session instead of being committed (#1344);
+# `7 // 2.0` is 3.0 (#1311); a seeded random gives CPython's sequence, not the
+# old one (#1305); and code CPython rejects, such as `01`, is a SyntaxError.
+PINNED_GRAIL_REF=beef4736c897dff60fc9c81d210430cc785313af
 
 # mcp_server: main as of 2026-09-25, 26 commits (8 PRs) on from the previous pin
 # (afa3790). No load.gs changed, and every selector src/mcp.ts sends --
