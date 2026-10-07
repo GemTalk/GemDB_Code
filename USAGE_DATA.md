@@ -24,7 +24,7 @@ VS Code automatically attaches its own common properties to every event:
 `common.isnewappinstall`, `common.sqmid`, `common.devDeviceId`,
 `common.telemetryclientversion`.
 
-GemDB adds three properties of its own to every event:
+GemDB adds five properties of its own to every event:
 
 - `extensionMode`, which is `production` for an installed extension and
   `development` or `test` when a GemDB developer is running it from source.
@@ -34,6 +34,10 @@ GemDB adds three properties of its own to every event:
   - `firstSeen` — the ordinary case: GemDB recorded this as a new install.
   - `reinstall` — GemDB's own files were reinstalled while the database
     survived.
+- `appName` and `appUriScheme`, which name the editor GemDB runs in, as its
+  name and its URL scheme (e.g. "Cursor" and `cursor`). Editors built on VS
+  Code report the VS Code version they are based on, so this is what tells
+  them apart.
 
 `common.vscodemachineid` is a pseudonymous identifier VS Code generates per
 installation. It is not tied to your name or email, but under GDPR it counts
@@ -98,5 +102,5 @@ delete the matching records.
 
 ## Changes
 
-Last updated: 2026-10-05. Changes to this notice will be published in this
+Last updated: 2026-10-07. Changes to this notice will be published in this
 repository.

@@ -29,6 +29,8 @@ take the earliest event of that kind for its `common.vscodemachineid`.
 | `extensionMode`   | `production`, `development`, `test`        | Only `production` is a real user. Filter out the others in every report.          |
 | `installDay`      | a date, e.g. `2026-09-15`                   | Roughly when GemDB was first used on this machine.                                |
 | `installDaySource` | `firstSeen`, `reinstall`                   | `reinstall`: GemDB was reinstalled but the user's database was still there.        |
+| `appUriScheme`    | e.g. `vscode`, `vscode-insiders`, `cursor`, `windsurf` | Which editor GemDB runs in. Editors built on VS Code report the VS Code version they are based on in `common.vscodeversion`, so group by this before reading versions. It is the user's own editor, even in a Remote-SSH, WSL or container window. Missing on events from 1.5.4 and earlier. |
+| `appName`         | e.g. `Visual Studio Code`, `Cursor`        | The same editor, by its display name. Missing on events from 1.5.4 and earlier.   |
 
 VS Code adds its own `common.*` properties too (machine id, OS, VS Code
 version, extension version). [USAGE_DATA.md](../USAGE_DATA.md) lists them.

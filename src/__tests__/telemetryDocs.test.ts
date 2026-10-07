@@ -101,3 +101,22 @@ describe('docs/telemetry.md', () => {
     expect(undocumented, `document these in ${DOC_PATH}`).toEqual([]);
   });
 });
+
+// The same `beforeAll` is what makes this assertion mean "every event": it
+// drives all seven `report*` functions, and the suite above fails if that
+// list ever falls behind `EVENT`. Asserting it off one event — activation,
+// say — would pass for a `report*` that built its own properties object
+// instead of going through `send`.
+describe('every event', () => {
+  it('names the editor GemDB runs in', () => {
+    // Forks report their base VS Code version, so these are what tells a
+    // Cursor user from a VS Code user on an old release.
+    expect(__telemetry.length).toBeGreaterThan(0);
+    for (const event of __telemetry) {
+      expect(event.properties, event.name).toMatchObject({
+        appUriScheme: 'vscode',
+        appName: 'Visual Studio Code',
+      });
+    }
+  });
+});
