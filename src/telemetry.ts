@@ -82,8 +82,16 @@ let reporter: TelemetryReporter | undefined;
  * Properties stamped on every event, established once at activation.
  *
  * `extensionMode`, plus `installDay` and `installDaySource` (see
- * `resolveInstallDay`). VS Code's own `common.*` properties are mixed in by
- * the extension host and are not repeated here.
+ * `resolveInstallDay`), plus `appUriScheme` and `appName`, which name the
+ * editor GemDB runs in. Forks (Cursor, Windsurf) report their *base*
+ * VS Code version in `common.vscodeversion`, and no `common.*` property names
+ * the app, so without these a fork's users read as VS Code users stuck on an
+ * old release. Sent as raw strings, not mapped to a list, so a new fork shows
+ * up without a release. In a remote window they are still the desktop app's:
+ * the desktop builds the remote extension host's init data from its own
+ * product info (`remoteExtensionHost.ts`) and the server never overrides
+ * `appName` or `appUriScheme`. VS Code's own `common.*`
+ * properties are mixed in by the extension host and are not repeated here.
  */
 let baseProperties: Record<string, string> = {};
 
@@ -217,6 +225,8 @@ export function initTelemetry(context: vscode.ExtensionContext, databaseExists: 
     extensionMode: extensionModeName(context.extensionMode),
     installDay,
     installDaySource,
+    appUriScheme: vscode.env.uriScheme,
+    appName: vscode.env.appName,
   };
   // Disposal flushes queued events, so the subscription is load-bearing.
   reporter = new TelemetryReporter(CONNECTION_STRING);

@@ -94,6 +94,8 @@ Python runtime moves forward.
   `gemdb.admin.garbage_collect()`, `gemdb.admin.backup()` and `gemdb.sessions.all()` now raise a
   security error; **Collect Garbage Now** and **Stop a Database Session…** cover the first and
   last.
+- **Usage data now records which editor GemDB runs in** (VS Code, Cursor, …), so a
+  fork's users are not mistaken for VS Code users on an old release. `USAGE_DATA.md` lists it.
 
 ### Fixed
 
