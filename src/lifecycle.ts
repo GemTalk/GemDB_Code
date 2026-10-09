@@ -70,6 +70,7 @@ import { isOnNfs } from './networkFileSystem';
 import { logoutAll } from './session';
 import { ensureStatmonitor } from './statmonitor';
 import { allowAutoStart } from './autoStart';
+import { singleFlight } from './singleFlight';
 import { readUnattendedSetupMarker, writeUnattendedSetupMarker } from './unattendedSetupMarker';
 import {
   DATABASE_OUTCOME,
@@ -227,20 +228,18 @@ function paused(): void {
  * say so instead of offering a Set Up GemDB button that would only join it.
  */
 export function runSetup(extensionPath: string, trigger: Trigger): Promise<SetupOutcome> {
-  if (setupInFlight) {
-    log('Setup is already under way; waiting for it to finish.');
-    return setupInFlight;
-  }
-  setContext('gemdb.settingUp', true);
-  const run = runSetupOnce(extensionPath, trigger).finally(() => {
-    setupInFlight = undefined;
-    setContext('gemdb.settingUp', false);
-  });
-  setupInFlight = run;
-  return run;
+  return setupFlight.run(
+    () => {
+      setContext('gemdb.settingUp', true);
+      return runSetupOnce(extensionPath, trigger).finally(() => {
+        setContext('gemdb.settingUp', false);
+      });
+    },
+    () => log('Setup is already under way; waiting for it to finish.'),
+  );
 }
 
-let setupInFlight: Promise<SetupOutcome> | undefined;
+const setupFlight = singleFlight<SetupOutcome>();
 
 async function runSetupOnce(extensionPath: string, trigger: Trigger): Promise<SetupOutcome> {
   reportSetupStarted(trigger);
