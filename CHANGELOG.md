@@ -17,9 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   started by an older GemDB in another editor counts as started.
 - **GemDB waits for a database that is still starting before logging in to it.** After a crash
   the database takes a while to recover before it accepts logins, and GemDB treated it as running
-  as soon as it appeared, so the first notebook cell or the GemDB Shell could fail to log in. Starting
-  GemDB now waits for the database to finish starting, for up to a minute, and then names the
-  database's log if it has not.
+  as soon as it appeared, so the first notebook cell, the GemDB Shell or a `gemdb` command could
+  fail to log in. GemDB and the `gemdb` command now wait for the database to finish starting, for up
+  to a minute, and then name the database's log if it has not.
 - **The GemDB Shell checks the database before starting it, as the window does.** Opening the
   Shell with the database stopped started it without the checks the window makes first, so a
   database the installed engine cannot read started and then refused every login, and one on a
