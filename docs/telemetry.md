@@ -167,7 +167,9 @@ sent.
 The database was brought up, or failed to come up. Sent only when something
 actually happened. Running a cell when the database is already up sends
 nothing, and a failure is sent once for each trigger until the database next
-starts.
+starts. A request that arrives while a start is already under way in the same
+window waits for it and sends nothing, so one start is one event, carrying the
+trigger of whatever began it.
 
 | Property / measure | Values                                                                                                                              |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
