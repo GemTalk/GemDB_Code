@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { __log } from '../__mocks__/vscode';
 import { stageGrail } from '../grail';
-import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
+import { ensureProcesses, isRunning, stopNetldi, stopStone } from '../processes';
 import { isErrorResult, renameOwner, runPython } from '../pythonQueries';
 import { SessionOwner, cacheNameFor, execute, logoutAll, sessionRegistry } from '../session';
 import { createDatabaseWithPython, Fixture, haveTestExtent, makeFixture } from './fixture';
@@ -38,8 +38,7 @@ beforeAll(async () => {
   if (!fixture) return;
   createDatabaseWithPython(fixture);
   stageGrail(ext);
-  await startStone();
-  await startNetldi();
+  await ensureProcesses();
 });
 
 afterAll(async () => {

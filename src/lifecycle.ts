@@ -18,9 +18,8 @@ import {
   DatabaseOnNfsError,
   DatabaseVersionError,
   DiskSpaceError,
-  assertRoomForExtent,
   assertRoomForSetup,
-  ensureSpaceLimits,
+  assertSafeToStart,
   removeDatabase,
 } from './database';
 import { Progress, installEngine, removeEngine } from './engine';
@@ -53,14 +52,13 @@ import {
   mcpPath,
 } from './paths';
 import {
-  ExternalDatabaseError,
+  ensureProcesses,
+  externalDatabaseDownError,
   findNetldi,
   findStone,
   isListening,
   isRunning,
   listProcesses,
-  startNetldi,
-  startStone,
   stopNetldi,
   stopStone,
 } from './processes';
@@ -745,53 +743,24 @@ export async function resumeRunning(extensionPath: string): Promise<boolean> {
 async function startProcesses(
   progress?: vscode.Progress<{ message?: string }>,
 ): Promise<{ startedStone: boolean; startedNetldi: boolean }> {
-  const running = listProcesses();
-  let startedStone = false;
-  let startedNetldi = false;
-
   // Nothing to start for an external database — only whether it is up, said
   // in terms of what to do about it.
   const external = externalDatabase();
   if (external) {
-    if (!findStone(running) || !findNetldi(running)) {
-      throw new ExternalDatabaseError(
-        `The database is not running: GemDB expects stone ${external.stone} and NetLDI ` +
-          `${external.netldi}, which this machine's administrator runs. Ask them to start it.`,
-      );
-    }
+    const running = listProcesses();
+    if (!findStone(running) || !findNetldi(running)) throw externalDatabaseDownError(external);
     log('The database is running.');
-    return { startedStone, startedNetldi };
+    return { startedStone: false, startedNetldi: false };
   }
 
-  if (!findStone(running)) {
-    // Checked here as well as in `prepareFiles`, because an extension update
-    // reaches this line without going through preparation at all: the engine
-    // is downloaded, the database exists, Grail is staged, so `isInstalled()`
-    // is true and the first thing that happens is a stone starting on a
-    // repository the new engine cannot read.
-    // NFS likewise: a database set up there before setup checked for it.
-    assertDatabaseIsLocal();
-    const engine = enginePath();
-    if (engine) assertDatabaseMatchesEngine(engine, engineVersion());
-    // A database an earlier GemDB created has no space limits yet, and the
-    // stone reserves the extent's full size as it starts.
-    ensureSpaceLimits();
-    // Every start, not once: the settings it is written from may have changed.
-    ensureStatmonitor();
-    assertRoomForExtent();
-    progress?.report({ message: 'Starting the database…' });
-    await startStone();
-    startedStone = true;
-  } else {
-    log('The database is already running.');
-  }
-  if (!findNetldi(running)) {
-    progress?.report({ message: 'Starting the session listener…' });
-    startedNetldi = await startNetldi();
-  } else {
-    log('The session listener is already running.');
-  }
-  return { startedStone, startedNetldi };
+  return ensureProcesses({
+    beforeStoneStart: () => {
+      assertSafeToStart();
+      // Every start, not once: the settings it is written from may have changed.
+      ensureStatmonitor();
+    },
+    report: (message) => progress?.report({ message }),
+  });
 }
 
 /**
@@ -899,7 +868,9 @@ export async function stop(): Promise<void> {
           listenerUp: () => isListening(),
           stopStone,
           stopNetldi,
-          startNetldi,
+          // Through the lock, like every other start: the window that declined
+          // is not the only one that may be putting the listener back.
+          startNetldi: () => ensureProcesses(),
           confirmForce,
           log,
         });

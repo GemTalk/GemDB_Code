@@ -12,8 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Starting GemDB while something else is starting it no longer reports a failure.** Pressing
   Start, running a notebook cell or opening the GemDB Shell while another window or terminal was
   bringing the database up could end in "Start session listener failed (exit code 1)", although the
-  database and its session listener were both running. A listener another process started first now
-  counts as started.
+  database and its session listener were both running. GemDB now checks for and starts the session
+  listener under the same lock as the database, so one start waits for the other, and a listener
+  started by an older GemDB in another editor counts as started.
+- **The GemDB Shell checks the database before starting it, as the window does.** Opening the
+  Shell with the database stopped started it without the checks the window makes first, so a
+  database the installed engine cannot read started and then refused every login, and one on a
+  network drive or a disk without room for it failed with the engine's own error. The Shell now
+  refuses with the same explanation the window gives, and applies the space limits a database
+  from an earlier GemDB is missing.
 
 ## [1.6.0] - 2026-10-07
 

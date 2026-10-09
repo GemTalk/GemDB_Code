@@ -4,7 +4,7 @@ import { stageGrail } from '../grail';
 import { adminAccount } from '../config';
 import { collectGarbage, parseSpaceReading } from '../maintenance';
 import { extentPath } from '../paths';
-import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
+import { ensureProcesses, isRunning, stopNetldi, stopStone } from '../processes';
 import { runPython } from '../pythonQueries';
 import { GciSession, SessionOwner, execute, logoutAll } from '../session';
 import {
@@ -74,8 +74,7 @@ beforeAll(async () => {
   const extentMb = fs.statSync(extentPath()).size / 1048576;
   limitTestDatabase(Math.ceil((extentMb + 192) / 16) * 16, THRESHOLD_MB);
   stageGrail(ext);
-  await startStone();
-  await startNetldi();
+  await ensureProcesses();
 });
 
 afterAll(async () => {

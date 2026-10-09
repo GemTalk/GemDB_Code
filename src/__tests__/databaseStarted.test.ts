@@ -50,16 +50,13 @@ vi.mock('../osConfig', async (importOriginal) => {
   };
 });
 
-const findStone = vi.fn(() => true);
-const findNetldi = vi.fn(() => true);
-const startStone = vi.fn(async () => {});
-const startNetldi = vi.fn(async (): Promise<boolean> => true);
+const nothingStarted = { startedStone: false, startedNetldi: false };
+const ensureProcesses = vi.fn(async () => nothingStarted);
 vi.mock('../processes', () => ({
   listProcesses: () => [],
-  findStone: () => findStone(),
-  findNetldi: () => findNetldi(),
-  startStone: () => startStone(),
-  startNetldi: () => startNetldi(),
+  findStone: () => true,
+  findNetldi: () => true,
+  ensureProcesses: () => ensureProcesses(),
   isListening: () => true,
   isRunning: () => true,
   stopNetldi: async () => {},
@@ -91,8 +88,7 @@ describe('databaseStarted', () => {
     ensureOsConfigured.mockReset().mockResolvedValue('alreadyConfigured');
     isSharedMemoryConfigured.mockReset().mockResolvedValue(true);
     fileInGrail.mockClear();
-    findStone.mockReturnValue(true);
-    findNetldi.mockReturnValue(true);
+    ensureProcesses.mockReset().mockResolvedValue(nothingStarted);
 
     const context = fakeExtensionContext();
     initTelemetry(context, false);
@@ -101,6 +97,9 @@ describe('databaseStarted', () => {
     initUnattendedSetupMarker(context.globalStorageUri.fsPath);
   });
 
+  // Also a window that pressed Start while another window, or the GemDB Shell,
+  // was starting the database: once it has the lock it finds both up and has
+  // started nothing, so the start is the other process's to report.
   it('sends nothing on a no-op call — everything already up, nothing prompted', async () => {
     const ok = await ensureRunning('/ext', TRIGGER.notebook);
 
@@ -124,27 +123,20 @@ describe('databaseStarted', () => {
   });
 
   it('sends started when the stone had to be started', async () => {
-    findStone.mockReturnValue(false);
+    ensureProcesses.mockResolvedValue({ startedStone: true, startedNetldi: false });
 
     const ok = await ensureRunning('/ext', TRIGGER.notebook);
 
     expect(ok).toBe(true);
-    expect(startStone).toHaveBeenCalledTimes(1);
     expect(eventsNamed('databaseStarted')).toHaveLength(1);
   });
 
-  it('counts a listener another process started in the meantime as a start, not a failure', async () => {
-    // Pressing Start while another window, or the GemDB Shell, is starting the
-    // database: both see no listener and the other one wins (#89).
-    findNetldi.mockReturnValue(false);
-    startNetldi.mockResolvedValueOnce(false);
+  it('sends started when only the listener had to be started', async () => {
+    ensureProcesses.mockResolvedValue({ startedStone: false, startedNetldi: true });
 
-    const ok = await ensureRunning('/ext', TRIGGER.startCommand);
+    await ensureRunning('/ext', TRIGGER.notebook);
 
-    expect(ok).toBe(true);
-    expect(eventsNamed('databaseStarted').map((e) => e.properties?.outcome)).not.toContain(
-      'startFailed',
-    );
+    expect(eventsNamed('databaseStarted')).toHaveLength(1);
   });
 
   it('reports a script that did not take as osConfigFailed, not a decline', async () => {
@@ -212,12 +204,10 @@ describe('resumeRunning', () => {
     grailNeedsUpdate.mockReturnValue(false);
     grailInstalled.mockReturnValue(true);
     isInstalled.mockReturnValue(true);
-    findStone.mockReturnValue(true);
-    findNetldi.mockReturnValue(true);
     ensureOsConfigured.mockReset().mockResolvedValue('alreadyConfigured');
     isSharedMemoryConfigured.mockReset().mockResolvedValue(true);
     fileInGrail.mockClear();
-    startStone.mockClear();
+    ensureProcesses.mockReset().mockResolvedValue(nothingStarted);
     initTelemetry(fakeExtensionContext(), false);
   });
 
@@ -228,7 +218,6 @@ describe('resumeRunning', () => {
     expect(await resumeRunning('/ext')).toBe(true);
 
     expect(fileInGrail).toHaveBeenCalledTimes(1);
-    expect(startStone).not.toHaveBeenCalled();
     expect(eventsNamed('databaseStarted').map((e) => e.properties)).toEqual([
       expect.objectContaining({
         trigger: 'autoStart',
