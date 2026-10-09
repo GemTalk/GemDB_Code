@@ -55,6 +55,11 @@ in progress and gets its result, and only the first caller reports telemetry —
 except after a Stop: a caller other than auto-start arriving once a Stop began
 during that bring-up waits for the Stop and starts again.
 
+Below it, the processes themselves start only through `ensureProcesses` in
+`processes.ts`, which checks and starts under the stone lock (NetLDI cannot be
+started any other way), and "ready" means gslist status `OK`, not "listed": a
+stone at `Startup` is listed and refuses logins, so wait on it, never start it.
+
 ## CI
 
 `.github/workflows/ci.yml`, two jobs split on what they need. `checks` runs
