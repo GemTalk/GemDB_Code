@@ -277,26 +277,44 @@ function fileSize(file: string): number {
   }
 }
 
-export async function startNetldi(): Promise<void> {
+/**
+ * Start the session listener. True when this call started it; false when
+ * `startnetldi` refused because another process had started it first.
+ *
+ * That race is not rare (#89): the window's start, the GemDB Shell's, and
+ * releases before this one, which start the listener without any lock, can
+ * all find it missing and start it together. The loser's `startnetldi` exits
+ * 1 with "Server 'gemdbldi' is already running", and everything the caller
+ * wanted is true, so a listener that is up and answering afterwards is not a
+ * failure. One that is not still fails with startnetldi's own words.
+ */
+export async function startNetldi(): Promise<boolean> {
   requireOwnDatabase('start');
   logStep('Starting the session listener');
   const env = engineEnvironment();
-  await runEngineCommand(
-    path.join(env.GEMSTONE, 'bin', 'startnetldi'),
-    // -a restricts logins to this user, -g runs sessions as that user without
-    // needing a host password. Together they are what lets GemDB log in with
-    // no operating-system credentials at all.
-    [
-      '-a',
-      os.userInfo().username,
-      '-g',
-      '-l',
-      path.join(databaseLogPath(), `${NETLDI_NAME}.log`),
-      NETLDI_NAME,
-    ],
-    env,
-    'Start session listener',
-  );
+  try {
+    await runEngineCommand(
+      path.join(env.GEMSTONE, 'bin', 'startnetldi'),
+      // -a restricts logins to this user, -g runs sessions as that user without
+      // needing a host password. Together they are what lets GemDB log in with
+      // no operating-system credentials at all.
+      [
+        '-a',
+        os.userInfo().username,
+        '-g',
+        '-l',
+        path.join(databaseLogPath(), `${NETLDI_NAME}.log`),
+        NETLDI_NAME,
+      ],
+      env,
+      'Start session listener',
+    );
+    return true;
+  } catch (e) {
+    if (findNetldi(await listProcessesAsync())?.status !== 'OK') throw e;
+    log('Another process started the session listener.');
+    return false;
+  }
 }
 
 /**

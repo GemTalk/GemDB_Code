@@ -53,7 +53,7 @@ vi.mock('../osConfig', async (importOriginal) => {
 const findStone = vi.fn(() => true);
 const findNetldi = vi.fn(() => true);
 const startStone = vi.fn(async () => {});
-const startNetldi = vi.fn(async () => {});
+const startNetldi = vi.fn(async (): Promise<boolean> => true);
 vi.mock('../processes', () => ({
   listProcesses: () => [],
   findStone: () => findStone(),
@@ -131,6 +131,20 @@ describe('databaseStarted', () => {
     expect(ok).toBe(true);
     expect(startStone).toHaveBeenCalledTimes(1);
     expect(eventsNamed('databaseStarted')).toHaveLength(1);
+  });
+
+  it('counts a listener another process started in the meantime as a start, not a failure', async () => {
+    // Pressing Start while another window, or the GemDB Shell, is starting the
+    // database: both see no listener and the other one wins (#89).
+    findNetldi.mockReturnValue(false);
+    startNetldi.mockResolvedValueOnce(false);
+
+    const ok = await ensureRunning('/ext', TRIGGER.startCommand);
+
+    expect(ok).toBe(true);
+    expect(eventsNamed('databaseStarted').map((e) => e.properties?.outcome)).not.toContain(
+      'startFailed',
+    );
   });
 
   it('reports a script that did not take as osConfigFailed, not a decline', async () => {
