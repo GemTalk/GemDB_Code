@@ -49,7 +49,9 @@ measured about when to ask for shared memory.
 whether the user pressed Start or just ran a notebook cell. It finishes any
 outstanding preparation, prompts for shared memory, starts the processes, files
 Grail in, and brings the MCP server up. New entry points that need a database
-should call it rather than checking and asking.
+should call it rather than checking and asking. Within a window it is
+single-flight (`singleFlight.ts`): a second caller waits for the call already
+in progress and gets its result, and only the first caller reports telemetry.
 
 ## CI
 

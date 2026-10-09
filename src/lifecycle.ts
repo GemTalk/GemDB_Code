@@ -503,9 +503,26 @@ export async function start(extensionPath: string): Promise<void> {
  * pointed at a new root path — and here the prompt is justified because the
  * user has asked for something that cannot happen without it.
  *
+ * At most one runs at a time in this window. Auto-start and a cell, two
+ * notebooks, or a cell and Start would otherwise each run the whole bring-up
+ * at once — two stone starts, two Grail file-ins, two MCP servers. A caller
+ * arriving while one is in progress joins it, from the shared-memory prompt to
+ * the last step, and gets its result. A joiner reports nothing:
+ * `databaseStarted` is sent once, by the caller that started the call, under
+ * that caller's trigger.
+ *
  * Returns true when the database is up and Python will run.
  */
-export async function ensureRunning(extensionPath: string, trigger: Trigger): Promise<boolean> {
+export function ensureRunning(extensionPath: string, trigger: Trigger): Promise<boolean> {
+  return bringUp.run(
+    () => ensureRunningOnce(extensionPath, trigger),
+    () => log('GemDB is already starting; waiting for it.'),
+  );
+}
+
+const bringUp = singleFlight<boolean>();
+
+async function ensureRunningOnce(extensionPath: string, trigger: Trigger): Promise<boolean> {
   const stopwatch = Stopwatch.start();
   const failed = (outcome: Exclude<DatabaseOutcome, typeof DATABASE_OUTCOME.started>): false => {
     reportDatabaseStarted(trigger, outcome, FILED_GRAIL.no, stopwatch.elapsedMs(), false);

@@ -30,6 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no setter. A method's receiver (`self`, or whatever the def calls it), a tuple's items, group
   rows and a saved stack's values cannot be changed, and VS Code does not offer Set Value on them.
 
+### Fixed
+
+- **Starting GemDB from two places at once starts it once.** A cell run while the database was
+  starting on its own, cells in two notebooks, or a cell and **GemDB: Start** each ran the whole
+  start: two stone starts, two installs of Python support, two MCP servers. Now whatever asks while
+  a start is under way in the same window waits for that start and gets its result.
+
 ## [1.6.0] - 2026-10-07
 
 The engine is unchanged at GemStone 4.0.0.a4, but start with a fresh database: delete
