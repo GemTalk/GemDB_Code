@@ -2,10 +2,10 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
-import { STONE_NAME, databasePasswordPath, rootPath } from './config';
+import { STONE_NAME, databasePasswordPath, engineVersion, rootPath } from './config';
 import { log, logStep } from './log';
 import { isOnNfs } from './networkFileSystem';
-import { databaseExists, databasePath, ensureRootPath, extentPath } from './paths';
+import { databaseExists, databasePath, enginePath, ensureRootPath, extentPath } from './paths';
 
 /**
  * Create the one database GemDB manages.
@@ -566,4 +566,25 @@ export function databaseOnNfsError(): DatabaseOnNfsError {
       'database engine will not open its files there. Choose a folder on a local disk ' +
       'for GemDB instead.',
   );
+}
+
+/**
+ * Everything checked, or put right, just before GemDB's own stone starts —
+ * from the window or from the GemDB Shell, so neither door starts a stone the
+ * other would have refused.
+ *
+ * The engine check is here as well as in `prepareFiles` because an extension
+ * update reaches a start without going through preparation at all: the engine
+ * is downloaded, the database exists, Grail is staged, so the first thing that
+ * happens is a stone starting on a repository the new engine cannot read. NFS
+ * likewise: a database set up there before setup checked for it. And a
+ * database an earlier GemDB created has no space limits yet, while the stone
+ * reserves the extent's full size as it starts.
+ */
+export function assertSafeToStart(): void {
+  assertDatabaseIsLocal();
+  const engine = enginePath();
+  if (engine) assertDatabaseMatchesEngine(engine, engineVersion());
+  ensureSpaceLimits();
+  assertRoomForExtent();
 }

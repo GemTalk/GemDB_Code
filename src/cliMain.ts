@@ -1,6 +1,13 @@
-import { abortIdleSessionsAfterMinutes } from './config';
+import { abortIdleSessionsAfterMinutes, externalDatabase } from './config';
+import { assertSafeToStart } from './database';
 import { errorMessage } from './log';
-import { findNetldi, findStone, startNetldi, startStone } from './processes';
+import {
+  ensureProcesses,
+  externalDatabaseDownError,
+  findNetldi,
+  findStone,
+  listProcesses,
+} from './processes';
 import { PyRepl, ReplSession } from './pyRepl';
 import { runPythonInSession } from './pythonQueries';
 import { GciSession, setInputHandler } from './session';
@@ -25,16 +32,30 @@ import { GciSession, setInputHandler } from './session';
  * Bring the database up, the same judgement the wrapper makes for a file run:
  * asking for the shell is asking for a running database. Unlike the wrapper's
  * file mode — a linked gem, needing only the stone — a shell session arrives
- * through the listener, so both are ensured. Errors are reported rather than
- * thrown: the shell prompt (or the exit code) is the caller's answer.
+ * through the listener, so both are ensured. Both go through
+ * `ensureProcesses`, the same locked path the window takes, so a Shell opened while a window is
+ * starting the database waits for it rather than racing it. The stone gets the
+ * window's pre-start guards too, all but statmonitor, whose configuration
+ * comes from editor settings the Shell does not have: `system.conf` keeps
+ * whatever the window's last start wrote.
+ *
+ * An external database is only checked, as the window checks it: GemDB starts
+ * none of it. Errors are reported rather than thrown: the shell prompt (or the
+ * exit code) is the caller's answer.
  */
 async function ensureDatabase(): Promise<boolean> {
   try {
-    if (!findStone()) {
-      process.stderr.write('gemdb: starting the database…\r\n');
-      await startStone();
+    const external = externalDatabase();
+    if (external) {
+      const running = listProcesses();
+      if (!findStone(running) || !findNetldi(running)) throw externalDatabaseDownError(external);
+    } else {
+      await ensureProcesses({
+        beforeStoneStart: assertSafeToStart,
+        report: (message) =>
+          process.stderr.write(`gemdb: ${message.charAt(0).toLowerCase()}${message.slice(1)}\r\n`),
+      });
     }
-    if (!findNetldi()) await startNetldi();
     return true;
   } catch (e) {
     // Raw mode may be on by now, so bare `\n` would stairstep the message.

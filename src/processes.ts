@@ -191,6 +191,80 @@ function requireOwnDatabase(action: string): void {
   );
 }
 
+/**
+ * What to say when an external database is not up: GemDB does not start it,
+ * so the sentence says who does.
+ */
+export function externalDatabaseDownError(external: {
+  stone: string;
+  netldi: string;
+}): ExternalDatabaseError {
+  return new ExternalDatabaseError(
+    `The database is not running: GemDB expects stone ${external.stone} and NetLDI ` +
+      `${external.netldi}, which this machine's administrator runs. Ask them to start it.`,
+  );
+}
+
+/**
+ * Bring up whichever of the stone and the session listener is not already
+ * up, and say which of them this call started.
+ *
+ * Every start of GemDB's own database goes through here — the window's, the
+ * GemDB Shell's, and the listener a declined force-stop puts back — and all
+ * of it happens under the stone lock the `gemdb` wrapper also takes. Checking
+ * and starting have to be one step: checked outside the lock, two callers
+ * that both found the listener missing both ran `startnetldi`, and the loser
+ * reported a failure over a database that was up. So the look happens inside
+ * the lock, and a caller that queued behind whoever was starting it finds
+ * everything up and starts nothing. For the same reason, both coming up while
+ * we wait for the lock ends the wait, with nothing started.
+ *
+ * `beforeStoneStart` runs only when this call is about to start the stone:
+ * the guards that refuse a stone that should not start belong there, not on
+ * every call. `report` hears each step as it begins, for a progress
+ * notification or a terminal.
+ */
+export async function ensureProcesses(
+  opts: { beforeStoneStart?: () => void; report?: (message: string) => void } = {},
+): Promise<{ startedStone: boolean; startedNetldi: boolean }> {
+  requireOwnDatabase('start');
+  const started = await withStoneLock(
+    async () => {
+      let startedStone = false;
+      if (!findStone(await listProcessesAsync())) {
+        opts.beforeStoneStart?.();
+        opts.report?.('Starting the database…');
+        logStep('Starting the database');
+        await runStartstone();
+        startedStone = true;
+      } else {
+        log('The database is already running.');
+      }
+
+      let startedNetldi = false;
+      if (!findNetldi(await listProcessesAsync())) {
+        opts.report?.('Starting the session listener…');
+        startedNetldi = await startNetldi();
+      } else {
+        log('The session listener is already running.');
+      }
+      return { startedStone, startedNetldi };
+    },
+    {
+      satisfied: async () => {
+        const running = await listProcessesAsync();
+        return findStone(running)?.status === 'OK' && findNetldi(running)?.status === 'OK';
+      },
+    },
+  );
+  return started ?? { startedStone: false, startedNetldi: false };
+}
+
+/**
+ * Start the stone alone, for what needs no session listener: the `gemdb`
+ * wrapper's file runs are linked sessions, and so are the tests that use this.
+ * Under the same lock as {@link ensureProcesses}.
+ */
 export async function startStone(): Promise<void> {
   requireOwnDatabase('start');
   // Under the lock the generated `gemdb` wrapper also takes, because both
@@ -205,30 +279,38 @@ export async function startStone(): Promise<void> {
         return;
       }
       logStep(`Starting the database`);
-      const env = engineEnvironment();
-      const stoneLog = path.join(databaseLogPath(), `${STONE_NAME}.log`);
-      const logSizeBefore = fileSize(stoneLog);
-      try {
-        await runEngineCommand(
-          path.join(env.GEMSTONE, 'bin', 'startstone'),
-          ['-l', stoneLog, STONE_NAME],
-          env,
-          'Start database',
-        );
-      } catch (e) {
-        if (refusedNfs(e, stoneLog, logSizeBefore)) throw databaseOnNfsError();
-        if (stoneLogSays(/No space left on device/, e, stoneLog, logSizeBefore)) {
-          throw new DiskSpaceError(
-            'The GemDB database could not start: the disk ran out of space while it reserved ' +
-              'its extent. Free some disk space, or set gemdb.rootPath to a folder on a disk ' +
-              'with more room, then start GemDB again.',
-          );
-        }
-        throw e;
-      }
+      await runStartstone();
     },
     { satisfied: isRunningAsync },
   );
+}
+
+/**
+ * Run `startstone`, turning the two refusals the stone explains only in its
+ * log into errors that say what to do. The caller holds the stone lock.
+ */
+async function runStartstone(): Promise<void> {
+  const env = engineEnvironment();
+  const stoneLog = path.join(databaseLogPath(), `${STONE_NAME}.log`);
+  const logSizeBefore = fileSize(stoneLog);
+  try {
+    await runEngineCommand(
+      path.join(env.GEMSTONE, 'bin', 'startstone'),
+      ['-l', stoneLog, STONE_NAME],
+      env,
+      'Start database',
+    );
+  } catch (e) {
+    if (refusedNfs(e, stoneLog, logSizeBefore)) throw databaseOnNfsError();
+    if (stoneLogSays(/No space left on device/, e, stoneLog, logSizeBefore)) {
+      throw new DiskSpaceError(
+        'The GemDB database could not start: the disk ran out of space while it reserved ' +
+          'its extent. Free some disk space, or set gemdb.rootPath to a folder on a disk ' +
+          'with more room, then start GemDB again.',
+      );
+    }
+    throw e;
+  }
 }
 
 /**
@@ -281,15 +363,18 @@ function fileSize(file: string): number {
  * Start the session listener. True when this call started it; false when
  * `startnetldi` refused because another process had started it first.
  *
+ * Not exported: the listener starts only through {@link ensureProcesses},
+ * under the stone lock.
+ *
  * That race is not rare (#89): the window's start, the GemDB Shell's, and
  * releases before this one, which start the listener without any lock, can
  * all find it missing and start it together. The loser's `startnetldi` exits
  * 1 with "Server 'gemdbldi' is already running", and everything the caller
  * wanted is true, so a listener that is up and answering afterwards is not a
- * failure. One that is not still fails with startnetldi's own words.
+ * failure. One that is not still fails with startnetldi's own words. The lock
+ * closes the race between GemDB's own callers; this covers what takes no lock.
  */
-export async function startNetldi(): Promise<boolean> {
-  requireOwnDatabase('start');
+async function startNetldi(): Promise<boolean> {
   logStep('Starting the session listener');
   const env = engineEnvironment();
   try {

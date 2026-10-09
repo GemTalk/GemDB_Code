@@ -5,12 +5,12 @@ import { createDatabase } from '../database';
 import { isSharedMemoryConfigured } from '../osConfig';
 import { databaseExists, databaseStatPath, extentPath } from '../paths';
 import {
+  ensureProcesses,
   findNetldi,
   findStone,
   isListening,
   isRunning,
   listProcesses,
-  startNetldi,
   startStone,
   stopNetldi,
   stopStone,
@@ -81,8 +81,7 @@ describe.skipIf(!makeFixtureIsPossible())('a real database', () => {
   it('starts, and reports itself through gslist', async () => {
     // As startProcesses does before every start.
     ensureStatmonitor();
-    await startStone();
-    await startNetldi();
+    await ensureProcesses();
     ensureDatabaseAccount();
 
     const processes = listProcesses();

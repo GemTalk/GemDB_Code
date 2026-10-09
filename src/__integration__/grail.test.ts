@@ -5,7 +5,7 @@ import { createDatabase } from '../database';
 import { bundledGrailStamp, installGrail, recordGrailInstalled, stageGrail } from '../grail';
 import { isSharedMemoryConfigured } from '../osConfig';
 import { grailInstalled, grailStagedOnDisk } from '../paths';
-import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
+import { ensureProcesses, isRunning, stopNetldi, stopStone } from '../processes';
 import {
   isErrorResult,
   isGrailInstalled,
@@ -61,8 +61,7 @@ beforeAll(async () => {
 
   createDatabase(fixture.engine);
   limitTestDatabase();
-  await startStone();
-  await startNetldi();
+  await ensureProcesses();
   // Grail installs into the gemdb account, as `ensureRunning` creates it.
   ensureDatabaseAccount();
 });

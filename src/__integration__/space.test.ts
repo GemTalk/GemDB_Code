@@ -12,7 +12,7 @@ import {
   stopDatabaseSession,
 } from '../maintenance';
 import { databaseLogPath, extentPath } from '../paths';
-import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
+import { ensureProcesses, isRunning, stopNetldi, stopStone } from '../processes';
 import { isErrorResult, runPython } from '../pythonQueries';
 import {
   GciSession,
@@ -69,8 +69,7 @@ beforeAll(async () => {
   if (!fixture) return;
   createDatabaseWithPython(fixture);
   stageGrail(ext);
-  await startStone();
-  await startNetldi();
+  await ensureProcesses();
 });
 
 afterAll(async () => {
