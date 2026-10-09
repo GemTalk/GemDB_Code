@@ -656,6 +656,12 @@ function grailFileInDue(extensionPath: string): boolean {
  * Installing is separate from running, as with Grail: the classes are filed
  * into the database once per payload build, and the router is forked whenever
  * one is not already listening.
+ *
+ * At most one runs at a time in this window. `ensureRunning` and activation's
+ * `resumeMcpServing` both come here, and two at once would install the
+ * classes twice and race to fork two routers onto one port. A caller arriving
+ * while one is in progress waits for it and gets its result; its progress
+ * notification says nothing about the MCP server meanwhile.
  */
 async function ensureMcpServing(
   extensionPath: string,
@@ -668,7 +674,18 @@ async function ensureMcpServing(
     log('This build of GemDB ships no MCP server payload, so there is none to run.');
     return false;
   }
+  return mcpServing.run(
+    () => ensureMcpServingOnce(extensionPath, progress),
+    () => log('The MCP server is already starting; waiting for it.'),
+  );
+}
 
+const mcpServing = singleFlight<boolean>();
+
+async function ensureMcpServingOnce(
+  extensionPath: string,
+  progress?: vscode.Progress<{ message?: string }>,
+): Promise<boolean> {
   try {
     if (mcpNeedsUpdate(extensionPath)) {
       const stamp = bundledMcpStamp(extensionPath);
