@@ -62,7 +62,8 @@ vi.mock('../lock', async (importOriginal) => {
 });
 
 const { expectedEnginePath } = await import('../paths');
-const { ensureProcesses } = await import('../processes');
+const { ensureProcesses, stoneReady, waitForStoneReady } = await import('../processes');
+const { parseGslist } = await import('../gslist');
 
 function row(status: string, type: 'Stone' | 'Netldi', name: string): string {
   return `${status.padEnd(12)} 4.0.0.a4  me      79386 51475 Sep 28 19:31 ${type.padEnd(7)} ${name}`;
@@ -70,6 +71,7 @@ function row(status: string, type: 'Stone' | 'Netldi', name: string): string {
 
 const STONE_UP = row('OK', 'Stone', 'gemdb');
 const LISTENER_UP = row('OK', 'Netldi', 'gemdbldi');
+const STONE_STARTING = row('Startup', 'Stone', 'gemdb');
 const BOTH_UP = [STONE_UP, LISTENER_UP].join('\n');
 
 let root: string;
@@ -103,7 +105,7 @@ describe('ensureProcesses', () => {
   });
 
   it('starts both, guards first, when neither is up', async () => {
-    listings = ['', '', BOTH_UP];
+    listings = ['', STONE_UP];
     const beforeStoneStart = vi.fn(() => {
       expect(spawned).toEqual([]);
     });
@@ -153,7 +155,7 @@ describe('ensureProcesses', () => {
     // Both saw no listener; the other one won, so startnetldi refuses with
     // "already running" and the re-list shows the listener answering.
     exitCodes.startnetldi = 1;
-    listings = [STONE_UP, STONE_UP, BOTH_UP];
+    listings = [STONE_UP, STONE_UP, STONE_UP, BOTH_UP];
 
     const started = await ensureProcesses();
 
@@ -175,6 +177,7 @@ describe('ensureProcesses', () => {
     listings = [
       STONE_UP,
       STONE_UP,
+      STONE_UP,
       [STONE_UP, row('exe deleted', 'Netldi', 'gemdbldi')].join('\n'),
     ];
 
@@ -192,6 +195,54 @@ describe('ensureProcesses', () => {
     expect(await check(BOTH_UP)).toBe(true);
     expect(await check(STONE_UP)).toBe(false);
     expect(await check(LISTENER_UP)).toBe(false);
-    expect(await check([row('Startup', 'Stone', 'gemdb'), LISTENER_UP].join('\n'))).toBe(false);
+    expect(await check([STONE_STARTING, LISTENER_UP].join('\n'))).toBe(false);
+  });
+});
+
+describe('a stone that is still starting', () => {
+  it('is listed, but not ready for a login', () => {
+    const processes = parseGslist(STONE_STARTING);
+
+    expect(processes).toHaveLength(1);
+    expect(stoneReady(processes)).toBe(false);
+  });
+
+  it('is waited for until it reports OK', async () => {
+    listings = [STONE_STARTING, STONE_STARTING, STONE_UP];
+    const report = vi.fn();
+
+    await waitForStoneReady(report, { pollMs: 1 });
+
+    expect(report).toHaveBeenCalledWith('Waiting for the database to finish starting…');
+    expect(listings).toEqual([STONE_UP]);
+  });
+
+  it('is given up on after the timeout, naming the stone’s log', async () => {
+    listings = [STONE_STARTING];
+
+    const wait = waitForStoneReady(undefined, { pollMs: 1, timeoutMs: 20 });
+
+    await expect(wait).rejects.toThrow(/starting for over a minute\. See .*gemdb\.log/);
+  });
+
+  it('is an error when it disappears instead of finishing', async () => {
+    listings = [STONE_STARTING, ''];
+
+    const wait = waitForStoneReady(undefined, { pollMs: 1 });
+
+    await expect(wait).rejects.toThrow(/stopped while it was starting/);
+  });
+
+  it('holds back the listener until it is ready', async () => {
+    listings = [STONE_STARTING, STONE_STARTING, STONE_UP];
+    const report = vi.fn();
+
+    const started = await ensureProcesses({ report });
+
+    expect(started).toEqual({ startedStone: false, startedNetldi: true });
+    expect(report.mock.calls.map(([message]) => message)).toEqual([
+      'Waiting for the database to finish starting…',
+      'Starting the session listener…',
+    ]);
   });
 });

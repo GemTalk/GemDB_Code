@@ -16,7 +16,7 @@ import {
 } from './config';
 import { libraryPathVariable, sharedLibraryExtension } from './platform';
 import { log, logStep } from './log';
-import { withStoneLock } from './lock';
+import { STONE_LOCK_POLL_MS, STONE_LOCK_TIMEOUT_MS, withStoneLock } from './lock';
 import { DiskSpaceError, databaseOnNfsError } from './database';
 import { EngineProcess, parseGslist } from './gslist';
 import { databaseConfPath, databaseLogPath, databasePath, enginePath, grailPath } from './paths';
@@ -171,6 +171,55 @@ export function isListening(processes = listProcesses()): boolean {
 }
 
 /**
+ * True when the stone has finished starting and will take a login.
+ *
+ * Not the same question as {@link isRunning}. `gslist` lists a stone from the
+ * moment it exists, and one recovering from a crash sits at `Startup` for as
+ * long as recovery takes; a login in that time fails. So whatever is about to
+ * log in waits for `OK`, while the status bar and maintenance, which ask
+ * whether there is a stone at all, keep asking that.
+ */
+export function stoneReady(processes: EngineProcess[]): boolean {
+  return findStone(processes)?.status === 'OK';
+}
+
+/** True when the listener is up and answering, the listener's half of {@link stoneReady}. */
+export function listenerReady(processes: EngineProcess[]): boolean {
+  return findNetldi(processes)?.status === 'OK';
+}
+
+/**
+ * Wait for a listed stone to finish starting.
+ *
+ * Returns at once for a stone that is ready. One this process did not start —
+ * a crash being recovered, or one an older GemDB started without waiting — is
+ * polled until it reports `OK`. A stone that disappears while we wait failed
+ * to start, and one still starting after a minute is not going to soon; both
+ * end in an error naming the stone's log, which says why.
+ */
+export async function waitForStoneReady(
+  report?: (message: string) => void,
+  wait: { pollMs?: number; timeoutMs?: number } = {},
+): Promise<void> {
+  if (stoneReady(await listProcessesAsync())) return;
+  report?.('Waiting for the database to finish starting…');
+  log('The database is still starting; waiting for it.');
+  const stoneLog = path.join(databaseLogPath(), `${STONE_NAME}.log`);
+  const deadline = Date.now() + (wait.timeoutMs ?? STONE_LOCK_TIMEOUT_MS);
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, wait.pollMs ?? STONE_LOCK_POLL_MS));
+    const running = await listProcessesAsync();
+    if (stoneReady(running)) return;
+    if (!findStone(running)) {
+      throw new Error(`The database stopped while it was starting. See ${stoneLog}.`);
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`The database has been starting for over a minute. See ${stoneLog}.`);
+    }
+  }
+}
+
+/**
  * Raised when something asks GemDB to start or stop a database it does not
  * run. See {@link externalDatabase} for why that is refused, not attempted.
  */
@@ -240,6 +289,7 @@ export async function ensureProcesses(
       } else {
         log('The database is already running.');
       }
+      await waitForStoneReady(opts.report);
 
       let startedNetldi = false;
       if (!findNetldi(await listProcessesAsync())) {
@@ -253,7 +303,7 @@ export async function ensureProcesses(
     {
       satisfied: async () => {
         const running = await listProcessesAsync();
-        return findStone(running)?.status === 'OK' && findNetldi(running)?.status === 'OK';
+        return stoneReady(running) && listenerReady(running);
       },
     },
   );
@@ -276,12 +326,13 @@ export async function startStone(): Promise<void> {
     async () => {
       if (isRunning()) {
         log('The database is already running; nothing to start.');
-        return;
+      } else {
+        logStep(`Starting the database`);
+        await runStartstone();
       }
-      logStep(`Starting the database`);
-      await runStartstone();
+      await waitForStoneReady();
     },
-    { satisfied: isRunningAsync },
+    { satisfied: async () => stoneReady(await listProcessesAsync()) },
   );
 }
 
@@ -396,7 +447,7 @@ async function startNetldi(): Promise<boolean> {
     );
     return true;
   } catch (e) {
-    if (findNetldi(await listProcessesAsync())?.status !== 'OK') throw e;
+    if (!listenerReady(await listProcessesAsync())) throw e;
     log('Another process started the session listener.');
     return false;
   }
