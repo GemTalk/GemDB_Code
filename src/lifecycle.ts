@@ -787,8 +787,7 @@ async function startProcesses(
   }
   if (!findNetldi(running)) {
     progress?.report({ message: 'Starting the session listener…' });
-    await startNetldi();
-    startedNetldi = true;
+    startedNetldi = await startNetldi();
   } else {
     log('The session listener is already running.');
   }
@@ -819,7 +818,7 @@ export interface StopWorld {
   listenerUp: () => boolean;
   stopStone: (force: boolean) => Promise<void>;
   stopNetldi: () => Promise<void>;
-  startNetldi: () => Promise<void>;
+  startNetldi: () => Promise<unknown>;
   /** Ask whether to disconnect the sessions that are in the way. */
   confirmForce: (reason: string) => Promise<boolean>;
   log: (message: string) => void;

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Starting GemDB while something else is starting it no longer reports a failure.** Pressing
+  Start, running a notebook cell or opening the GemDB Shell while another window or terminal was
+  bringing the database up could end in "Start session listener failed (exit code 1)", although the
+  database and its session listener were both running. A listener another process started first now
+  counts as started.
+
 ## [1.6.0] - 2026-10-07
 
 The engine is unchanged at GemStone 4.0.0.a4, but start with a fresh database: delete
