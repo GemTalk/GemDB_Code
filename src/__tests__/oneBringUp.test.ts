@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { __resetSettings } from '../__mocks__/vscode';
+import { __resetSettings, __setSetting } from '../__mocks__/vscode';
 import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 
 // `ensureRunning` is single-flight within a window: two notebooks and Start
@@ -65,6 +65,22 @@ vi.mock('../processes', () => ({
   stopStone: async () => {},
 }));
 
+// The MCP server is off unless a test turns `gemdb.mcp.enabled` on.
+const mcpNeedsUpdate = vi.fn(() => false);
+const installMcp = vi.fn(async () => {});
+const isMcpRunning = vi.fn(async () => false);
+const startMcpServer = vi.fn(async () => true);
+vi.mock('../mcp', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../mcp')>()),
+  bundledMcpStamp: () => 'mcp=abc\n',
+  mcpNeedsUpdate: () => mcpNeedsUpdate(),
+  stageMcp: () => {},
+  installMcp: () => installMcp(),
+  recordMcpInstalled: () => {},
+  isMcpRunning: () => isMcpRunning(),
+  startMcpServer: () => startMcpServer(),
+}));
+
 vi.mock('../platform', () => ({ isSupportedPlatform: () => true, setContext: () => {} }));
 vi.mock('../autoStart', () => ({
   allowAutoStart: () => {},
@@ -73,7 +89,7 @@ vi.mock('../autoStart', () => ({
   suppressAutoStart: () => {},
 }));
 
-const { ensureRunning } = await import('../lifecycle');
+const { ensureRunning, resumeMcpServing } = await import('../lifecycle');
 const { TRIGGER, initTelemetry } = await import('../telemetry');
 const { initUnattendedSetupMarker } = await import('../unattendedSetupMarker');
 
@@ -162,5 +178,44 @@ describe('ensureRunning', () => {
 
     expect(ensureOsConfigured).toHaveBeenCalledTimes(2);
     expect(startStone).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Activation's `resumeMcpServing` and a cell's `ensureRunning` both reach
+// `ensureMcpServing`; on a running stone they would otherwise install the
+// classes twice and fork two routers at one port.
+describe('ensureMcpServing', () => {
+  beforeEach(() => {
+    __resetSettings();
+    __setSetting('gemdb.mcp.enabled', true);
+    grailNeedsUpdate.mockReturnValue(false);
+    grailInstalled.mockReturnValue(true);
+    isInstalled.mockReturnValue(true);
+    ensureOsConfigured.mockReset().mockResolvedValue('alreadyConfigured');
+    findStone.mockReturnValue(true);
+    findNetldi.mockReturnValue(true);
+    mcpNeedsUpdate.mockReturnValue(true);
+    installMcp.mockReset();
+    isMcpRunning.mockReset().mockResolvedValue(false);
+    startMcpServer.mockReset().mockResolvedValue(true);
+
+    const context = fakeExtensionContext();
+    initTelemetry(context, false);
+    initUnattendedSetupMarker(context.globalStorageUri.fsPath);
+  });
+
+  it('installs and starts the MCP server once when resume and a start overlap', async () => {
+    const install = deferred();
+    installMcp.mockImplementation(() => install.promise);
+
+    const resumed = resumeMcpServing('/ext');
+    const started = ensureRunning('/ext', TRIGGER.notebook);
+    // Let both callers reach the MCP step before the install finishes.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    install.resolve();
+
+    expect(await Promise.all([resumed, started])).toEqual([true, true]);
+    expect(installMcp).toHaveBeenCalledTimes(1);
+    expect(startMcpServer).toHaveBeenCalledTimes(1);
   });
 });

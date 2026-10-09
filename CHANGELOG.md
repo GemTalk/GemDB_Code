@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both could open two `sudo` terminals. Now the second waits for the first answer. Running
   **GemDB: Configure Shared Memory** while that setup is already running waits for it instead of
   opening another terminal.
+- **The MCP server is installed and started once when GemDB starts.** Opening a window on a running
+  database while a cell started it could install the MCP server's classes twice and start two
+  servers on one port. Now the second waits for the first.
 
 ## [1.6.0] - 2026-10-07
 
