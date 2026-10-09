@@ -77,6 +77,18 @@ describe('parseGslist', () => {
     expect(netldi.responding).toBe(false);
   });
 
+  it('reads a stone that is still starting, listed but not yet responding', () => {
+    // A stone is listed from the moment it exists, and sits at `Startup` while
+    // it recovers from a crash; a login in that time fails.
+    const output = 'Startup      4.0.0.a4  jfoster      79386 51475 Sep 28 19:31 Stone       gemdb';
+
+    const [stone] = parseGslist(output);
+
+    expect(stone.name).toBe('gemdb');
+    expect(stone.status).toBe('Startup');
+    expect(stone.responding).toBe(false);
+  });
+
   it('treats anything other than OK as not responding', () => {
     const output =
       'frozen       4.0.0.Alpha jfoster      56970 65107 Sep 11 16:46 Stone       gemdb';
