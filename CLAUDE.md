@@ -51,6 +51,11 @@ outstanding preparation, prompts for shared memory, starts the processes, files
 Grail in, and brings the MCP server up. New entry points that need a database
 should call it rather than checking and asking.
 
+Below it, the processes themselves start only through `ensureProcesses` in
+`processes.ts`, which checks and starts under the stone lock (NetLDI cannot be
+started any other way), and "ready" means gslist status `OK`, not "listed": a
+stone at `Startup` is listed and refuses logins, so wait on it, never start it.
+
 ## CI
 
 `.github/workflows/ci.yml`, two jobs split on what they need. `checks` runs
