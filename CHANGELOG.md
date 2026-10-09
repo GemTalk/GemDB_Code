@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   starting on its own, cells in two notebooks, or a cell and **GemDB: Start** each ran the whole
   start: two stone starts, two installs of Python support, two MCP servers. Now whatever asks while
   a start is under way in the same window waits for that start and gets its result.
+- **GemDB asks about shared memory once, even when two things need it.** A cell run while the
+  first-run question about shared memory was still open queued a second copy of it, and answering
+  both could open two `sudo` terminals. Now the second waits for the first answer. Running
+  **GemDB: Configure Shared Memory** while that setup is already running waits for it instead of
+  opening another terminal.
 
 ## [1.6.0] - 2026-10-07
 
