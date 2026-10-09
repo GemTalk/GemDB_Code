@@ -419,10 +419,11 @@ function fileSize(file: string): number {
  *
  * That race is not rare (#89): the window's start, the GemDB Shell's, and
  * releases before this one, which start the listener without any lock, can
- * all find it missing and start it together. The loser's `startnetldi` exits
- * 1 with "Server 'gemdbldi' is already running", and everything the caller
- * wanted is true, so a listener that is up and answering afterwards is not a
- * failure. One that is not still fails with startnetldi's own words. The lock
+ * all find it missing and start it together. The loser's `startnetldi` fails
+ * — exit 1, "Server 'gemdbldi' is already running", when the winner is fully
+ * up; exit 3, "could not start server" over the winner's lock file, when the
+ * two overlap — and everything the caller wanted is true, so a listener that
+ * is up and answering afterwards is not a failure. One that is not still fails with startnetldi's own words. The lock
  * closes the race between GemDB's own callers; this covers what takes no lock.
  */
 async function startNetldi(): Promise<boolean> {
