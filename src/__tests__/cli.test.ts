@@ -310,9 +310,10 @@ describe('putCliOnPath', () => {
  * `gslist` showed one row for them because it keys Stone rows by name.
  *
  * The stubs stand in for the engine binaries the wrapper calls by absolute
- * path. `startstone` records that it ran and leaves a marker; `gslist` reports
- * a stone only once that marker exists, so a wrapper that re-checks after
- * taking the lock sees what a real one would.
+ * path. `startstone` records that it ran and leaves a marker holding the
+ * stone's status; `gslist` reports a stone, with that status, only once the
+ * marker exists, so a wrapper that re-checks after taking the lock sees what
+ * a real one would.
  */
 describe('starting the database', () => {
   function installEngineStubs(): { starts: string } {
@@ -320,25 +321,53 @@ describe('starting the database', () => {
     fs.mkdirSync(bin, { recursive: true });
     const marker = path.join(root, 'stone.up');
     const starts = path.join(root, 'starts.log');
+    const countdown = path.join(root, 'stone.countdown');
+    const next = path.join(root, 'stone.next');
 
     fs.writeFileSync(
       path.join(bin, 'gslist'),
-      `#!/bin/sh\n[ -f '${marker}' ] && echo 'exists 4.0.0 me 1 1 x Stone gemdb'\nexit 0\n`,
+      [
+        '#!/bin/sh',
+        // A stone that changes state on its own: see stoneBecomes.
+        `if [ -f '${countdown}' ]; then`,
+        `  n=$(cat '${countdown}')`,
+        `  if [ "$n" -le 0 ]; then`,
+        `    rm -f '${countdown}'`,
+        `    if [ -f '${next}' ]; then mv '${next}' '${marker}'; else rm -f '${marker}'; fi`,
+        `  else echo $((n - 1)) > '${countdown}'; fi`,
+        'fi',
+        `[ -f '${marker}' ] && echo "$(cat '${marker}') 4.0.0 me 1 1 x Stone gemdb"`,
+        'exit 0',
+        '',
+      ].join('\n'),
     );
     fs.writeFileSync(
       path.join(bin, 'startstone'),
-      `#!/bin/sh\nsleep 0.2\necho started >> '${starts}'\ntouch '${marker}'\nexit 0\n`,
+      `#!/bin/sh\nsleep 0.2\necho started >> '${starts}'\necho OK > '${marker}'\nexit 0\n`,
     );
     fs.chmodSync(path.join(bin, 'gslist'), 0o755);
     fs.chmodSync(path.join(bin, 'startstone'), 0o755);
     return { starts };
   }
 
+  /**
+   * Leave a stone at `status` that becomes `then` (or disappears, when
+   * undefined) after `calls` gslist calls — the wrapper's own pace rather than
+   * the clock's, since how long it takes to reach its stone checks varies.
+   */
+  function stoneBecomes(status: string, then: string | undefined, calls: number): void {
+    fs.writeFileSync(path.join(root, 'stone.up'), status);
+    if (then !== undefined) fs.writeFileSync(path.join(root, 'stone.next'), then);
+    fs.writeFileSync(path.join(root, 'stone.countdown'), String(calls));
+  }
+
   /** Run the wrapper on a path that does not exist: it exits after the
    *  stone-start block and before topaz, which is the part under test. */
-  function runWrapper(): Promise<void> {
+  function runWrapper(): Promise<string> {
     return new Promise((resolve) => {
-      execFile(cliPath(), [path.join(root, 'nothing-here.py')], () => resolve());
+      execFile(cliPath(), [path.join(root, 'nothing-here.py')], (_error, _stdout, stderr) =>
+        resolve(stderr),
+      );
     });
   }
 
@@ -378,7 +407,7 @@ describe('starting the database', () => {
     const lock = path.join(root, '.gemdb-stone.lock');
     fs.mkdirSync(lock);
     // The "other process" finishes: the stone comes up while the wrapper waits.
-    setTimeout(() => fs.writeFileSync(path.join(root, 'stone.up'), ''), 300);
+    setTimeout(() => fs.writeFileSync(path.join(root, 'stone.up'), 'OK'), 300);
 
     await runWrapper();
 
@@ -407,7 +436,7 @@ describe('starting the database', () => {
     const lock = path.join(root, '.gemdb-stone.lock');
     fs.writeFileSync(
       path.join(bin, 'startstone'),
-      `#!/bin/sh\necho ${process.pid} > '${lock}/pid'\ntouch '${path.join(root, 'stone.up')}'\nexit 0\n`,
+      `#!/bin/sh\necho ${process.pid} > '${lock}/pid'\necho OK > '${path.join(root, 'stone.up')}'\nexit 0\n`,
     );
 
     await runWrapper();
@@ -464,5 +493,31 @@ describe('starting the database', () => {
       ? fs.readFileSync(starts, 'utf8').trim().split('\n').filter(Boolean).length
       : 0;
     expect(started).toBe(1);
+  });
+  it('waits for a stone that is still starting instead of starting a second one', async () => {
+    // Listed at Startup with nobody holding the lock: a crash being recovered,
+    // or a start by a GemDB that does not wait for OK.
+    writeCliScripts(ext);
+    const { starts } = installEngineStubs();
+    // Still starting for the first check, the re-check in the lock, and the
+    // first wait for it.
+    stoneBecomes('Startup', 'OK', 3);
+
+    const stderr = await runWrapper();
+
+    expect(fs.existsSync(starts)).toBe(false);
+    expect(stderr).toContain('waiting for the database to finish starting');
+    expect(stderr).toContain("can't open file");
+  });
+
+  it('names the stone log when a stone that was starting disappears', async () => {
+    writeCliScripts(ext);
+    const { starts } = installEngineStubs();
+    stoneBecomes('Startup', undefined, 3);
+
+    const stderr = await runWrapper();
+
+    expect(fs.existsSync(starts)).toBe(false);
+    expect(stderr).toMatch(/stopped while it was starting\. See .*gemdb\.log/);
   });
 });

@@ -17,7 +17,7 @@ import {
   stopMcpServer,
 } from '../mcp';
 import { mcpInstalled, mcpRouterStatePath, mcpStagedOnDisk } from '../paths';
-import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
+import { ensureProcesses, isRunning, stopNetldi, stopStone } from '../processes';
 import { GciSession, execute, logoutAll } from '../session';
 import { createDatabaseWithPython, Fixture, haveTestExtent, makeFixture } from './fixture';
 
@@ -73,8 +73,7 @@ beforeAll(async () => {
   // Grail's files on disk, because the router's worker gems inherit the
   // NetLDI's environment and resolve Python modules through GRAIL_DIR.
   stageGrail(ext);
-  await startStone();
-  await startNetldi();
+  await ensureProcesses();
 });
 
 afterAll(async () => {

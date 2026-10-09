@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Starting GemDB while something else is starting it no longer reports a failure.** Pressing
+  Start, running a notebook cell or opening the GemDB Shell while another window or terminal was
+  bringing the database up could end in "Start session listener failed (exit code 1)", although the
+  database and its session listener were both running. GemDB now checks for and starts the session
+  listener under the same lock as the database, so one start waits for the other, and a listener
+  started by an older GemDB in another editor counts as started.
+- **GemDB waits for a database that is still starting before logging in to it.** After a crash
+  the database takes a while to recover before it accepts logins, and GemDB treated it as running
+  as soon as it appeared, so the first notebook cell, the GemDB Shell or a `gemdb` command could
+  fail to log in. GemDB and the `gemdb` command now wait for the database to finish starting, for up
+  to a minute, and then name the database's log if it has not.
+- **The GemDB Shell checks the database before starting it, as the window does.** Opening the
+  Shell with the database stopped started it without the checks the window makes first, so a
+  database the installed engine cannot read started and then refused every login, and one on a
+  network drive or a disk without room for it failed with the engine's own error. The Shell now
+  refuses with the same explanation the window gives, and applies the space limits a database
+  from an earlier GemDB is missing.
+
 ## [1.6.0] - 2026-10-07
 
 The engine is unchanged at GemStone 4.0.0.a4, but start with a fresh database: delete

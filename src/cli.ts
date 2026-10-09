@@ -473,21 +473,31 @@ fi
 #
 # mkdir is the primitive: it creates or fails, with no window between the test
 # and the claim, and it is there on a stock macOS where flock is not.
-stone_is_up() {
+#
+# Two questions, kept apart. Whether a stone is LISTED decides whether to start
+# one: a stone still at Startup -- recovering from a crash, or another
+# process's start not finished -- is listed, and a second startstone beside it
+# is the two-stones case above. Whether it is READY (status OK) decides whether
+# a login can go ahead, so that is what the waiting is for. A two-word status
+# such as "exe deleted" does not start with OK, so it is not ready either.
+stone_is_listed() {
   "$GEMSTONE/bin/gslist" 2>/dev/null | awk -v s="$STONE" '$(NF-1) == "Stone" && $NF == s { found = 1 } END { exit !found }'
+}
+stone_is_ready() {
+  "$GEMSTONE/bin/gslist" -cvl 2>/dev/null | awk -v s="$STONE" '$1 == "OK" && $(NF-1) == "Stone" && $NF == s { found = 1 } END { exit !found }'
 }
 
 ${
   external
     ? `# This machine's administrator runs the database, so a stopped stone is theirs
 # to start: starting it here would run it as this user.
-if ! stone_is_up; then
+if ! stone_is_listed; then
   echo "gemdb: the database (stone $STONE) is not running. It is run by this machine's administrator." >&2
   exit 1
 fi
 `
     : ''
-}if ! stone_is_up; then
+}if ! stone_is_ready; then
   STONE_LOCK="$ROOT/.gemdb-stone.lock"
   # mkdir and the pid write are two steps, here and in the extension, so a
   # lock with no pid yet is one being taken right now. It is debris only once
@@ -552,7 +562,7 @@ fi
         continue
       fi
     fi
-    stone_is_up && break
+    stone_is_ready && break
     sleep 0.1
     tries=$((tries + 1))
   done
@@ -560,8 +570,9 @@ fi
   if [ -n "$held" ]; then
     # Re-check inside the lock. Between our first check and this one, whoever
     # we queued behind may have started it -- which is the case the bare
-    # check-then-act got wrong.
-    if ! stone_is_up; then
+    # check-then-act got wrong. Listed, not ready: one still starting is
+    # waited for below, never started again.
+    if ! stone_is_listed; then
       echo "gemdb: starting the database…" >&2
       if ! "$GEMSTONE/bin/startstone" -l "$ROOT/db/log/$STONE.log" "$STONE" >/dev/null 2>&1; then
         release_stone_lock
@@ -570,11 +581,28 @@ fi
       fi
     fi
     release_stone_lock
-  elif ! stone_is_up; then
+  elif ! stone_is_listed; then
     echo "gemdb: the database is not running and another process has been starting it for" >&2
     echo "gemdb: ten seconds. See $ROOT/db/log/$STONE.log, or remove $STONE_LOCK if nothing is." >&2
     exit 1
   fi
+
+  # Listed but not yet ready: ours or someone else's, it is still starting, and
+  # a login now would fail. A minute, as the extension waits.
+  ready_tries=0
+  until stone_is_ready; do
+    if ! stone_is_listed; then
+      echo "gemdb: the database stopped while it was starting. See $ROOT/db/log/$STONE.log" >&2
+      exit 1
+    fi
+    if [ "$ready_tries" -ge 600 ]; then
+      echo "gemdb: the database has been starting for over a minute. See $ROOT/db/log/$STONE.log" >&2
+      exit 1
+    fi
+    [ "$ready_tries" -eq 0 ] && echo "gemdb: waiting for the database to finish starting…" >&2
+    sleep 0.1
+    ready_tries=$((ready_tries + 1))
+  done
 fi
 
 # -c 'code': materialise the code as a file, like CPython's -c but visibly so.

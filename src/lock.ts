@@ -496,9 +496,12 @@ function stoneLockPath(): string {
   return path.join(rootPath(), STONE_LOCK_NAME);
 }
 
-/** How often, and for how long, {@link withStoneLock} waits for the lock. */
-const STONE_LOCK_POLL_MS = 200;
-const STONE_LOCK_TIMEOUT_MS = 60_000;
+/**
+ * How often, and for how long, {@link withStoneLock} waits for the lock —
+ * and `waitForStoneReady` for a stone to finish starting.
+ */
+export const STONE_LOCK_POLL_MS = 200;
+export const STONE_LOCK_TIMEOUT_MS = 60_000;
 
 /**
  * Run `work` while holding the stone lock, waiting for another process to
