@@ -70,6 +70,7 @@ import { isOnNfs } from './networkFileSystem';
 import { logoutAll } from './session';
 import { ensureStatmonitor } from './statmonitor';
 import { allowAutoStart } from './autoStart';
+import { singleFlight } from './singleFlight';
 import { readUnattendedSetupMarker, writeUnattendedSetupMarker } from './unattendedSetupMarker';
 import {
   DATABASE_OUTCOME,
@@ -227,20 +228,18 @@ function paused(): void {
  * say so instead of offering a Set Up GemDB button that would only join it.
  */
 export function runSetup(extensionPath: string, trigger: Trigger): Promise<SetupOutcome> {
-  if (setupInFlight) {
-    log('Setup is already under way; waiting for it to finish.');
-    return setupInFlight;
-  }
-  setContext('gemdb.settingUp', true);
-  const run = runSetupOnce(extensionPath, trigger).finally(() => {
-    setupInFlight = undefined;
-    setContext('gemdb.settingUp', false);
-  });
-  setupInFlight = run;
-  return run;
+  return setupFlight.run(
+    () => {
+      setContext('gemdb.settingUp', true);
+      return runSetupOnce(extensionPath, trigger).finally(() => {
+        setContext('gemdb.settingUp', false);
+      });
+    },
+    () => log('Setup is already under way; waiting for it to finish.'),
+  );
 }
 
-let setupInFlight: Promise<SetupOutcome> | undefined;
+const setupFlight = singleFlight<SetupOutcome>();
 
 async function runSetupOnce(extensionPath: string, trigger: Trigger): Promise<SetupOutcome> {
   reportSetupStarted(trigger);
@@ -504,9 +503,26 @@ export async function start(extensionPath: string): Promise<void> {
  * pointed at a new root path — and here the prompt is justified because the
  * user has asked for something that cannot happen without it.
  *
+ * At most one runs at a time in this window. Auto-start and a cell, two
+ * notebooks, or a cell and Start would otherwise each run the whole bring-up
+ * at once — two stone starts, two Grail file-ins, two MCP servers. A caller
+ * arriving while one is in progress joins it, from the shared-memory prompt to
+ * the last step, and gets its result. A joiner reports nothing:
+ * `databaseStarted` is sent once, by the caller that started the call, under
+ * that caller's trigger.
+ *
  * Returns true when the database is up and Python will run.
  */
-export async function ensureRunning(extensionPath: string, trigger: Trigger): Promise<boolean> {
+export function ensureRunning(extensionPath: string, trigger: Trigger): Promise<boolean> {
+  return bringUp.run(
+    () => ensureRunningOnce(extensionPath, trigger),
+    () => log('GemDB is already starting; waiting for it.'),
+  );
+}
+
+const bringUp = singleFlight<boolean>();
+
+async function ensureRunningOnce(extensionPath: string, trigger: Trigger): Promise<boolean> {
   const stopwatch = Stopwatch.start();
   const failed = (outcome: Exclude<DatabaseOutcome, typeof DATABASE_OUTCOME.started>): false => {
     reportDatabaseStarted(trigger, outcome, FILED_GRAIL.no, stopwatch.elapsedMs(), false);
@@ -640,6 +656,12 @@ function grailFileInDue(extensionPath: string): boolean {
  * Installing is separate from running, as with Grail: the classes are filed
  * into the database once per payload build, and the router is forked whenever
  * one is not already listening.
+ *
+ * At most one runs at a time in this window. `ensureRunning` and activation's
+ * `resumeMcpServing` both come here, and two at once would install the
+ * classes twice and race to fork two routers onto one port. A caller arriving
+ * while one is in progress waits for it and gets its result; its progress
+ * notification says nothing about the MCP server meanwhile.
  */
 async function ensureMcpServing(
   extensionPath: string,
@@ -652,7 +674,18 @@ async function ensureMcpServing(
     log('This build of GemDB ships no MCP server payload, so there is none to run.');
     return false;
   }
+  return mcpServing.run(
+    () => ensureMcpServingOnce(extensionPath, progress),
+    () => log('The MCP server is already starting; waiting for it.'),
+  );
+}
 
+const mcpServing = singleFlight<boolean>();
+
+async function ensureMcpServingOnce(
+  extensionPath: string,
+  progress?: vscode.Progress<{ message?: string }>,
+): Promise<boolean> {
   try {
     if (mcpNeedsUpdate(extensionPath)) {
       const stamp = bundledMcpStamp(extensionPath);

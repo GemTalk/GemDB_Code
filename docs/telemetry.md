@@ -154,7 +154,11 @@ the Database Running After Logout** while RemoveIPC was unset. The dialog comes
 back every time the database is needed until the user agrees, but a failure is
 sent once for each trigger, outcome and `missing` until setup works or the
 database next starts. Running either command is not deduped: every run is
-sent.
+sent. A request that arrives while the dialog, or the shared-memory setup it
+started, is already under way in the same window waits for it and sends
+nothing, so one dialog is one event, carrying the trigger of whatever opened
+it. The same holds for **GemDB: Configure Shared Memory** run during that
+setup, and for a dialog that would open while the command's setup is running.
 
 | Property  | Values                                                                        |
 | --------- | ----------------------------------------------------------------------------- |
@@ -167,7 +171,9 @@ sent.
 The database was brought up, or failed to come up. Sent only when something
 actually happened. Running a cell when the database is already up sends
 nothing, and a failure is sent once for each trigger until the database next
-starts.
+starts. A request that arrives while a start is already under way in the same
+window waits for it and sends nothing, so one start is one event, carrying the
+trigger of whatever began it.
 
 | Property / measure | Values                                                                                                                              |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |

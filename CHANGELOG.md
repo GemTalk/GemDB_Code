@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Starting GemDB from two places at once starts it once.** A cell run while the database was
+  starting on its own, cells in two notebooks, or a cell and **GemDB: Start** each ran the whole
+  start: two stone starts, two installs of Python support, two MCP servers. Now whatever asks while
+  a start is under way in the same window waits for that start and gets its result.
+- **GemDB asks about shared memory once, even when two things need it.** A cell run while the
+  first-run question about shared memory was still open queued a second copy of it, and answering
+  both could open two `sudo` terminals. Now the second waits for the first answer. Running
+  **GemDB: Configure Shared Memory** while that setup is already running waits for it instead of
+  opening another terminal.
+- **The MCP server is installed and started once when GemDB starts.** Opening a window on a running
+  database while a cell started it could install the MCP server's classes twice and start two
+  servers on one port. Now the second waits for the first.
+
 ## [1.6.0] - 2026-10-07
 
 The engine is unchanged at GemStone 4.0.0.a4, but start with a fresh database: delete
