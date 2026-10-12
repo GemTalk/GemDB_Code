@@ -421,11 +421,22 @@ export const debug = {
   },
   stopDebugging: (): Promise<void> => Promise.resolve(),
   activeDebugSession: undefined as { id: string; type: string } | undefined,
+  /** The frame selected in Call Stack; a test sets it to a `DebugStackFrame`. */
+  activeStackItem: undefined as unknown,
   /** The gutter's breakpoints; a test fills it with `SourceBreakpoint`s. */
   breakpoints: [] as unknown[],
 };
 
 /** A gutter breakpoint, with just the location shape red dots read. */
+/** A frame selected in Call Stack. */
+export class DebugStackFrame {
+  constructor(
+    readonly session: { id: string; type: string; name?: string; customRequest: unknown },
+    readonly threadId: number,
+    readonly frameId: number,
+  ) {}
+}
+
 export class SourceBreakpoint {
   constructor(
     readonly location: {

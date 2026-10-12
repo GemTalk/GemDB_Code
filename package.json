@@ -398,6 +398,16 @@
         "category": "GemDB"
       },
       {
+        "command": "gemdb.showInDebugConsole",
+        "title": "Show in Debug Console",
+        "category": "GemDB"
+      },
+      {
+        "command": "gemdb.evaluateWithSelf",
+        "title": "Evaluate with self…",
+        "category": "GemDB"
+      },
+      {
         "command": "gemdb.saveVariable",
         "title": "Add to Persisted Objects…",
         "category": "GemDB"
@@ -595,6 +605,14 @@
           "when": "isLinux"
         },
         {
+          "command": "gemdb.showInDebugConsole",
+          "when": "false"
+        },
+        {
+          "command": "gemdb.evaluateWithSelf",
+          "when": "false"
+        },
+        {
           "command": "gemdb.saveVariable",
           "when": "false"
         },
@@ -637,9 +655,19 @@
       ],
       "debug/variables/context": [
         {
-          "command": "gemdb.saveVariable",
+          "command": "gemdb.showInDebugConsole",
           "when": "debugType == gemdb",
           "group": "z_gemdb@1"
+        },
+        {
+          "command": "gemdb.evaluateWithSelf",
+          "when": "debugType == gemdb",
+          "group": "z_gemdb@2"
+        },
+        {
+          "command": "gemdb.saveVariable",
+          "when": "debugType == gemdb",
+          "group": "z_gemdb@3"
         }
       ],
       "view/item/context": [

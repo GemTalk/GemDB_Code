@@ -464,3 +464,64 @@ describe('a saved stack', () => {
     'offers the console on a stack opened from the database read-only, or refuses it with a message — not decided yet',
   );
 });
+
+describe('putting a Variables row in the Debug Console', () => {
+  const showRow = (answer: ConsoleAnswer) => vi.fn(() => Promise.resolve(answer));
+
+  it('shows the row’s object as an entry that expands like the row', async () => {
+    const shown = showRow(value("Account('ada', 10)", { variablesReference: 7 }));
+    const { request, responseTo, events } = started(undefined, undefined, {
+      showRow: shown,
+      evaluate: vi.fn(),
+    });
+
+    const seq = request('gemdbShowRow', { handle: 7, name: 'p' });
+    await settle();
+
+    expect(shown).toHaveBeenCalledWith(7, 'p');
+    expect(events('output').map((e) => e.body)).toEqual([
+      { category: 'console', output: "p: Account('ada', 10)\n", variablesReference: 7 },
+    ]);
+    expect(responseTo(seq)?.success).toBe(true);
+    // Showing changes nothing, so Variables is left alone.
+    expect(events('invalidated')).toEqual([]);
+  });
+
+  it('runs an expression with self bound to the row, echoing it, and refreshes Variables', async () => {
+    const evaluate = vi.fn<Evaluate>().mockResolvedValue(value('2', { output: 'hi\n' }));
+    const { request, events } = started(evaluate, undefined, { showRow: vi.fn() });
+
+    request('gemdbShowRow', { handle: 7, name: 'p', expression: 'len(self.history)', frameId: 2 });
+    await settle();
+
+    expect(evaluate).toHaveBeenCalledWith('len(self.history)', 2, 'repl', expect.anything(), 7);
+    expect(events('output').map((e) => e.body)).toEqual([
+      { category: 'console', output: '>>> len(self.history)  # self is p\n' },
+      { category: 'stdout', output: 'hi\n' },
+      { category: 'console', output: '2\n', variablesReference: 0 },
+    ]);
+    expect(events('invalidated')).toHaveLength(1);
+  });
+
+  it('shows an error’s traceback in the console', async () => {
+    const evaluate = vi
+      .fn<Evaluate>()
+      .mockResolvedValue({ kind: 'error', output: '', traceback: 'TB' } as ConsoleAnswer);
+    const { request, events, responseTo } = started(evaluate, undefined, { showRow: vi.fn() });
+
+    const seq = request('gemdbShowRow', { handle: 7, name: 'p', expression: 'self.nope' });
+    await settle();
+
+    expect(events('output').pop()?.body).toEqual({ category: 'stderr', output: 'TB\n' });
+    expect(responseTo(seq)?.success).toBe(true);
+  });
+
+  it('refuses where the pause has no rows to show, such as a saved stack', async () => {
+    const { request, responseTo } = started(undefined);
+
+    const seq = request('gemdbShowRow', { handle: 7, name: 'p' });
+    await settle();
+
+    expect(responseTo(seq)).toMatchObject({ success: false });
+  });
+});

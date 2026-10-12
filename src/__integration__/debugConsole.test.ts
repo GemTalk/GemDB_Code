@@ -798,4 +798,77 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
     // As the same line in a cell would: the notebook's next commit writes it.
     expect(dirty).toBe('true');
   });
+  it('puts a Variables row in the Debug Console, and evaluates with self bound to it', async () => {
+    const nb = notebook('dc-row');
+    const seen: Record<string, unknown> = {};
+
+    await inCell(
+      nb,
+      [
+        'class Box:',
+        '    def __init__(self, n):',
+        '        self.x = n',
+        '        self.items = [n, n]',
+        '    def look(self, other):',
+        '        breakpoint()',
+        'Box(1).look(Box(5))',
+      ].join('\n'),
+      async (dap) => {
+        const outputs = async (args: Record<string, unknown>) => {
+          const from = dap.sent.length;
+          const reply = await dap.request('gemdbShowRow', args);
+          return {
+            ok: reply.success,
+            out: dap.sent
+              .slice(from)
+              .filter((m) => m.event === 'output')
+              .map(
+                (m) => m.body as { category: string; output: string; variablesReference?: number },
+              ),
+          };
+        };
+        const other = (await dap.locals()).find((v) => v.name === 'other')!;
+        const shown = await outputs({ handle: other.variablesReference, name: 'other' });
+        seen.shown = shown;
+        const ref = shown.out[0]?.variablesReference ?? 0;
+        seen.kids = (await dap.children(ref)).map((v) => `${v.name}=${v.value}`).sort();
+        seen.withSelf = await outputs({
+          handle: other.variablesReference,
+          name: 'other',
+          expression: 'self.x * 10',
+          frameId: 1,
+        });
+        // The frame's own self is still the Box it was: the binding was for that line alone.
+        seen.frameSelf = await dap.value('self.x');
+        const scopes = (await dap.request('scopes', { frameId: 2 })).body?.scopes as Array<{
+          name: string;
+          variablesReference: number;
+        }>;
+        const groups = await dap.children(
+          scopes.find((sc) => sc.name === 'Globals')!.variablesReference,
+        );
+        const group = groups.find((v) => v.name === 'class variables')!;
+        seen.group = await outputs({ handle: group.variablesReference, name: 'class variables' });
+      },
+    );
+    closeSessionFor(nb.key);
+
+    expect(seen.shown).toMatchObject({
+      ok: true,
+      out: [{ category: 'console', output: expect.stringMatching(/^other: .*Box/) }],
+    });
+    expect(seen.kids).toEqual(['items=[5, 5]', 'x=5']);
+    expect(seen.withSelf).toMatchObject({
+      ok: true,
+      out: [
+        { category: 'console', output: '>>> self.x * 10  # self is other\n' },
+        { category: 'console', output: '50\n' },
+      ],
+    });
+    expect(seen.frameSelf).toBe('1');
+    expect(seen.group).toMatchObject({
+      ok: true,
+      out: [{ category: 'stderr', output: expect.stringMatching(/not an object of its own/) }],
+    });
+  });
 });

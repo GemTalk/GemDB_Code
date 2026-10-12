@@ -679,8 +679,18 @@ export type ConsoleReply = { consoleRef: number; output: string } & (
  * break — the watch's time budget, or the user cancelling — lands as a
  * ControlInterrupt and is answered as interrupted, not as an error in the
  * user's code.
+ *
+ * `selfHandle`, when given, is a registry entry to run with as `self` — a
+ * Variables row's object, for **Evaluate with self…**. It is bound in a copy
+ * of the console scope, used for this input alone, so the frame's own `self`
+ * and the names the console has bound are left as they were.
  */
-export function consoleQuery(scope: ConsoleScope, consoleRef: number, source: string): string {
+export function consoleQuery(
+  scope: ConsoleScope,
+  consoleRef: number,
+  source: string,
+  selfHandle = 0,
+): string {
   const findModule = scope.moduleFile
     ? `g := [dispatcher evaluateSource: '${escapeString(
         [
@@ -697,7 +707,7 @@ export function consoleQuery(scope: ConsoleScope, consoleRef: number, source: st
     (g notNil and: [g ~~ none and: [g respondsTo: #keysAndValuesDo:]])
       ifTrue: [g keysAndValuesDo: [:k :x | bind value: k value: x]].`
     : '';
-  return `| reg out field record none saved describe childrenOf reprOf late clean isLeaf dispatcher cref console dict g l r kind exc captured bind nameAst |
+  return `| reg out field record none saved describe childrenOf reprOf late clean isLeaf dispatcher cref console dict g l r kind exc captured bind nameAst target |
 ${PREAMBLE}
 ${HELPERS}
 ${CHILDREN_OF}
@@ -725,12 +735,21 @@ console := (cref between: 1 and: reg size) ifTrue: [reg at: cref] ifFalse: [nil]
   console := { #gemdbConsole. dict }.
   reg add: console.
   cref := reg size].
+target := console at: 2.
+${
+  selfHandle > 0
+    ? `${ROW_OBJECT(selfHandle, 'g')}
+dict := target copy.
+bind value: #self value: g.
+target := dict.`
+    : ''
+}
 kind := #value.
 exc := nil.
 captured := WriteStream on: Unicode7 new.
 saved := SessionTemps current at: #'GrailConsole' otherwise: nil.
 SessionTemps current at: #'GrailConsole' put: (Array with: captured).
-[r := [[dispatcher evaluateSource: '${escapeString(source)}' usingModuleScope: (console at: 2)]
+[r := [[dispatcher evaluateSource: '${escapeString(source)}' usingModuleScope: target]
     on: AlmostOutOfStack do: [:e | kind := #stack. e return: nil]]
   on: AbstractException do: [:e |
     (e isKindOf: ControlInterrupt)
@@ -776,6 +795,36 @@ kind == #error ifTrue: [| payload frames tname msg attr sx |
       print: ((f at: 2) isNumber ifTrue: [f at: 2] ifFalse: [0]); nextPut: field;
       nextPutAll: (clean value: ((f at: 3) ifNil: ['?']) asString); nextPut: field;
       nextPutAll: (clean value: ((f at: 4) isString ifTrue: [f at: 4] ifFalse: [''])); nextPut: record]].
+out contents encodeAsUTF8`;
+}
+
+/**
+ * Smalltalk that puts in `into` the object of registry entry `handle`, the
+ * one a Variables row was registered with, or answers an `Error: …` line when
+ * there is none — a group row (`class variables`) or a scope is not an object.
+ */
+function ROW_OBJECT(handle: number, into: string): string {
+  return `${into} := (${handle} between: 1 and: reg size) ifTrue: [reg at: ${handle}] ifFalse: [nil].
+(${into} isNil or: [${into} class == Array and: [${into} size >= 2
+    and: [#(#gemdbScope #gemdbGroup #gemdbConsole) includes: (${into} at: 1)]]])
+  ifTrue: [^ 'Error: that row is not an object of its own' encodeAsUTF8].`;
+}
+
+/**
+ * Smalltalk that writes one row, named `name`, for the object of registry
+ * entry `handle` — what **Show in Debug Console** puts in the console — in
+ * `childrenQuery`'s format, or answers an `Error: …` line.
+ */
+export function describeRowQuery(handle: number, name: string): string {
+  return `| reg obj out field record none saved describe childrenOf reprOf late clean isLeaf |
+${PREAMBLE}
+reg := SessionTemps current at: #'${REGISTRY}' otherwise: nil.
+reg isNil ifTrue: [^ 'Error: the pause is over' encodeAsUTF8].
+${ROW_OBJECT(handle, 'obj')}
+${HELPERS}
+${CHILDREN_OF}
+${DESCRIBE}
+${withQuietConsole(`describe value: '${escapeString(name)}' value: obj`)}
 out contents encodeAsUTF8`;
 }
 

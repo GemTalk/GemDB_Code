@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Code the console calls runs straight past `breakpoint()` and red dots. Not yet: `cls` in a
   classmethod's frame, and rebinding a local (`n = 99`) changes the console's copy, not the paused
   function.
+- **Show in Debug Console and Evaluate with self… on a Variables row.** Right-click any row, however
+  deep in the tree, and **Show in Debug Console** opens the console with that object in it,
+  expandable like the row. **Evaluate with self…** asks for an expression and shows what it gives
+  with `self` bound to the row's object, in the frame selected in Call Stack.
 
 ## [1.6.0] - 2026-10-07
 

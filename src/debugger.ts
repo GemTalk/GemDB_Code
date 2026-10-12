@@ -14,6 +14,7 @@ import {
   childrenQuery,
   clearRegistryQuery,
   consoleQuery,
+  describeRowQuery,
   parseChildren,
   parseConsoleReply,
   parsePausedStack,
@@ -140,7 +141,11 @@ export interface Pause {
     frameId: number,
     context: ConsoleContext,
     signal: AbortSignal,
+    /** A registry entry to run with as `self`: a Variables row's object (`consoleQuery`). */
+    selfHandle?: number,
   ): Promise<ConsoleAnswer>;
+  /** The object of registry entry `handle`, as a console entry named `name`. */
+  showRow?(handle: number, name: string): Promise<ConsoleAnswer>;
   /** Each frame's whole cell or file, by frame index, so the stack can be saved. */
   texts?: Array<string[] | undefined>;
   /** The saved source behind a frame's `sourceReference`, for a stack opened from the database. */
@@ -689,6 +694,9 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
       case 'evaluate':
         this.evaluate(request);
         return;
+      case 'gemdbShowRow':
+        this.showRow(request);
+        return;
       case 'cancel': {
         const id = Number(request.arguments?.requestId ?? 0);
         this.running.get(id)?.abort();
@@ -773,34 +781,7 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
     }
     const kind: ConsoleContext = context === 'watch' ? 'watch' : 'repl';
     const frameId = Number(request.arguments?.frameId ?? pause.frames[0]?.id ?? 1);
-    const controller = new AbortController();
-    this.running.set(request.seq, controller);
-    let finished = false;
-    let markDone: () => void = () => {};
-    const done = new Promise<void>((resolve) => (markDone = resolve));
-    const offer =
-      kind === 'repl'
-        ? setTimeout(() => {
-            if (finished) return;
-            void vscode.window.withProgress(
-              {
-                location: vscode.ProgressLocation.Notification,
-                title: 'GemDB: the Debug Console is still running',
-                cancellable: true,
-              },
-              (_progress, token) => {
-                token.onCancellationRequested(() => controller.abort());
-                return done;
-              },
-            );
-          }, OFFER_STOP_AFTER_MS)
-        : undefined;
-    const finish = (): void => {
-      finished = true;
-      if (offer) clearTimeout(offer);
-      this.running.delete(request.seq);
-      markDone();
-    };
+    const { controller, finish } = this.track(request, kind === 'repl');
     pause.evaluate(source, frameId, kind, controller.signal).then(
       (answer) => {
         finish();
@@ -829,6 +810,108 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
       (e: unknown) => {
         finish();
         this.fail(request, errorMessage(e), false);
+      },
+    );
+  }
+
+  /**
+   * Note a running console line under its request, so `cancel` can stop it,
+   * and, when `offerStop`, offer to stop it from a notification once it has
+   * run `OFFER_STOP_AFTER_MS`. `finish` when it is done.
+   */
+  private track(
+    request: DapRequest,
+    offerStop: boolean,
+  ): { controller: AbortController; finish: () => void } {
+    const controller = new AbortController();
+    this.running.set(request.seq, controller);
+    let finished = false;
+    let markDone: () => void = () => {};
+    const done = new Promise<void>((resolve) => (markDone = resolve));
+    const offer = offerStop
+      ? setTimeout(() => {
+          if (finished) return;
+          void vscode.window.withProgress(
+            {
+              location: vscode.ProgressLocation.Notification,
+              title: 'GemDB: the Debug Console is still running',
+              cancellable: true,
+            },
+            (_progress, token) => {
+              token.onCancellationRequested(() => controller.abort());
+              return done;
+            },
+          );
+        }, OFFER_STOP_AFTER_MS)
+      : undefined;
+    const finish = (): void => {
+      finished = true;
+      if (offer) clearTimeout(offer);
+      this.running.delete(request.seq);
+      markDone();
+    };
+    return { controller, finish };
+  }
+
+  /**
+   * Put a Variables row in the Debug Console (`gemdbShowRow`), for the
+   * row's menu (`variableCommands.ts`): its object, as an entry that expands
+   * like the row, or with `expression`, what that gives with `self` bound to
+   * the object, run in the frame `frameId` as a console line is. Shown as
+   * `output` events, since there is no console request to answer: an echo of
+   * the expression, what it printed, then the value, a traceback, or
+   * "Interrupted.".
+   */
+  private showRow(request: DapRequest): void {
+    const pause = this.pause;
+    const handle = Number(request.arguments?.handle ?? 0);
+    const name = String(request.arguments?.name ?? '');
+    const expression =
+      request.arguments?.expression === undefined
+        ? undefined
+        : String(request.arguments.expression);
+    if (!pause?.showRow || !pause.evaluate || handle <= 0) {
+      this.fail(request, NOT_HERE, true);
+      return;
+    }
+    const frameId = Number(request.arguments?.frameId ?? pause.frames[0]?.id ?? 1);
+    const { controller, finish } = this.track(request, expression !== undefined);
+    if (expression !== undefined) {
+      this.event('output', {
+        category: 'console',
+        output: `>>> ${expression}  # self is ${name}\n`,
+      });
+    }
+    const answered =
+      expression === undefined
+        ? pause.showRow(handle, name)
+        : pause.evaluate(expression, frameId, 'repl', controller.signal, handle);
+    answered.then(
+      (answer) => {
+        finish();
+        if (answer.output) this.event('output', { category: 'stdout', output: answer.output });
+        if (answer.kind === 'value') {
+          if (answer.value !== '' || answer.variablesReference > 0) {
+            this.event('output', {
+              category: 'console',
+              output: `${expression === undefined ? `${name}: ` : ''}${answer.value}\n`,
+              variablesReference: answer.variablesReference,
+            });
+          }
+        } else {
+          this.event('output', {
+            category: 'stderr',
+            output: `${answer.kind === 'error' ? answer.traceback : INTERRUPTED}\n`,
+          });
+        }
+        if (expression !== undefined && this.clientInvalidates) {
+          this.event('invalidated', { areas: ['variables'] });
+        }
+        this.respond(request);
+      },
+      (e: unknown) => {
+        finish();
+        this.fail(request, errorMessage(e), true);
       },
     );
   }
@@ -1049,6 +1132,28 @@ function placeFrame(
   };
 }
 
+/** A Variables row's object as a console entry (`Pause.showRow`). */
+async function showRowAt(
+  request: HaltRequest,
+  handle: number,
+  name: string,
+): Promise<ConsoleAnswer> {
+  const raw = await request.query(describeRowQuery(handle, name));
+  if (raw.startsWith('Error: ')) {
+    return { kind: 'error', output: '', traceback: raw.slice('Error: '.length) };
+  }
+  const [row] = parseChildren(raw);
+  if (!row) return { kind: 'error', output: '', traceback: 'The row could not be read.' };
+  const dap = toDapVariable(row);
+  return {
+    kind: 'value',
+    output: '',
+    value: dap.value,
+    ...(dap.type ? { type: dap.type } : {}),
+    variablesReference: dap.variablesReference,
+  };
+}
+
 /**
  * Run a Debug Console line or a watch in one frame of a pause (`Pause.evaluate`).
  * The frame's console scope is made by its first line and found again by
@@ -1064,10 +1169,11 @@ async function evaluateAt(
   frameId: number,
   context: ConsoleContext,
   signal: AbortSignal,
+  selfHandle = 0,
 ): Promise<ConsoleAnswer> {
   const scope = view.consoles.get(frameId) ?? { locals: 0, globals: 0 };
   const reply = parseConsoleReply(
-    await request.query(consoleQuery(scope, consoleRefs.get(frameId) ?? 0, source), {
+    await request.query(consoleQuery(scope, consoleRefs.get(frameId) ?? 0, source, selfHandle), {
       budget: context === 'watch',
       signal,
       passHalts: true,
@@ -1186,8 +1292,9 @@ export function registerBreakpointDebugger(): vscode.Disposable {
             answer,
             handleFor: (containerRef, name) => handles.get(handleKey(containerRef, name)),
             query: (code) => request.query(code),
-            evaluate: (source, frameId, context, signal) =>
-              evaluateAt(request, view, consoleRefs, source, frameId, context, signal),
+            evaluate: (source, frameId, context, signal, selfHandle) =>
+              evaluateAt(request, view, consoleRefs, source, frameId, context, signal, selfHandle),
+            showRow: (handle, name) => showRowAt(request, handle, name),
             rearm: (dots) => request.rearm(dots),
             armedDots: request.armedDots,
             reason: request.reason,
