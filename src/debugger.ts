@@ -525,10 +525,16 @@ const WATCH_TOO_LONG =
 export const OFFER_STOP_AFTER_MS = 4_000;
 
 /**
- * Where the references for `PauseDebugAdapter.wrap`'s containers start: far
- * above any registry position, which is what every other reference is.
+ * Where the references for `PauseDebugAdapter.preview`'s containers start:
+ * far above any registry position, which is what every other reference is.
  */
 const SHOWN_REFS = 1_000_000_000;
+
+/** An object or dict with up to this many children is listed whole in the console. */
+const SHOW_ALL = 20;
+
+/** Otherwise, and for a list, tuple or set always, the console lists this many first. */
+const SHOW_FEW = 5;
 const NOT_YET_RESTART =
   "Restarting isn't supported yet. Use Continue to resume or Stop to end the run.";
 
@@ -568,10 +574,10 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
   /** Console lines still running, by request seq, so `cancel` can stop one. */
   private readonly running = new Map<number, AbortController>();
   /**
-   * The one-row containers `showRow` hands the console, by their reference
-   * (`wrap`), each answered here rather than by the gem.
+   * The containers `showRow` hands the console, by their reference
+   * (`preview`), each answered here rather than by the gem.
    */
-  private readonly shown = new Map<number, DapVariable>();
+  private readonly shown = new Map<number, DapVariable[]>();
   private nextShown = SHOWN_REFS;
 
   constructor(
@@ -675,7 +681,7 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
         const pause = this.pause;
         const shown = this.shown.get(ref);
         if (shown) {
-          this.respond(request, { variables: start === 0 ? [shown] : [] });
+          this.respond(request, { variables: shown.slice(start, start + count) });
           return;
         }
         if (!pause) {
@@ -872,11 +878,12 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
 
   /**
    * Put a Variables row in the Debug Console (`gemdbShowRow`), for the
-   * row's menu (`variableCommands.ts`): its object, as an entry that expands
-   * like the row, or with `expression`, what that gives with `self` bound to
-   * the object, run in the frame `frameId` as a console line is. Shown as
-   * `output` events, since there is no console request to answer: an echo of
-   * the expression, what it printed, then the value, a traceback, or
+   * row's menu (`variableCommands.ts`): its object — a line naming it, then
+   * its children (`preview`) — or with `expression`, what that gives with
+   * `self` bound to the object, run in the frame `frameId` as a console line
+   * is, shown the same way. Shown as `output` events, since there is no
+   * console request to answer: an echo of the expression, what it printed,
+   * then the value and its children, a traceback, or
    * "Interrupted.".
    */
   private showRow(request: DapRequest): void {
@@ -903,20 +910,20 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
       expression === undefined
         ? pause.showRow(handle, name)
         : pause.evaluate(expression, frameId, 'repl', controller.signal, handle);
-    answered.then(
-      (answer) => {
-        finish();
+    answered
+      .then(async (answer) => {
         if (answer.output) this.event('output', { category: 'stdout', output: answer.output });
         if (answer.kind === 'value') {
           const text = `${expression === undefined ? `${name}: ` : ''}${answer.value}`;
+          if (answer.value !== '' || answer.variablesReference > 0) {
+            this.event('output', { category: 'console', output: `${text}\n` });
+          }
           if (answer.variablesReference > 0) {
             this.event('output', {
               category: 'console',
               output: '',
-              variablesReference: this.wrap(text, answer),
+              variablesReference: await this.preview(pause, answer),
             });
-          } else if (answer.value !== '') {
-            this.event('output', { category: 'console', output: `${text}\n` });
           }
         } else {
           this.event('output', {
@@ -928,33 +935,52 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
           this.event('invalidated', { areas: ['variables'] });
         }
         this.respond(request);
-      },
-      (e: unknown) => {
-        finish();
-        this.fail(request, errorMessage(e), true);
-      },
-    );
+      })
+      .catch((e: unknown) => this.fail(request, errorMessage(e), true))
+      .finally(finish);
   }
 
   /**
-   * A reference for the console whose one child is `answer`'s value, shown as
-   * `text`. An `output` event's `variablesReference` is read by VS Code as a
-   * list of values, as a JavaScript debugger's console.log arguments are: the
-   * console shows each child of it with its name hidden (measured: a dict's
-   * reference showed its three values, unlabelled, and no dict). So the
-   * console is handed this container instead, and shows the one row, labelled
-   * by its text and opening onto the object's own children.
+   * A reference for the console listing an object's children under the line
+   * that names it: every attribute or entry of an object or dict with up to
+   * `SHOW_ALL`, else the first `SHOW_FEW` — and of a list, tuple or set always
+   * the first `SHOW_FEW` — then a `… N more` row that opens onto the whole
+   * object. Each row carries its name in its text (`owner: 'grace'`, `[0]: 1`)
+   * and opens as the Variables row would.
+   *
+   * The names are in the text because an `output` event's
+   * `variablesReference` is read by VS Code as a list of values, as a
+   * JavaScript debugger's console.log arguments are: it shows each child of
+   * the reference at the top level with its name hidden (measured: a dict's
+   * own reference showed its three values unlabelled). So the console is
+   * handed a container of the adapter's own (`shown`), answered here rather
+   * than by the gem.
    */
-  private wrap(text: string, answer: Extract<ConsoleAnswer, { kind: 'value' }>): number {
+  private async preview(
+    pause: Pause,
+    answer: Extract<ConsoleAnswer, { kind: 'value' }>,
+  ): Promise<number> {
+    const indexed = answer.indexedVariables ?? 0;
+    const total = indexed + (answer.namedVariables ?? 0);
+    const count = indexed > 0 || total > SHOW_ALL ? SHOW_FEW : total || SHOW_ALL;
+    const kids = await pause.variables(answer.variablesReference, 0, count);
+    const rows: DapVariable[] = kids.map((kid) => ({
+      ...kid,
+      name: `${kid.name}: ${kid.value}`,
+      value: `${kid.name}: ${kid.value}`,
+    }));
+    if (total > kids.length) {
+      const more = `… ${total - kids.length} more`;
+      rows.push({
+        name: more,
+        value: more,
+        variablesReference: answer.variablesReference,
+        ...(indexed ? { indexedVariables: indexed } : {}),
+        ...(answer.namedVariables ? { namedVariables: answer.namedVariables } : {}),
+      });
+    }
     const ref = this.nextShown++;
-    this.shown.set(ref, {
-      name: text,
-      value: text,
-      ...(answer.type ? { type: answer.type } : {}),
-      variablesReference: answer.variablesReference,
-      ...(answer.indexedVariables ? { indexedVariables: answer.indexedVariables } : {}),
-      ...(answer.namedVariables ? { namedVariables: answer.namedVariables } : {}),
-    });
+    this.shown.set(ref, rows);
     return ref;
   }
 
@@ -1193,6 +1219,8 @@ async function showRowAt(
     value: dap.value,
     ...(dap.type ? { type: dap.type } : {}),
     variablesReference: dap.variablesReference,
+    ...(dap.indexedVariables ? { indexedVariables: dap.indexedVariables } : {}),
+    ...(dap.namedVariables ? { namedVariables: dap.namedVariables } : {}),
   };
 }
 

@@ -809,9 +809,9 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
         '    def __init__(self, n):',
         '        self.x = n',
         '        self.items = [n, n]',
-        '    def look(self, other):',
+        '    def look(self, other, big):',
         '        breakpoint()',
-        'Box(1).look(Box(5))',
+        'Box(1).look(Box(5), list(range(1000)))',
       ].join('\n'),
       async (dap) => {
         const outputs = async (args: Record<string, unknown>) => {
@@ -830,12 +830,19 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
         const other = (await dap.locals()).find((v) => v.name === 'other')!;
         const shown = await outputs({ handle: other.variablesReference, name: 'other' });
         seen.shown = shown;
-        // One labelled row, which opens onto the object's own attributes.
-        const [entry] = await dap.children(shown.out[0]?.variablesReference ?? 0);
-        seen.entry = entry?.value;
-        seen.kids = (await dap.children(entry?.variablesReference ?? 0))
-          .map((v) => `${v.name}=${v.value}`)
-          .sort();
+        // A line naming it, then its attributes listed beneath, each with its name.
+        const listing = shown.out.find((o) => o.variablesReference)?.variablesReference ?? 0;
+        const listed = await dap.children(listing);
+        seen.kids = listed.map((v) => v.value).sort();
+        const items = listed.find((v) => v.value.startsWith('items'))!;
+        seen.items = (await dap.children(items.variablesReference)).map((v) => v.value);
+        const big = await outputs({
+          handle: (await dap.locals()).find((v) => v.name === 'big')!.variablesReference,
+          name: 'big',
+        });
+        seen.big = (
+          await dap.children(big.out.find((o) => o.variablesReference)!.variablesReference!)
+        ).map((v) => v.value);
         seen.withSelf = await outputs({
           handle: other.variablesReference,
           name: 'other',
@@ -857,9 +864,16 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
     );
     closeSessionFor(nb.key);
 
-    expect(seen.shown).toMatchObject({ ok: true, out: [{ category: 'console', output: '' }] });
-    expect(seen.entry).toMatch(/^other: .*Box/);
-    expect(seen.kids).toEqual(['items=[5, 5]', 'x=5']);
+    expect(seen.shown).toMatchObject({
+      ok: true,
+      out: [
+        { category: 'console', output: expect.stringMatching(/^other: .*Box/) },
+        { category: 'console', output: '' },
+      ],
+    });
+    expect(seen.kids).toEqual(['items: [5, 5]', 'x: 5']);
+    expect(seen.items).toEqual(['5', '5']);
+    expect(seen.big).toEqual(['[0]: 0', '[1]: 1', '[2]: 2', '[3]: 3', '[4]: 4', '… 995 more']);
     expect(seen.withSelf).toMatchObject({
       ok: true,
       out: [

@@ -482,34 +482,109 @@ describe('putting a Variables row in the Debug Console', () => {
     ]);
   });
 
-  it('shows the row’s object as one labelled entry that expands like the row', async () => {
-    const shown = showRow(value("Account('ada', 10)", { variablesReference: 7 }));
-    const { request, responseTo, events } = started(undefined, undefined, {
-      showRow: shown,
+  /** `count` children of a container, as `pause.variables` reads them: `[0]`, `[1]`, … */
+  const items = (n: number, start = 0) =>
+    Array.from({ length: n }, (_, i) => ({
+      name: `[${start + i}]`,
+      value: String(start + i),
+      variablesReference: 0,
+    }));
+
+  /** Show a row and answer what the console then lists under it. */
+  async function shownUnder(answer: ConsoleAnswer, variables: Pause['variables']) {
+    const c = started(undefined, undefined, {
+      showRow: showRow(answer),
       evaluate: vi.fn(),
+      variables,
     });
-
-    const seq = request('gemdbShowRow', { handle: 7, name: 'p' });
+    const seq = c.request('gemdbShowRow', { handle: 7, name: 'p' });
     await settle();
+    const outputs = c
+      .events('output')
+      .map((e) => e.body as { category: string; output: string; variablesReference?: number });
+    const listing = outputs.find((o) => o.variablesReference);
+    const listed = c.request('variables', { variablesReference: listing?.variablesReference });
+    await settle();
+    return {
+      ok: c.responseTo(seq)?.success,
+      outputs,
+      rows: (
+        c.responseTo(listed)?.body as {
+          variables: Array<{
+            value: string;
+            variablesReference: number;
+            indexedVariables?: number;
+          }>;
+        }
+      ).variables,
+      invalidated: c.events('invalidated').length,
+    };
+  }
 
-    expect(shown).toHaveBeenCalledWith(7, 'p');
-    // VS Code lists an output's reference as values with their names hidden,
-    // so the console gets a one-row container: the row, labelled, opening onto
-    // the object's own children.
-    const [out] = events('output').map(
-      (e) => e.body as { output: string; variablesReference: number },
+  it('names the object, then lists its attributes beneath, each with its name', async () => {
+    const variables = vi.fn<Pause['variables']>().mockResolvedValue([
+      { name: 'owner', value: "'ada'", variablesReference: 0 },
+      { name: 'history', value: '[10]', type: 'list', variablesReference: 9, indexedVariables: 1 },
+    ]);
+
+    const shown = await shownUnder(
+      value("Account('ada', 10)", { variablesReference: 7, namedVariables: 2 }),
+      variables,
     );
-    expect(out).toMatchObject({ category: 'console', output: '' });
-    const listed = request('variables', { variablesReference: out.variablesReference });
-    await settle();
-    expect(responseTo(listed)?.body).toEqual({
-      variables: [
-        { name: "p: Account('ada', 10)", value: "p: Account('ada', 10)", variablesReference: 7 },
-      ],
-    });
-    expect(responseTo(seq)?.success).toBe(true);
+
+    expect(variables).toHaveBeenCalledWith(7, 0, 2);
+    expect(shown.outputs[0]).toEqual({ category: 'console', output: "p: Account('ada', 10)\n" });
+    // VS Code shows an output's reference as values with their names hidden,
+    // so each name is in its row's text; a row with children still opens.
+    expect(shown.rows).toEqual([
+      { name: "owner: 'ada'", value: "owner: 'ada'", variablesReference: 0 },
+      {
+        name: 'history: [10]',
+        value: 'history: [10]',
+        type: 'list',
+        variablesReference: 9,
+        indexedVariables: 1,
+      },
+    ]);
+    expect(shown.ok).toBe(true);
     // Showing changes nothing, so Variables is left alone.
-    expect(events('invalidated')).toEqual([]);
+    expect(shown.invalidated).toBe(0);
+  });
+
+  it('lists a list’s first few items, then a row that opens onto all of it', async () => {
+    const variables = vi.fn<Pause['variables']>((_ref, start, count) =>
+      Promise.resolve(items(count, start)),
+    );
+
+    const shown = await shownUnder(
+      value('list with 1000 items', { variablesReference: 4, indexedVariables: 1000 }),
+      variables,
+    );
+
+    expect(variables).toHaveBeenCalledWith(4, 0, 5);
+    expect(shown.rows.map((r) => r.value)).toEqual([
+      '[0]: 0',
+      '[1]: 1',
+      '[2]: 2',
+      '[3]: 3',
+      '[4]: 4',
+      '… 995 more',
+    ]);
+    expect(shown.rows[5]).toMatchObject({ variablesReference: 4, indexedVariables: 1000 });
+  });
+
+  it('lists only the first few of an object with many attributes', async () => {
+    const variables = vi.fn<Pause['variables']>((_ref, start, count) =>
+      Promise.resolve(items(count, start)),
+    );
+
+    const shown = await shownUnder(
+      value('Wide()', { variablesReference: 4, namedVariables: 30 }),
+      variables,
+    );
+
+    expect(variables).toHaveBeenCalledWith(4, 0, 5);
+    expect(shown.rows.map((r) => r.value).pop()).toBe('… 25 more');
   });
 
   it('runs an expression with self bound to the row, echoing it, and refreshes Variables', async () => {

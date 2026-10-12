@@ -5,9 +5,9 @@ import { errorMessage } from './log';
 /**
  * Two items on a Variables row's menu, each ending in the Debug Console:
  *
- * - **Show in Debug Console** puts the row's object there, as an entry that
- *   expands like the row, so the next line can be typed beside it without
- *   first clicking over to the console.
+ * - **Show in Debug Console** puts the row's object there — a line naming
+ *   it, then its attributes, or a list's first items — so the next line can
+ *   be typed beside it without first clicking over to the console.
  * - **Evaluate with self…** asks for an expression and runs it with `self`
  *   bound to the row's object — `len(self.history)` on any row, however deep
  *   — in the frame selected in Call Stack, as a console line runs.
