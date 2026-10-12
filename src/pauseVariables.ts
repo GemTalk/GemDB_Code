@@ -605,3 +605,223 @@ ${withQuietConsole(`
 ${LIST_CHILDREN}`)}
 out contents encodeAsUTF8]`;
 }
+
+// ---------------------------------------------------------------------------
+// The Debug Console and the Watch pane.
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a frame's console names come from: its Locals (a registry position,
+ * 0 for none) over its globals. Those are the pause's Globals (a registry
+ * position) for a frame in the notebook's cells or the `.py` run's own file,
+ * and for a frame in an imported module, that module's, found by its file.
+ */
+export interface ConsoleScope {
+  locals: number;
+  globals: number;
+  moduleFile?: string;
+}
+
+/** One frame of a console error's traceback, outermost first. */
+export interface TracebackFrame {
+  /** A real path, or `<grail>` for the console's input or a notebook cell. */
+  file: string;
+  line: number;
+  name: string;
+  /** Text from the frame's line, as Grail's codegen recorded it — often a slice. */
+  text: string;
+}
+
+/** A console line's exception, as data. */
+export interface ConsoleError {
+  /** The type as a traceback's last line names it: `ZeroDivisionError`, `json.JSONDecodeError`. */
+  type: string;
+  message: string;
+  /** Where a SyntaxError could not read: 1-based line and column, and the line. */
+  syntax?: { file: string; line: number; offset: number; text: string };
+  frames: TracebackFrame[];
+}
+
+/** What `consoleQuery` answered. */
+export type ConsoleReply = { consoleRef: number; output: string } & (
+  | { kind: 'value'; row: PauseVariable }
+  | { kind: 'none' }
+  | { kind: 'error'; error: ConsoleError }
+  | { kind: 'interrupted' }
+  | { kind: 'failed'; message: string }
+);
+
+/**
+ * Smalltalk that runs Debug Console or watch input `source` in a frame's
+ * console scope and answers what came of it (`parseConsoleReply`).
+ *
+ * The scope is made on a frame's first line and kept in the pause's registry
+ * as `{#gemdbConsole. dict}`, at `consoleRef` once made, so a name the
+ * console binds (`y = 5`, `import json`, a `def`) is there for the next line
+ * and gone with the registry at resume, as under debugpy. It is one
+ * SymbolDictionary run as a module scope: the frame's globals, copied, with
+ * its locals copied over them, so a local shadows a global as it does in the
+ * frame's own code, and a comprehension or lambda sees the locals — with
+ * locals in a dict of their own, as debugpy evaluates, it would not.
+ * Because they are copies, rebinding a name (`x = 5`) stays in the console;
+ * the objects are the real ones, so `p.x = 10` changes the program's `p`.
+ * A frame's locals are keyed by their Python spelling, but a scope evaluated
+ * this way carries the six names that are Smalltalk pseudo-variables — `self`
+ * above all — under Grail's own stand-in, which `NameAst doitScopeNameFor:`
+ * answers (`___pyresv_self___`), so they are copied in under that; copied as
+ * `self`, a method's `self` read as undefined (measured).
+ *
+ * What the input prints is captured, as `withQuietConsole` does for a
+ * `__repr__`, and answered with the result. An exception is caught from
+ * Smalltalk, where Python never gave it a `__traceback__`; Grail's
+ * `pythonTracebackFrames` walks the stack the raise captured instead, which
+ * is the same walk Python's own outermost handler would have made. A soft
+ * break — the watch's time budget, or the user cancelling — lands as a
+ * ControlInterrupt and is answered as interrupted, not as an error in the
+ * user's code.
+ */
+export function consoleQuery(scope: ConsoleScope, consoleRef: number, source: string): string {
+  const findModule = scope.moduleFile
+    ? `g := [dispatcher evaluateSource: '${escapeString(
+        [
+          'import sys as _gemdb_sys',
+          '_gemdb_found = None',
+          'for _gemdb_m in list(_gemdb_sys.modules.values()):',
+          `    if getattr(_gemdb_m, "__file__", None) == ${pythonString(scope.moduleFile)}:`,
+          '        _gemdb_found = _gemdb_m.__dict__',
+          '        break',
+          '_gemdb_found',
+        ].join('\n'),
+      )}' usingModuleScope: SymbolDictionary new]
+      on: AbstractException do: [:e | e return: nil].
+    (g notNil and: [g ~~ none and: [g respondsTo: #keysAndValuesDo:]])
+      ifTrue: [g keysAndValuesDo: [:k :x | bind value: k value: x]].`
+    : '';
+  return `| reg out field record none saved describe childrenOf reprOf late clean isLeaf dispatcher cref console dict g l r kind exc captured bind nameAst |
+${PREAMBLE}
+${HELPERS}
+${CHILDREN_OF}
+${DESCRIBE}
+reg := SessionTemps current at: #'${REGISTRY}' otherwise: nil.
+reg isNil ifTrue: [^ 'Error: the pause is over' encodeAsUTF8].
+dispatcher := System myUserProfile symbolList objectNamed: #'ModuleAst'.
+cref := ${consoleRef}.
+nameAst := System myUserProfile symbolList objectNamed: #'NameAst'.
+bind := [:k :x | | nm |
+  nm := k asString asSymbol.
+  nameAst notNil ifTrue: [nm := [nameAst doitScopeNameFor: nm] on: Error do: [:e | e return: nm]].
+  dict at: nm put: x].
+console := (cref between: 1 and: reg size) ifTrue: [reg at: cref] ifFalse: [nil].
+(console class == Array and: [console size = 2 and: [(console at: 1) == #gemdbConsole]]) ifFalse: [
+  dict := SymbolDictionary new.
+  g := (${scope.globals} between: 1 and: reg size) ifTrue: [reg at: ${scope.globals}] ifFalse: [nil].
+  (g class == Array and: [g size >= 2 and: [(g at: 1) == #gemdbScope]])
+    ifTrue: [(g at: 2) keysAndValuesDo: [:k :x | bind value: k value: x]].
+  ${findModule}
+  "The frame's locals over its globals: a local shadows a global of its name."
+  l := (${scope.locals} between: 1 and: reg size) ifTrue: [reg at: ${scope.locals}] ifFalse: [nil].
+  (l class == Array and: [l size >= 2 and: [(l at: 1) == #gemdbScope]])
+    ifTrue: [(l at: 2) keysAndValuesDo: [:k :x | bind value: k value: x]].
+  console := { #gemdbConsole. dict }.
+  reg add: console.
+  cref := reg size].
+kind := #value.
+exc := nil.
+captured := WriteStream on: Unicode7 new.
+saved := SessionTemps current at: #'GrailConsole' otherwise: nil.
+SessionTemps current at: #'GrailConsole' put: (Array with: captured).
+[r := [[dispatcher evaluateSource: '${escapeString(source)}' usingModuleScope: (console at: 2)]
+    on: AlmostOutOfStack do: [:e | kind := #stack. e return: nil]]
+  on: AbstractException do: [:e |
+    (e isKindOf: ControlInterrupt)
+      ifTrue: [kind := #interrupted]
+      ifFalse: [kind == #value ifTrue: [kind := #error. exc := e]].
+    e return: nil]]
+  ensure: [
+    saved isNil
+      ifTrue: [SessionTemps current removeKey: #'GrailConsole' ifAbsent: []]
+      ifFalse: [SessionTemps current at: #'GrailConsole' put: saved]].
+(kind == #value and: [r == none or: [r isNil]]) ifTrue: [kind := #none].
+out nextPutAll: kind; nextPut: field; print: cref; nextPut: field; nextPutAll: (clean value: captured contents); nextPut: record.
+kind == #value ifTrue: [
+  "The result's own row, as the Variables pane would write it, with its __repr__ quiet."
+  SessionTemps current at: #'GrailConsole' put: (Array with: (WriteStream on: Unicode7 new)).
+  [describe value: 'result' value: r] ensure: [
+    saved isNil
+      ifTrue: [SessionTemps current removeKey: #'GrailConsole' ifAbsent: []]
+      ifFalse: [SessionTemps current at: #'GrailConsole' put: saved]]].
+kind == #stack ifTrue: [
+  out nextPutAll: 'RecursionError'; nextPut: field; nextPutAll: 'maximum recursion depth exceeded'; nextPut: record].
+kind == #error ifTrue: [| payload frames tname msg attr sx |
+  attr := [:o :name | [o @env1:___pyAttrLoad___: name] on: AbstractException do: [:e | e return: nil]].
+  payload := [exc ensurePythonTraceback] on: AbstractException do: [:e | e return: exc].
+  frames := [exc pythonTracebackFrames] on: AbstractException do: [:e | e return: #()].
+  tname := [payload ___pythonTypeNameForTraceback___] on: AbstractException do: [:e | e return: exc class name asString].
+  msg := [payload ___safeStrForTraceback___] on: AbstractException do: [:e | e return: exc messageText asString].
+  "A SyntaxError says where it could not read, and str() of one is a tuple: its msg is the message."
+  sx := ((attr value: payload value: #'lineno') isNumber and: [(attr value: payload value: #'text') isString])
+    ifTrue: [{ attr value: payload value: #'filename'. attr value: payload value: #'lineno'.
+      attr value: payload value: #'offset'. attr value: payload value: #'text' }]
+    ifFalse: [nil].
+  (sx notNil and: [(attr value: payload value: #'msg') isString]) ifTrue: [msg := attr value: payload value: #'msg'].
+  out nextPutAll: (clean value: tname asString); nextPut: field; nextPutAll: (clean value: msg asString).
+  sx notNil ifTrue: [
+    out nextPut: field; nextPutAll: (clean value: ((sx at: 1) isString ifTrue: [sx at: 1] ifFalse: [''])); nextPut: field;
+      print: (sx at: 2); nextPut: field;
+      print: ((sx at: 3) isNumber ifTrue: [sx at: 3] ifFalse: [0]); nextPut: field;
+      nextPutAll: (clean value: (sx at: 4))].
+  out nextPut: record.
+  frames do: [:f |
+    out nextPutAll: (clean value: ((f at: 1) ifNil: ['<grail>']) asString); nextPut: field;
+      print: ((f at: 2) isNumber ifTrue: [f at: 2] ifFalse: [0]); nextPut: field;
+      nextPutAll: (clean value: ((f at: 3) ifNil: ['?']) asString); nextPut: field;
+      nextPutAll: (clean value: ((f at: 4) isString ifTrue: [f at: 4] ifFalse: [''])); nextPut: record]].
+out contents encodeAsUTF8`;
+}
+
+/** Parse `consoleQuery`'s answer. */
+export function parseConsoleReply(raw: string): ConsoleReply {
+  if (raw.startsWith('Error: ')) {
+    return { consoleRef: 0, output: '', kind: 'failed', message: raw.slice('Error: '.length) };
+  }
+  const [head = '', ...rest] = raw.split(RECORD);
+  const [kind, ref, printed] = head.split(FIELD);
+  const consoleRef = Number.parseInt(ref ?? '', 10) || 0;
+  const output = (printed ?? '').replace(/\r\n?/g, '\n');
+  const records = rest.filter((r) => r.length > 0);
+  if (kind === 'value') {
+    const [row] = parseChildren(records.join(RECORD) + RECORD);
+    if (row) return { consoleRef, output, kind, row };
+    return { consoleRef, output, kind: 'failed', message: 'The result could not be read.' };
+  }
+  if (kind === 'none' || kind === 'interrupted') return { consoleRef, output, kind };
+  if (kind === 'error' || kind === 'stack') {
+    const [type = '', message = '', file, line, offset, text] = (records[0] ?? '').split(FIELD);
+    const int = (s: string | undefined): number => Number.parseInt(s ?? '', 10) || 0;
+    const frames = records.slice(1).map((record): TracebackFrame => {
+      const [frameFile, frameLine, name, frameText] = record.split(FIELD);
+      return {
+        file: frameFile || '<grail>',
+        line: int(frameLine),
+        name: name || '?',
+        text: frameText ?? '',
+      };
+    });
+    return {
+      consoleRef,
+      output,
+      kind: 'error',
+      error: {
+        type,
+        message,
+        ...(line === undefined
+          ? {}
+          : {
+              syntax: { file: file ?? '', line: int(line), offset: int(offset), text: text ?? '' },
+            }),
+        frames,
+      },
+    };
+  }
+  return { consoleRef, output, kind: 'failed', message: raw || 'The console got no answer.' };
+}

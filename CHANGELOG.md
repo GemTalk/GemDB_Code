@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The Debug Console and Watch work at a `breakpoint()` or red dot.** Type Python into the Debug
+  Console and it runs in the frame selected in the Call Stack: its locals, closed-over names, its
+  module's globals (an imported module's own, not the notebook's) and the builtins, as the paused
+  line itself would see them. A result opens like a Variables row; `print()` shows in the console;
+  names you bind (`y = 5`, `import json`, a `def`) last until the run resumes. An error reads as a
+  Jupyter traceback, frame by frame with the line that raised marked. A line runs as long as it
+  takes, and after a few seconds a notification offers to stop it; a watch keeps a two-second limit.
+  Code the console calls runs straight past `breakpoint()` and red dots. Not yet: `cls` in a
+  classmethod's frame, and rebinding a local (`n = 99`) changes the console's copy, not the paused
+  function.
+
 ## [1.6.0] - 2026-10-07
 
 The engine is unchanged at GemStone 4.0.0.a4, but start with a fresh database: delete

@@ -415,8 +415,13 @@ database, select that kernel from the kernel picker at the top right.
   shows the Python frames, the paused line is highlighted, and Variables shows each frame's locals
   and the notebook's globals, expandable into attributes, items and entries, with classes and
   functions folded into their own rows. **Continue** resumes the cell where it paused; **Stop**
-  ends it, along with any cells queued after it. Stepping is not supported yet, and neither are red
-  dots in a cell (they work in `.py` files; see above). Right-click a Variables row and choose **Add to Persisted Objects…** to keep that object: it
+  ends it, along with any cells queued after it. The **Debug Console** and **Watch** work at the
+  pause: type Python and it runs in the frame selected in the Call Stack, with that frame's locals,
+  its module's globals and the builtins, and a result opens like a Variables row. Names you bind
+  there last until the run resumes; an error reads as a notebook traceback; a long-running line can
+  be stopped from the notification that appears. A change to an object made there is in the
+  notebook's transaction, as it would be from a cell. Stepping is not supported yet, and neither are
+  red dots in a cell (they work in `.py` files; see above). Right-click a Variables row and choose **Add to Persisted Objects…** to keep that object: it
   goes in `gemdb.root` under the key you give (one is suggested) and is written at the notebook's
   next commit. The **Persisted Objects** view, under GemDB and in Run and Debug, lists what `gemdb.root`
   holds; its title bar always has **Commit** and **Abort** for the notebook you are working in. **Add Stack to Persisted Objects…** on the Call Stack saves the whole paused stack the same

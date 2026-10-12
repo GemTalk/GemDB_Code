@@ -255,18 +255,23 @@ export const window = {
   },
   /**
    * Progress is a pass-through here: run the callback and return its result.
-   * Nothing asserts on the notification itself — that is the editor's job,
-   * not ours — and the token never reports cancelled, since nothing here can
-   * drive one.
+   * The token never reports cancelled; a test that needs to cancel spies on
+   * this and hands over a token it can drive.
    */
   withProgress<T>(
     _options: unknown,
     task: (
       progress: { report: (value: { message?: string }) => void },
-      token: { isCancellationRequested: boolean },
+      token: {
+        isCancellationRequested: boolean;
+        onCancellationRequested: (listener: () => void) => { dispose(): void };
+      },
     ) => Thenable<T>,
   ): Thenable<T> {
-    return task({ report: () => {} }, { isCancellationRequested: false });
+    return task(
+      { report: () => {} },
+      { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => {} }) },
+    );
   },
 };
 

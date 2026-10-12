@@ -4,13 +4,18 @@ import * as vscode from 'vscode';
 import { runFileOf } from './fileOwner';
 import { CellText, PythonFrame, firstLineOf, locateCell } from './haltStack';
 import { errorMessage, log } from './log';
+import { PlacedFrame, jupyterTraceback } from './consoleTraceback';
 import {
+  ConsoleScope,
   MAIN_MODULE,
   PAGE,
   PauseVariable,
+  TracebackFrame,
   childrenQuery,
   clearRegistryQuery,
+  consoleQuery,
   parseChildren,
+  parseConsoleReply,
   parsePausedStack,
   pausedStackQuery,
 } from './pauseVariables';
@@ -37,10 +42,10 @@ import { HaltAnswer, HaltRequest, setHaltHandler, setRedDotSource } from './sess
  *
  * Deliberately small for now: the call stack, the highlight, each frame's
  * Locals and the notebook's Globals, Continue and Stop, red dots in `.py`
- * files, and saving a row's object under gemdb.root (`savedObjects.ts`).
- * Stepping, evaluation and Restart answer "not yet" rather than pretending,
- * and so do red dots in notebook cells and dots with a condition, hit count
- * or log message.
+ * files, the Debug Console and the Watch pane, and saving a row's object
+ * under gemdb.root (`savedObjects.ts`). Stepping and Restart answer "not
+ * yet" rather than pretending, and so do red dots in notebook cells and dots
+ * with a condition, hit count or log message.
  *
  * The adapter is inline (`DebugAdapterInlineImplementation`) and speaks the
  * Debug Adapter Protocol directly rather than through `@vscode/debugadapter`:
@@ -83,6 +88,29 @@ export interface DapVariable {
   namedVariables?: number;
 }
 
+/** Where an `evaluate` came from: the Debug Console, or the Watch pane. */
+export type ConsoleContext = 'repl' | 'watch';
+
+/**
+ * What one Debug Console line or watch came back with. `output` is what it
+ * printed, sent to the console before the answer; on an error, `traceback`
+ * reads as a Jupyter notebook's does.
+ */
+export type ConsoleAnswer =
+  | {
+      kind: 'value';
+      output: string;
+      /** The result's repr, without a type badge; '' for None or a statement. */
+      value: string;
+      type?: string;
+      /** Opens the result like a Variables row; 0 for a leaf. */
+      variablesReference: number;
+      indexedVariables?: number;
+      namedVariables?: number;
+    }
+  | { kind: 'error'; output: string; traceback: string }
+  | { kind: 'interrupted'; output: string };
+
 /** One evaluation sitting at a breakpoint(), waiting for the user. */
 export interface Pause {
   label: string;
@@ -102,6 +130,17 @@ export interface Pause {
   handleFor?(containerRef: number, name: string): number | undefined;
   /** Run a query in the paused session (see `HaltRequest.query`). */
   query?(code: string): Promise<string>;
+  /**
+   * Run Debug Console or watch input in frame `frameId`, with that frame's
+   * names in scope, until it finishes or `signal` aborts it. Absent where
+   * the pause offers no evaluation, such as a saved stack.
+   */
+  evaluate?(
+    source: string,
+    frameId: number,
+    context: ConsoleContext,
+    signal: AbortSignal,
+  ): Promise<ConsoleAnswer>;
   /** Each frame's whole cell or file, by frame index, so the stack can be saved. */
   texts?: Array<string[] | undefined>;
   /** The saved source behind a frame's `sourceReference`, for a stack opened from the database. */
@@ -467,6 +506,18 @@ interface DapRequest {
 }
 
 const NOT_YET_STEP = "Stepping isn't supported yet. Use Continue to resume or Stop to end the run.";
+const NOT_HERE = 'Evaluating expressions is not available here.';
+const NO_HOVER = "GemDB doesn't evaluate on hover: a hover must not run code.";
+const INTERRUPTED = 'Interrupted.';
+const WATCH_TOO_LONG =
+  'Took too long for a watch (over 2 seconds). Run it in the Debug Console, which has no limit.';
+
+/**
+ * How long a console line runs before a notification offers to stop it. The
+ * Debug Console has no stop button of its own, and VS Code shows no Pause in
+ * the toolbar while the program is paused.
+ */
+export const OFFER_STOP_AFTER_MS = 4_000;
 const NOT_YET_RESTART =
   "Restarting isn't supported yet. Use Continue to resume or Stop to end the run.";
 
@@ -501,6 +552,10 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
   private dotWork: Promise<void>;
   /** Resolves at launch: VS Code may send setBreakpoints before it, and they wait. */
   private markLaunched: () => void = () => {};
+  /** Whether VS Code said, in `initialize`, that it reads the `invalidated` event. */
+  private clientInvalidates = false;
+  /** Console lines still running, by request seq, so `cancel` can stop one. */
+  private readonly running = new Map<number, AbortController>();
 
   constructor(
     private readonly lookup: (id: string) => Pause | undefined,
@@ -514,9 +569,12 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
     if (request.type !== 'request') return;
     switch (request.command) {
       case 'initialize':
+        this.clientInvalidates = request.arguments?.supportsInvalidatedEvent === true;
         this.respond(request, {
           supportsConfigurationDoneRequest: true,
           supportsTerminateRequest: true,
+          // A console line can run for as long as the user's code does.
+          supportsCancelRequest: true,
           // Claimed so Restart arrives as a request this adapter can decline.
           // Unclaimed, VS Code restarts by disconnecting — which stops the
           // cell — and relaunching at a pause that no longer exists.
@@ -629,8 +687,14 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
         this.respond(request);
         return;
       case 'evaluate':
-        this.fail(request, "Evaluating expressions isn't supported yet.", false);
+        this.evaluate(request);
         return;
+      case 'cancel': {
+        const id = Number(request.arguments?.requestId ?? 0);
+        this.running.get(id)?.abort();
+        this.respond(request);
+        return;
+      }
       case 'terminate':
         this.respond(request);
         this.settle('stop');
@@ -678,7 +742,99 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
     this.respond(request, { breakpoints: verifiedDots(file, wanted, armed, live) });
   }
 
+  /**
+   * Answer a Debug Console line or a watch. Hover is refused: `initialize`
+   * does not claim it, and a hover must never run code that could change
+   * something.
+   *
+   * What the line printed goes to the console first, then the answer: its
+   * value, which opens like a Variables row, or a failure whose message is a
+   * Jupyter traceback, or "Interrupted.". After a console line, failed or not
+   * — it may have changed something first — VS Code is told to read the
+   * variables again. Never after a watch: VS Code re-runs the watches when it
+   * re-reads, and each would invalidate the next.
+   *
+   * A console line runs as long as it takes; past `OFFER_STOP_AFTER_MS` a
+   * notification offers to stop it, as DAP's `cancel` does. A watch keeps the
+   * two-second budget the Variables rows have, since every watch re-runs at
+   * every stop.
+   */
+  private evaluate(request: DapRequest): void {
+    const context = String(request.arguments?.context ?? 'repl');
+    const source = String(request.arguments?.expression ?? '');
+    const pause = this.pause;
+    if (context === 'hover') {
+      this.fail(request, NO_HOVER, false);
+      return;
+    }
+    if (!pause?.evaluate) {
+      this.fail(request, NOT_HERE, false);
+      return;
+    }
+    const kind: ConsoleContext = context === 'watch' ? 'watch' : 'repl';
+    const frameId = Number(request.arguments?.frameId ?? pause.frames[0]?.id ?? 1);
+    const controller = new AbortController();
+    this.running.set(request.seq, controller);
+    let finished = false;
+    let markDone: () => void = () => {};
+    const done = new Promise<void>((resolve) => (markDone = resolve));
+    const offer =
+      kind === 'repl'
+        ? setTimeout(() => {
+            if (finished) return;
+            void vscode.window.withProgress(
+              {
+                location: vscode.ProgressLocation.Notification,
+                title: 'GemDB: the Debug Console is still running',
+                cancellable: true,
+              },
+              (_progress, token) => {
+                token.onCancellationRequested(() => controller.abort());
+                return done;
+              },
+            );
+          }, OFFER_STOP_AFTER_MS)
+        : undefined;
+    const finish = (): void => {
+      finished = true;
+      if (offer) clearTimeout(offer);
+      this.running.delete(request.seq);
+      markDone();
+    };
+    pause.evaluate(source, frameId, kind, controller.signal).then(
+      (answer) => {
+        finish();
+        if (answer.output) this.event('output', { category: 'stdout', output: answer.output });
+        if (answer.kind === 'value') {
+          this.respond(request, {
+            result: answer.value,
+            ...(answer.type ? { type: answer.type } : {}),
+            variablesReference: answer.variablesReference,
+            ...(answer.indexedVariables ? { indexedVariables: answer.indexedVariables } : {}),
+            ...(answer.namedVariables ? { namedVariables: answer.namedVariables } : {}),
+          });
+        } else if (answer.kind === 'error') {
+          this.fail(request, answer.traceback, false);
+        } else {
+          this.fail(
+            request,
+            kind === 'watch' && !controller.signal.aborted ? WATCH_TOO_LONG : INTERRUPTED,
+            false,
+          );
+        }
+        if (kind === 'repl' && this.clientInvalidates) {
+          this.event('invalidated', { areas: ['variables'] });
+        }
+      },
+      (e: unknown) => {
+        finish();
+        this.fail(request, errorMessage(e), false);
+      },
+    );
+  }
+
   dispose(): void {
+    for (const controller of this.running.values()) controller.abort();
     // The session went away without Continue or Stop — a closed window, say.
     // Leaving the evaluation paused would strand its cell, so stop it.
     this.settle('stop');
@@ -781,6 +937,8 @@ interface PauseView {
   frames: DapFrame[];
   scopes: Map<number, DapScope[]>;
   texts: Array<string[] | undefined>;
+  /** Where each frame's Debug Console names come from, by DAP frame id. */
+  consoles: Map<number, ConsoleScope>;
 }
 
 /**
@@ -791,6 +949,8 @@ interface PauseView {
  * notebook's under a frame a cell compiled (`<grail>`), a run file's under its
  * own frames. A frame in an imported module has that module's globals, which
  * Grail does not hand over here, and showing the run's under it would mislead.
+ * Its Debug Console does see them: the console finds the module by its file
+ * when the frame's first line is typed (`consoleQuery`).
  */
 async function readPause(request: HaltRequest): Promise<PauseView> {
   try {
@@ -804,15 +964,27 @@ async function readPause(request: HaltRequest): Promise<PauseView> {
     );
     const ownFile = owner.kind === 'file' ? runFileOf(owner.key) : '<grail>';
     const scopes = new Map<number, DapScope[]>();
-    frames.forEach((frame, index) =>
-      scopes.set(index + 1, scopesFor(frame.locals ?? 0, frame.file === ownFile ? globals : 0)),
-    );
+    const consoles = new Map<number, ConsoleScope>();
+    frames.forEach((frame, index) => {
+      const own = frame.file === ownFile;
+      scopes.set(index + 1, scopesFor(frame.locals ?? 0, own ? globals : 0));
+      consoles.set(index + 1, {
+        locals: frame.locals ?? 0,
+        globals: own ? globals : 0,
+        ...(!own && frame.file !== '<grail>' ? { moduleFile: frame.file } : {}),
+      });
+    });
     const { running, cells } = notebookCells(owner.key);
     const texts: Array<string[] | undefined> = [];
-    return { frames: toDapFrames(frames, running, cells, readFileLines, texts), scopes, texts };
+    return {
+      frames: toDapFrames(frames, running, cells, readFileLines, texts),
+      scopes,
+      texts,
+      consoles,
+    };
   } catch (e) {
     log(`Could not read the stack at a pause: ${errorMessage(e)}`);
-    return { frames: [], scopes: new Map(), texts: [] };
+    return { frames: [], scopes: new Map(), texts: [], consoles: new Map() };
   }
 }
 
@@ -842,6 +1014,93 @@ async function readChildren(
 
 function handleKey(containerRef: number, name: string): string {
   return `${containerRef}\u0000${name}`;
+}
+
+/**
+ * Where a console traceback's frame is, for `jupyterTraceback`: the first
+ * frame is the console's own input; a `<grail>` frame is in the notebook cell
+ * holding its line (`locateCell`, the call stack's own match); anything else
+ * is a file, read from disk.
+ */
+function placeFrame(
+  ownerKey: string,
+  source: string,
+): (frame: TracebackFrame, index: number) => PlacedFrame {
+  const { running, cells } = notebookCells(ownerKey);
+  return (frame, index) => {
+    if (frame.file === '<grail>') {
+      if (index === 0 && frame.name === '<module>') {
+        return { label: 'Debug Console', isFile: false, lines: source.split(/\r?\n/) };
+      }
+      const uri = locateCell(
+        { ...frame, column: 0, endLine: frame.line, endColumn: 0, lineText: frame.text },
+        running,
+        cells,
+      );
+      const cell = cells.find((c) => c.uri === uri);
+      return cell
+        ? { label: cell.label ?? 'Cell', isFile: false, lines: cell.lines }
+        : { label: 'Cell', isFile: false };
+    }
+    if (frame.file === '<string>' || frame.file === '') {
+      return { label: 'Debug Console', isFile: false, lines: source.split(/\r?\n/) };
+    }
+    return { label: `File ${frame.file}`, isFile: true, lines: readFileLines(frame.file) };
+  };
+}
+
+/**
+ * Run a Debug Console line or a watch in one frame of a pause (`Pause.evaluate`).
+ * The frame's console scope is made by its first line and found again by
+ * `consoleRefs` after that. A console line runs without the paused queries'
+ * time budget, a watch with it; both run straight past a breakpoint() in
+ * code they call, as debugpy's evaluation does.
+ */
+async function evaluateAt(
+  request: HaltRequest,
+  view: PauseView,
+  consoleRefs: Map<number, number>,
+  source: string,
+  frameId: number,
+  context: ConsoleContext,
+  signal: AbortSignal,
+): Promise<ConsoleAnswer> {
+  const scope = view.consoles.get(frameId) ?? { locals: 0, globals: 0 };
+  const reply = parseConsoleReply(
+    await request.query(consoleQuery(scope, consoleRefs.get(frameId) ?? 0, source), {
+      budget: context === 'watch',
+      signal,
+      passHalts: true,
+    }),
+  );
+  if (reply.consoleRef > 0) consoleRefs.set(frameId, reply.consoleRef);
+  const output = reply.output;
+  switch (reply.kind) {
+    case 'value': {
+      const row = toDapVariable(reply.row);
+      return {
+        kind: 'value',
+        output,
+        value: row.value,
+        ...(row.type ? { type: row.type } : {}),
+        variablesReference: row.variablesReference,
+        ...(row.indexedVariables ? { indexedVariables: row.indexedVariables } : {}),
+        ...(row.namedVariables ? { namedVariables: row.namedVariables } : {}),
+      };
+    }
+    case 'none':
+      return { kind: 'value', output, value: '', variablesReference: 0 };
+    case 'interrupted':
+      return { kind: 'interrupted', output };
+    case 'error':
+      return {
+        kind: 'error',
+        output,
+        traceback: jupyterTraceback(reply.error, placeFrame(request.session.owner.key, source)),
+      };
+    case 'failed':
+      return { kind: 'error', output, traceback: reply.message };
+  }
 }
 
 /**
@@ -913,9 +1172,11 @@ export function registerBreakpointDebugger(): vscode.Disposable {
 
         const where = request.reason === 'red dot' ? 'a red dot' : 'breakpoint()';
         log(`${where} in ${label}: paused`);
-        void readPause(request).then(({ frames, scopes, texts }) => {
+        void readPause(request).then((view) => {
+          const { frames, scopes, texts } = view;
           if (settled) return;
           const handles = new Map<string, number>();
+          const consoleRefs = new Map<number, number>();
           pauses.set(id, {
             label,
             ownerKey: request.session.owner.key,
@@ -925,6 +1186,8 @@ export function registerBreakpointDebugger(): vscode.Disposable {
             answer,
             handleFor: (containerRef, name) => handles.get(handleKey(containerRef, name)),
             query: (code) => request.query(code),
+            evaluate: (source, frameId, context, signal) =>
+              evaluateAt(request, view, consoleRefs, source, frameId, context, signal),
             rearm: (dots) => request.rearm(dots),
             armedDots: request.armedDots,
             reason: request.reason,
