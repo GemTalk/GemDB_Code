@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { REQUIRED_SHARED_MEMORY_GB } from '../config';
-import { OsConfigWorld, runEnsureOsConfigured } from '../osConfig';
+import {
+  OsConfigWorld,
+  parseRemoveIpcProperty,
+  removeIpcStatusFrom,
+  runEnsureOsConfigured,
+} from '../osConfig';
 
 /**
  * A stand-in operating system that records what was asked of it.
@@ -31,7 +36,8 @@ function makeWorld(options: {
   const world: OsConfigWorld = {
     sharedMemoryOk: () =>
       Promise.resolve(sharedMemory === 'ok' || (sharedMemory === 'fixed' && sharedMemoryRan)),
-    removeIpcOk: () => removeIpc === 'ok' || (removeIpc === 'fixed' && removeIpcRan),
+    removeIpcOk: () =>
+      Promise.resolve(removeIpc === 'ok' || (removeIpc === 'fixed' && removeIpcRan)),
     confirm: (message) => {
       calls.push('confirm');
       messages.push(message);
@@ -162,5 +168,38 @@ describe('runEnsureOsConfigured', () => {
     expect(needed).toContain('needs one change');
     expect(needed).not.toContain('RemoveIPC=no');
     expect(recommended).toContain('RemoveIPC=no');
+  });
+});
+
+describe('removeIpcStatusFrom', () => {
+  it('is not in effect while only the config file has it', () => {
+    // The state the status view used to call fixed: the script wrote the
+    // file, logind never reloaded it, and a logout still killed the database.
+    expect(removeIpcStatusFrom(false, true)).toBe('pending');
+  });
+
+  it('trusts the running logind over the config files', () => {
+    expect(removeIpcStatusFrom(true, false)).toBe('inEffect');
+    expect(removeIpcStatusFrom(false, false)).toBe('unset');
+  });
+
+  it('falls back to the config files when logind cannot be asked', () => {
+    expect(removeIpcStatusFrom(undefined, true)).toBe('inEffect');
+    expect(removeIpcStatusFrom(undefined, false)).toBe('unset');
+  });
+});
+
+describe('parseRemoveIpcProperty', () => {
+  it('reads RemoveIPC=no as keeping IPC', () => {
+    expect(parseRemoveIpcProperty('b false\n')).toBe(true);
+  });
+
+  it('reads RemoveIPC=yes as removing IPC', () => {
+    expect(parseRemoveIpcProperty('b true\n')).toBe(false);
+  });
+
+  it('has no answer for output that is not a boolean property', () => {
+    expect(parseRemoveIpcProperty('')).toBeUndefined();
+    expect(parseRemoveIpcProperty('s "no"')).toBeUndefined();
   });
 });

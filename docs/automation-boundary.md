@@ -158,7 +158,13 @@ modal when that is being asked anyway. Otherwise the status view's "Survives
 logout" row offers it (`gemdb.configureRemoveIpc`). It used to raise the modal
 alone, which on stock Linux (where shared memory is already far above 1 GB)
 meant every Linux user was asked for `sudo` over a setting that blocks
-nothing (issue #45).
+nothing (issue #45). The script sends logind SIGHUP so the setting applies
+without a reboot, and the row reads logind's live `RemoveIPC` property rather
+than its config files: logind consults the loaded value when a user's last
+session ends, so a file it has not reloaded protects nothing, and checking
+the file let the row vanish while a logout still killed the database.
+Measured 2026-10-12 on systemd 249 and 255: the reload applies it, no restart
+of logind, and a segment survives a logout that destroys it under the default.
 
 **Choosing another root path when the default is on NFS — asked, once setup
 has refused.** The stone will not open a repository on an NFS mount, and on

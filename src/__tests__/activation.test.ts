@@ -54,11 +54,12 @@ const ensureOsConfigured = vi.fn(async (): Promise<string> => 'alreadyConfigured
 const isSharedMemoryConfigured = vi.fn(async () => false);
 vi.mock('../osConfig', async (importOriginal) => ({
   osConfigAllowsStart: (await importOriginal<typeof import('../osConfig')>()).osConfigAllowsStart,
+  REMOVE_IPC_STATUS: (await importOriginal<typeof import('../osConfig')>()).REMOVE_IPC_STATUS,
   configureSharedMemory: async () => {},
   configureRemoveIpc: async () => {},
   ensureOsConfigured: () => ensureOsConfigured(),
   isSharedMemoryConfigured: () => isSharedMemoryConfigured(),
-  isRemoveIpcConfigured: () => false,
+  removeIpcStatus: async () => 'unset',
   sharedMemoryLabel: async () => '',
 }));
 
