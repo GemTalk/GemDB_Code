@@ -523,6 +523,12 @@ const WATCH_TOO_LONG =
  * the toolbar while the program is paused.
  */
 export const OFFER_STOP_AFTER_MS = 4_000;
+
+/**
+ * Where the references for `PauseDebugAdapter.wrap`'s containers start: far
+ * above any registry position, which is what every other reference is.
+ */
+const SHOWN_REFS = 1_000_000_000;
 const NOT_YET_RESTART =
   "Restarting isn't supported yet. Use Continue to resume or Stop to end the run.";
 
@@ -561,6 +567,12 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
   private clientInvalidates = false;
   /** Console lines still running, by request seq, so `cancel` can stop one. */
   private readonly running = new Map<number, AbortController>();
+  /**
+   * The one-row containers `showRow` hands the console, by their reference
+   * (`wrap`), each answered here rather than by the gem.
+   */
+  private readonly shown = new Map<number, DapVariable>();
+  private nextShown = SHOWN_REFS;
 
   constructor(
     private readonly lookup: (id: string) => Pause | undefined,
@@ -661,6 +673,11 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
         // capping here never hides a row.
         const count = Number(request.arguments?.count ?? 0) || PAGE;
         const pause = this.pause;
+        const shown = this.shown.get(ref);
+        if (shown) {
+          this.respond(request, { variables: start === 0 ? [shown] : [] });
+          return;
+        }
         if (!pause) {
           this.respond(request, { variables: [] });
           return;
@@ -891,12 +908,15 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
         finish();
         if (answer.output) this.event('output', { category: 'stdout', output: answer.output });
         if (answer.kind === 'value') {
-          if (answer.value !== '' || answer.variablesReference > 0) {
+          const text = `${expression === undefined ? `${name}: ` : ''}${answer.value}`;
+          if (answer.variablesReference > 0) {
             this.event('output', {
               category: 'console',
-              output: `${expression === undefined ? `${name}: ` : ''}${answer.value}\n`,
-              variablesReference: answer.variablesReference,
+              output: '',
+              variablesReference: this.wrap(text, answer),
             });
+          } else if (answer.value !== '') {
+            this.event('output', { category: 'console', output: `${text}\n` });
           }
         } else {
           this.event('output', {
@@ -914,6 +934,28 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
         this.fail(request, errorMessage(e), true);
       },
     );
+  }
+
+  /**
+   * A reference for the console whose one child is `answer`'s value, shown as
+   * `text`. An `output` event's `variablesReference` is read by VS Code as a
+   * list of values, as a JavaScript debugger's console.log arguments are: the
+   * console shows each child of it with its name hidden (measured: a dict's
+   * reference showed its three values, unlabelled, and no dict). So the
+   * console is handed this container instead, and shows the one row, labelled
+   * by its text and opening onto the object's own children.
+   */
+  private wrap(text: string, answer: Extract<ConsoleAnswer, { kind: 'value' }>): number {
+    const ref = this.nextShown++;
+    this.shown.set(ref, {
+      name: text,
+      value: text,
+      ...(answer.type ? { type: answer.type } : {}),
+      variablesReference: answer.variablesReference,
+      ...(answer.indexedVariables ? { indexedVariables: answer.indexedVariables } : {}),
+      ...(answer.namedVariables ? { namedVariables: answer.namedVariables } : {}),
+    });
+    return ref;
   }
 
   dispose(): void {

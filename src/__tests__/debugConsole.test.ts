@@ -468,7 +468,21 @@ describe('a saved stack', () => {
 describe('putting a Variables row in the Debug Console', () => {
   const showRow = (answer: ConsoleAnswer) => vi.fn(() => Promise.resolve(answer));
 
-  it('shows the row’s object as an entry that expands like the row', async () => {
+  it('shows a leaf as a plain line, name and value', async () => {
+    const { request, events } = started(undefined, undefined, {
+      showRow: showRow(value('10')),
+      evaluate: vi.fn(),
+    });
+
+    request('gemdbShowRow', { handle: 3, name: 'limit' });
+    await settle();
+
+    expect(events('output').map((e) => e.body)).toEqual([
+      { category: 'console', output: 'limit: 10\n' },
+    ]);
+  });
+
+  it('shows the row’s object as one labelled entry that expands like the row', async () => {
     const shown = showRow(value("Account('ada', 10)", { variablesReference: 7 }));
     const { request, responseTo, events } = started(undefined, undefined, {
       showRow: shown,
@@ -479,9 +493,20 @@ describe('putting a Variables row in the Debug Console', () => {
     await settle();
 
     expect(shown).toHaveBeenCalledWith(7, 'p');
-    expect(events('output').map((e) => e.body)).toEqual([
-      { category: 'console', output: "p: Account('ada', 10)\n", variablesReference: 7 },
-    ]);
+    // VS Code lists an output's reference as values with their names hidden,
+    // so the console gets a one-row container: the row, labelled, opening onto
+    // the object's own children.
+    const [out] = events('output').map(
+      (e) => e.body as { output: string; variablesReference: number },
+    );
+    expect(out).toMatchObject({ category: 'console', output: '' });
+    const listed = request('variables', { variablesReference: out.variablesReference });
+    await settle();
+    expect(responseTo(listed)?.body).toEqual({
+      variables: [
+        { name: "p: Account('ada', 10)", value: "p: Account('ada', 10)", variablesReference: 7 },
+      ],
+    });
     expect(responseTo(seq)?.success).toBe(true);
     // Showing changes nothing, so Variables is left alone.
     expect(events('invalidated')).toEqual([]);
@@ -498,7 +523,7 @@ describe('putting a Variables row in the Debug Console', () => {
     expect(events('output').map((e) => e.body)).toEqual([
       { category: 'console', output: '>>> len(self.history)  # self is p\n' },
       { category: 'stdout', output: 'hi\n' },
-      { category: 'console', output: '2\n', variablesReference: 0 },
+      { category: 'console', output: '2\n' },
     ]);
     expect(events('invalidated')).toHaveLength(1);
   });
