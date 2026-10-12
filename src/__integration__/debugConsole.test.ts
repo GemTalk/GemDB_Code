@@ -861,6 +861,23 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
         });
         seen.echo = withSelf.out[0];
         seen.withSelf = (await listed(withSelf)).map((v) => v.value);
+        // What Show leaves at the prompt: a Locals row's own name, which means
+        // it there; for a nested row, `_`, bound to it.
+        seen.typedLocal = (
+          await dap.request('gemdbShowRow', {
+            handle: other.variablesReference,
+            name: 'other',
+            frameId: 1,
+          })
+        ).body?.typed;
+        seen.typedNested = (
+          await dap.request('gemdbShowRow', {
+            handle: items.variablesReference,
+            name: 'items',
+            frameId: 1,
+          })
+        ).body?.typed;
+        seen.underscore = await dap.value('_', 1);
         // The frame's own self is still the Box it was: the binding was for that line alone.
         seen.frameSelf = await dap.value('self.x');
         const scopes = (await dap.request('scopes', { frameId: 2 })).body?.scopes as Array<{
@@ -890,6 +907,9 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
     });
     expect(seen.withSelf).toEqual(['50']);
     expect(seen.frameSelf).toBe('1');
+    expect(seen.typedLocal).toBe('other');
+    expect(seen.typedNested).toBe('_');
+    expect(seen.underscore).toBe('[5, 5]');
     expect(seen.group).toMatchObject({
       ok: true,
       out: [{ category: 'stderr', output: expect.stringMatching(/not an object of its own/) }],

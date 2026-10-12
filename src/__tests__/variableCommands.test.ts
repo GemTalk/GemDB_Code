@@ -72,6 +72,31 @@ describe('Show in Debug Console', () => {
     ]);
   });
 
+  it('leaves what to type at the console’s prompt, as the adapter answers it', async () => {
+    const seen = watching();
+    vi.spyOn(commands, 'executeCommand').mockImplementation((id: string, ...args: unknown[]) => {
+      seen.push(`command ${id}${args.length ? ' ' + JSON.stringify(args[0]) : ''}`);
+      return undefined;
+    });
+    paused(() => Promise.resolve({ typed: 'entry' }));
+
+    await showInDebugConsole(row('entry', 7));
+
+    expect(seen).toEqual([
+      'command workbench.debug.action.focusRepl',
+      'command type {"text":"entry"}',
+    ]);
+  });
+
+  it('types nothing when the adapter answers nothing to type', async () => {
+    const seen = watching();
+    paused(() => Promise.resolve({}));
+
+    await showInDebugConsole(row('p', 7));
+
+    expect(seen).toEqual(['command workbench.debug.action.focusRepl']);
+  });
+
   it('finds a leaf row’s object by its handle, as Add to Persisted Objects does', async () => {
     watching();
     const customRequest = vi.fn<CustomRequest>().mockResolvedValue({});

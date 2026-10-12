@@ -14,6 +14,7 @@ import {
   TracebackFrame,
   childrenQuery,
   clearRegistryQuery,
+  consoleNameQuery,
   consoleQuery,
   describeRowQuery,
   parseChildren,
@@ -149,6 +150,12 @@ export interface Pause {
   ): Promise<ConsoleAnswer>;
   /** The object of registry entry `handle`, as a console entry named `name`. */
   showRow?(handle: number, name: string): Promise<ConsoleAnswer>;
+  /**
+   * What to type in frame `frameId`'s console to reach registry entry
+   * `handle`'s object: `name` when it already means that object there, else
+   * `_`, which it is then bound to (`consoleNameQuery`).
+   */
+  consoleName?(frameId: number, name: string, handle: number): Promise<string>;
   /** Each frame's whole cell or file, by frame index, so the stack can be saved. */
   texts?: Array<string[] | undefined>;
   /** The saved source behind a frame's `sourceReference`, for a stack opened from the database. */
@@ -884,7 +891,8 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
    * is, shown the same way. Shown as `output` events, since there is no
    * console request to answer: an echo of the expression, what it printed,
    * then the value, a traceback, or
-   * "Interrupted.".
+   * "Interrupted.". Showing answers `typed`: what to give the console's
+   * prompt to reach the object (`Pause.consoleName`).
    */
   private showRow(request: DapRequest): void {
     const pause = this.pause;
@@ -931,7 +939,12 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
         if (expression !== undefined && this.clientInvalidates) {
           this.event('invalidated', { areas: ['variables'] });
         }
-        this.respond(request);
+        // What the console's prompt should be given, so the next line can use the object.
+        const typed =
+          expression === undefined && answer.kind === 'value' && pause.consoleName
+            ? await pause.consoleName(frameId, name, handle).catch(() => undefined)
+            : undefined;
+        this.respond(request, typed === undefined ? undefined : { typed });
       })
       .catch((e: unknown) => this.fail(request, errorMessage(e), true))
       .finally(finish);
@@ -1207,6 +1220,66 @@ function placeFrame(
   };
 }
 
+/** A Python identifier, which a console line can use as a name. */
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const KEYWORDS = new Set([
+  'False',
+  'None',
+  'True',
+  'and',
+  'as',
+  'assert',
+  'async',
+  'await',
+  'break',
+  'class',
+  'continue',
+  'def',
+  'del',
+  'elif',
+  'else',
+  'except',
+  'finally',
+  'for',
+  'from',
+  'global',
+  'if',
+  'import',
+  'in',
+  'is',
+  'lambda',
+  'nonlocal',
+  'not',
+  'or',
+  'pass',
+  'raise',
+  'return',
+  'try',
+  'while',
+  'with',
+  'yield',
+]);
+
+/** What to type to reach a shown row's object in one frame's console (`Pause.consoleName`). */
+async function consoleNameAt(
+  request: HaltRequest,
+  view: PauseView,
+  consoleRefs: Map<number, number>,
+  frameId: number,
+  name: string,
+  handle: number,
+): Promise<string> {
+  const scope = view.consoles.get(frameId) ?? { locals: 0, globals: 0 };
+  const usable = IDENTIFIER.test(name) && !KEYWORDS.has(name) ? name : '';
+  const raw = await request.query(
+    consoleNameQuery(scope, consoleRefs.get(frameId) ?? 0, usable, handle),
+  );
+  if (raw.startsWith('Error: ')) throw new Error(raw.slice('Error: '.length));
+  const [ref, typed] = raw.split(' ');
+  if (Number(ref) > 0) consoleRefs.set(frameId, Number(ref));
+  return typed ?? '_';
+}
+
 /** A Variables row's object as a console entry (`Pause.showRow`). */
 async function showRowAt(
   request: HaltRequest,
@@ -1374,6 +1447,8 @@ export function registerBreakpointDebugger(): vscode.Disposable {
             evaluate: (source, frameId, context, signal, selfHandle) =>
               evaluateAt(request, view, consoleRefs, source, frameId, context, signal, selfHandle),
             showRow: (handle, name) => showRowAt(request, handle, name),
+            consoleName: (frameId, name, handle) =>
+              consoleNameAt(request, view, consoleRefs, frameId, name, handle),
             rearm: (dots) => request.rearm(dots),
             armedDots: request.armedDots,
             reason: request.reason,

@@ -628,6 +628,31 @@ describe('putting a Variables row in the Debug Console', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('answers what to type at the prompt for the object it showed', async () => {
+    const consoleName = vi.fn<NonNullable<Pause['consoleName']>>().mockResolvedValue('_');
+    const c = started(vi.fn(), undefined, { showRow: showRow(value('10')), consoleName });
+
+    const seq = c.request('gemdbShowRow', { handle: 7, name: "'owner'", frameId: 2 });
+    await settle();
+
+    expect(consoleName).toHaveBeenCalledWith(2, "'owner'", 7);
+    expect(c.responseTo(seq)?.body).toEqual({ typed: '_' });
+  });
+
+  it('answers nothing to type after Evaluate with self', async () => {
+    const consoleName = vi.fn<NonNullable<Pause['consoleName']>>();
+    const c = started(vi.fn<Evaluate>().mockResolvedValue(value('2')), undefined, {
+      showRow: vi.fn(),
+      consoleName,
+    });
+
+    const seq = c.request('gemdbShowRow', { handle: 7, name: 'p', expression: 'self.x' });
+    await settle();
+
+    expect(consoleName).not.toHaveBeenCalled();
+    expect(c.responseTo(seq)?.body).toBeUndefined();
+  });
+
   it('refuses where the pause has no rows to show, such as a saved stack', async () => {
     const { request, responseTo } = started(undefined);
 

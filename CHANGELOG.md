@@ -22,7 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Show in Debug Console and Evaluate with self… on a Variables row.** Right-click any row, however
   deep in the tree, and **Show in Debug Console** opens the console with that object in it: an
   object with its attributes listed beneath, each by name; a list, set or dict, or an object with
-  more than 20 attributes, as one row that opens like the Variables row. **Evaluate with self…** asks for an expression and shows what it gives
+  more than 20 attributes, as one row that opens like the Variables row. Its name is left at the
+  console's prompt, or `_` bound to it for a row whose name means nothing there, such as a list item. **Evaluate with self…** asks for an expression and shows what it gives
   with `self` bound to the row's object, in the frame selected in Call Stack.
 
 ## [1.6.0] - 2026-10-07

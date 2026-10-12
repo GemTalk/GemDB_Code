@@ -73,17 +73,30 @@ async function showRow(session: vscode.DebugSession, args: Record<string, unknow
   // The console first, so a line that takes a while is seen to be running.
   await vscode.commands.executeCommand('workbench.debug.action.focusRepl');
   try {
-    await session.customRequest('gemdbShowRow', args);
+    const body = (await session.customRequest('gemdbShowRow', args)) as
+      { typed?: string } | undefined;
+    // VS Code offers no way to set the console's input; focusRepl leaves the
+    // focus in it, and `type` inserts into whichever editor has the focus.
+    if (body?.typed) await vscode.commands.executeCommand('type', { text: body.typed });
   } catch (e) {
     void vscode.window.showErrorMessage(errorMessage(e));
   }
 }
 
-/** Show the right-clicked row's object in the Debug Console. */
+/**
+ * Show the right-clicked row's object in the Debug Console, and leave its
+ * name at the console's prompt — or `_`, bound to it, when its name means
+ * nothing there — so the next line can do something with it.
+ */
 export async function showInDebugConsole(context: VariableContext): Promise<void> {
   const target = rowTarget(context);
   if (!target) return;
-  await showRow(target.session, { handle: target.handle, name: target.name });
+  const frameId = selectedFrame(target.session);
+  await showRow(target.session, {
+    handle: target.handle,
+    name: target.name,
+    ...(frameId === undefined ? {} : { frameId }),
+  });
 }
 
 /** Ask for an expression and show what it gives with `self` bound to the right-clicked row's object. */

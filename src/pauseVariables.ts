@@ -663,6 +663,92 @@ export type ConsoleReply = { consoleRef: number; output: string } & (
 );
 
 /**
+ * Smalltalk that finds frame `scope`'s console scope at registry entry
+ * `consoleRef`, or makes it and registers it, leaving it in `console` and its
+ * position in `cref` (`consoleQuery` says what it holds). Needs the temps
+ * `reg dispatcher cref console dict g l bind nameAst none`.
+ */
+function consoleScopeSetup(scope: ConsoleScope, consoleRef: number): string {
+  const findModule = scope.moduleFile
+    ? `g := [dispatcher evaluateSource: '${escapeString(
+        [
+          'import sys as _gemdb_sys',
+          '_gemdb_found = None',
+          'for _gemdb_m in list(_gemdb_sys.modules.values()):',
+          `    if getattr(_gemdb_m, "__file__", None) == ${pythonString(scope.moduleFile)}:`,
+          '        _gemdb_found = _gemdb_m.__dict__',
+          '        break',
+          '_gemdb_found',
+        ].join('\n'),
+      )}' usingModuleScope: SymbolDictionary new]
+      on: AbstractException do: [:e | e return: nil].
+    (g notNil and: [g ~~ none and: [g respondsTo: #keysAndValuesDo:]])
+      ifTrue: [g keysAndValuesDo: [:k :x | bind value: k value: x]].`
+    : '';
+  return `reg := SessionTemps current at: #'${REGISTRY}' otherwise: nil.
+reg isNil ifTrue: [^ 'Error: the pause is over' encodeAsUTF8].
+dispatcher := System myUserProfile symbolList objectNamed: #'ModuleAst'.
+cref := ${consoleRef}.
+nameAst := System myUserProfile symbolList objectNamed: #'NameAst'.
+bind := [:k :x | | nm |
+  nm := k asString asSymbol.
+  nameAst notNil ifTrue: [nm := [nameAst doitScopeNameFor: nm] on: Error do: [:e | e return: nm]].
+  dict at: nm put: x].
+console := (cref between: 1 and: reg size) ifTrue: [reg at: cref] ifFalse: [nil].
+(console class == Array and: [console size = 2 and: [(console at: 1) == #gemdbConsole]]) ifFalse: [
+  dict := SymbolDictionary new.
+  g := (${scope.globals} between: 1 and: reg size) ifTrue: [reg at: ${scope.globals}] ifFalse: [nil].
+  (g class == Array and: [g size >= 2 and: [(g at: 1) == #gemdbScope]])
+    ifTrue: [(g at: 2) keysAndValuesDo: [:k :x | bind value: k value: x]].
+  ${findModule}
+  "The frame's locals over its globals: a local shadows a global of its name."
+  l := (${scope.locals} between: 1 and: reg size) ifTrue: [reg at: ${scope.locals}] ifFalse: [nil].
+  (l class == Array and: [l size >= 2 and: [(l at: 1) == #gemdbScope]])
+    ifTrue: [(l at: 2) keysAndValuesDo: [:k :x | bind value: k value: x]].
+  console := { #gemdbConsole. dict }.
+  reg add: console.
+  cref := reg size].
+`;
+}
+
+/**
+ * Smalltalk for **Show in Debug Console**: what to type at the console's
+ * prompt to reach registry entry `handle`'s object. When `name` — a Python
+ * identifier — already means that very object in the frame's console scope
+ * (a Locals or Globals row), the answer is
+ * `name`; otherwise the object is bound to `_`, Python's name for the last
+ * result, and the answer is `_`. Answers `<consoleRef> <name>`, or an
+ * `Error: …` line.
+ */
+export function consoleNameQuery(
+  scope: ConsoleScope,
+  consoleRef: number,
+  name: string,
+  handle: number,
+): string {
+  return `| reg dispatcher cref console dict g l bind nameAst none field record out o key |
+${PREAMBLE}
+${consoleScopeSetup(scope, consoleRef)}
+dict := console at: 2.
+${ROW_OBJECT(handle, 'o')}
+key := nil.
+${
+  name
+    ? `key := '${escapeString(name)}' asSymbol.
+nameAst notNil ifTrue: [key := [nameAst doitScopeNameFor: key] on: Error do: [:e | e return: key]].`
+    : ''
+}
+((key notNil and: [dict includesKey: key]) and: [(dict at: key) == o])
+  ifTrue: [^ (cref printString , ' ${escapeString(name)}') encodeAsUTF8].
+"Bound by Python itself: Grail carries \`_\` under a spelling of its own (measured: a read of a
+ dictionary's #'_' raised NameError for '___unused___')."
+dict at: #'_gemdb_shown' put: o.
+[dispatcher evaluateSource: '_ = _gemdb_shown' usingModuleScope: dict]
+  ensure: [dict removeKey: #'_gemdb_shown' ifAbsent: []].
+(cref printString , ' _') encodeAsUTF8`;
+}
+
+/**
  * Smalltalk that runs Debug Console or watch input `source` in a frame's
  * console scope and answers what came of it (`parseConsoleReply`).
  *
@@ -702,51 +788,12 @@ export function consoleQuery(
   source: string,
   selfHandle = 0,
 ): string {
-  const findModule = scope.moduleFile
-    ? `g := [dispatcher evaluateSource: '${escapeString(
-        [
-          'import sys as _gemdb_sys',
-          '_gemdb_found = None',
-          'for _gemdb_m in list(_gemdb_sys.modules.values()):',
-          `    if getattr(_gemdb_m, "__file__", None) == ${pythonString(scope.moduleFile)}:`,
-          '        _gemdb_found = _gemdb_m.__dict__',
-          '        break',
-          '_gemdb_found',
-        ].join('\n'),
-      )}' usingModuleScope: SymbolDictionary new]
-      on: AbstractException do: [:e | e return: nil].
-    (g notNil and: [g ~~ none and: [g respondsTo: #keysAndValuesDo:]])
-      ifTrue: [g keysAndValuesDo: [:k :x | bind value: k value: x]].`
-    : '';
   return `| reg out field record none saved describe childrenOf reprOf late clean isLeaf dispatcher cref console dict g l r kind exc captured bind nameAst target |
 ${PREAMBLE}
 ${HELPERS}
 ${CHILDREN_OF}
 ${DESCRIBE}
-reg := SessionTemps current at: #'${REGISTRY}' otherwise: nil.
-reg isNil ifTrue: [^ 'Error: the pause is over' encodeAsUTF8].
-dispatcher := System myUserProfile symbolList objectNamed: #'ModuleAst'.
-cref := ${consoleRef}.
-nameAst := System myUserProfile symbolList objectNamed: #'NameAst'.
-bind := [:k :x | | nm |
-  nm := k asString asSymbol.
-  nameAst notNil ifTrue: [nm := [nameAst doitScopeNameFor: nm] on: Error do: [:e | e return: nm]].
-  dict at: nm put: x].
-console := (cref between: 1 and: reg size) ifTrue: [reg at: cref] ifFalse: [nil].
-(console class == Array and: [console size = 2 and: [(console at: 1) == #gemdbConsole]]) ifFalse: [
-  dict := SymbolDictionary new.
-  g := (${scope.globals} between: 1 and: reg size) ifTrue: [reg at: ${scope.globals}] ifFalse: [nil].
-  (g class == Array and: [g size >= 2 and: [(g at: 1) == #gemdbScope]])
-    ifTrue: [(g at: 2) keysAndValuesDo: [:k :x | bind value: k value: x]].
-  ${findModule}
-  "The frame's locals over its globals: a local shadows a global of its name."
-  l := (${scope.locals} between: 1 and: reg size) ifTrue: [reg at: ${scope.locals}] ifFalse: [nil].
-  (l class == Array and: [l size >= 2 and: [(l at: 1) == #gemdbScope]])
-    ifTrue: [(l at: 2) keysAndValuesDo: [:k :x | bind value: k value: x]].
-  console := { #gemdbConsole. dict }.
-  reg add: console.
-  cref := reg size].
-target := console at: 2.
+${consoleScopeSetup(scope, consoleRef)}target := console at: 2.
 ${
   selfHandle > 0
     ? `${ROW_OBJECT(selfHandle, 'g')}
