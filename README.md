@@ -421,8 +421,8 @@ database, select that kernel from the kernel picker at the top right.
   there last until the run resumes; an error reads as a notebook traceback; a long-running line can
   be stopped from the notification that appears. A change to an object made there is in the
   notebook's transaction, as it would be from a cell. Right-click a Variables row for **Show in
-  Debug Console**, which puts that object in the console with its attributes listed (a list's
-  first few items), or **Evaluate with self…**,
+  Debug Console**, which puts that object in the console (an object with its attributes
+  listed, a list or dict as one row that opens), or **Evaluate with self…**,
   which runs an expression with `self` bound to it (`len(self.history)`) and shows the answer
   there. Stepping is not supported yet, and neither are
   red dots in a cell (they work in `.py` files; see above). Right-click a Variables row and choose **Add to Persisted Objects…** to keep that object: it

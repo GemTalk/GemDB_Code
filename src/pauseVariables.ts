@@ -63,7 +63,15 @@ export interface PauseVariable {
    * such as a group heading.
    */
   handle: number;
+  /**
+   * How its children are read, when it has any (`CHILDREN_OF`): `seq`, `coll`
+   * and `dict` are containers, `attrs` and `ivars` an object's attributes.
+   * Absent on a row with no object, such as a group heading.
+   */
+  kind?: ChildKind;
 }
+
+export type ChildKind = 'seq' | 'coll' | 'dict' | 'attrs' | 'ivars';
 
 /**
  * Smalltalk that answers `{kind. source. size}` for an object's children, or
@@ -101,7 +109,8 @@ const CHILDREN_OF = `
 
 /**
  * Smalltalk that writes one row for `v`, named `nm`, and registers `v` — as
- * the row's `ref` when it has children, and always as its `handle`.
+ * the row's `ref` when it has children, and always as its `handle` — ending
+ * with the kind `childrenOf` reads its children by, or nothing for a leaf.
  *
  * Its repr is the user's `__repr__`, run through `reprOf`: a big container
  * shows its size instead, and a long string is asked for the repr of its
@@ -134,7 +143,8 @@ const DESCRIBE = `
     n > 0
       ifTrue: [out print: reg size]
       ifFalse: [out nextPutAll: '0'].
-    out nextPut: field; print: idx; nextPut: field; print: named; nextPut: field; print: reg size; nextPut: record].`;
+    out nextPut: field; print: idx; nextPut: field; print: named; nextPut: field; print: reg size;
+      nextPut: field; nextPutAll: (kids isNil ifTrue: [''] ifFalse: [kids at: 1]); nextPut: record].`;
 
 /**
  * Smalltalk for the blocks every row needs.
@@ -370,7 +380,7 @@ export function parseChildren(raw: string): PauseVariable[] {
     .split(RECORD)
     .filter((r) => r.length > 0)
     .map((record): PauseVariable => {
-      const [name, value, type, ref, indexed, named, handle] = record.split(FIELD);
+      const [name, value, type, ref, indexed, named, handle, kind] = record.split(FIELD);
       const int = (s: string | undefined): number => Number.parseInt(s ?? '', 10) || 0;
       return {
         name: name ?? '?',
@@ -380,6 +390,7 @@ export function parseChildren(raw: string): PauseVariable[] {
         indexed: int(indexed),
         named: int(named),
         handle: int(handle),
+        ...(kind ? { kind: kind as ChildKind } : {}),
       };
     });
 }

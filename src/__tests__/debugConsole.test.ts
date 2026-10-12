@@ -468,75 +468,75 @@ describe('a saved stack', () => {
 describe('putting a Variables row in the Debug Console', () => {
   const showRow = (answer: ConsoleAnswer) => vi.fn(() => Promise.resolve(answer));
 
-  it('shows a leaf as a plain line, name and value', async () => {
-    const { request, events } = started(undefined, undefined, {
-      showRow: showRow(value('10')),
-      evaluate: vi.fn(),
-    });
+  type Listed = { value: string; variablesReference: number; indexedVariables?: number };
 
-    request('gemdbShowRow', { handle: 3, name: 'limit' });
-    await settle();
-
-    expect(events('output').map((e) => e.body)).toEqual([
-      { category: 'console', output: 'limit: 10\n' },
-    ]);
-  });
-
-  /** `count` children of a container, as `pause.variables` reads them: `[0]`, `[1]`, … */
-  const items = (n: number, start = 0) =>
-    Array.from({ length: n }, (_, i) => ({
-      name: `[${start + i}]`,
-      value: String(start + i),
-      variablesReference: 0,
-    }));
-
-  /** Show a row and answer what the console then lists under it. */
-  async function shownUnder(answer: ConsoleAnswer, variables: Pause['variables']) {
-    const c = started(undefined, undefined, {
+  /**
+   * Show a row (or evaluate with self, given `expression`) and answer what was
+   * sent: the output events, and the rows the console lists from the one
+   * that carries a reference.
+   */
+  async function shown(
+    answer: ConsoleAnswer,
+    { variables, expression }: { variables?: Pause['variables']; expression?: string } = {},
+  ) {
+    const evaluate = vi.fn<Evaluate>().mockResolvedValue(answer);
+    const c = started(evaluate, undefined, {
       showRow: showRow(answer),
-      evaluate: vi.fn(),
-      variables,
+      ...(variables ? { variables } : {}),
     });
-    const seq = c.request('gemdbShowRow', { handle: 7, name: 'p' });
+    const seq = c.request('gemdbShowRow', {
+      handle: 7,
+      name: 'p',
+      ...(expression === undefined ? {} : { expression, frameId: 2 }),
+    });
     await settle();
     const outputs = c
       .events('output')
       .map((e) => e.body as { category: string; output: string; variablesReference?: number });
     const listing = outputs.find((o) => o.variablesReference);
-    const listed = c.request('variables', { variablesReference: listing?.variablesReference });
-    await settle();
+    let rows: Listed[] = [];
+    if (listing) {
+      const listed = c.request('variables', { variablesReference: listing.variablesReference });
+      await settle();
+      rows = (c.responseTo(listed)?.body as { variables: Listed[] }).variables;
+    }
     return {
       ok: c.responseTo(seq)?.success,
       outputs,
-      rows: (
-        c.responseTo(listed)?.body as {
-          variables: Array<{
-            value: string;
-            variablesReference: number;
-            indexedVariables?: number;
-          }>;
-        }
-      ).variables,
+      rows,
+      evaluate,
       invalidated: c.events('invalidated').length,
     };
   }
 
-  it('names the object, then lists its attributes beneath, each with its name', async () => {
+  it('shows a value as one line, name and value', async () => {
+    const result = await shown(value('10'));
+
+    expect(result.rows).toEqual([{ name: 'p: 10', value: 'p: 10', variablesReference: 0 }]);
+    // Every line goes out the same way, so it all reads alike in the console.
+    expect(result.outputs).toEqual([
+      { category: 'console', output: '', variablesReference: expect.any(Number) },
+    ]);
+    expect(result.ok).toBe(true);
+    // Showing changes nothing, so Variables is left alone.
+    expect(result.invalidated).toBe(0);
+  });
+
+  it('names an object, then lists its attributes beneath, each with its name', async () => {
     const variables = vi.fn<Pause['variables']>().mockResolvedValue([
       { name: 'owner', value: "'ada'", variablesReference: 0 },
       { name: 'history', value: '[10]', type: 'list', variablesReference: 9, indexedVariables: 1 },
     ]);
 
-    const shown = await shownUnder(
-      value("Account('ada', 10)", { variablesReference: 7, namedVariables: 2 }),
-      variables,
+    const result = await shown(
+      value("Account('ada', 10)", { variablesReference: 7, namedVariables: 2, children: 'attrs' }),
+      { variables },
     );
 
     expect(variables).toHaveBeenCalledWith(7, 0, 2);
-    expect(shown.outputs[0]).toEqual({ category: 'console', output: "p: Account('ada', 10)\n" });
-    // VS Code shows an output's reference as values with their names hidden,
-    // so each name is in its row's text; a row with children still opens.
-    expect(shown.rows).toEqual([
+    // VS Code shows these with their names hidden, so each name is in its text.
+    expect(result.rows).toEqual([
+      { name: "p: Account('ada', 10)", value: "p: Account('ada', 10)", variablesReference: 0 },
       { name: "owner: 'ada'", value: "owner: 'ada'", variablesReference: 0 },
       {
         name: 'history: [10]',
@@ -546,74 +546,86 @@ describe('putting a Variables row in the Debug Console', () => {
         indexedVariables: 1,
       },
     ]);
-    expect(shown.ok).toBe(true);
-    // Showing changes nothing, so Variables is left alone.
-    expect(shown.invalidated).toBe(0);
   });
 
-  it('lists a list’s first few items, then a row that opens onto all of it', async () => {
-    const variables = vi.fn<Pause['variables']>((_ref, start, count) =>
-      Promise.resolve(items(count, start)),
+  it('shows a list as one closed row that opens like the Variables row', async () => {
+    const variables = vi.fn<Pause['variables']>();
+
+    const result = await shown(
+      value('list with 1000 items', {
+        type: 'list',
+        variablesReference: 4,
+        indexedVariables: 1000,
+        children: 'seq',
+      }),
+      { variables },
     );
 
-    const shown = await shownUnder(
-      value('list with 1000 items', { variablesReference: 4, indexedVariables: 1000 }),
-      variables,
-    );
-
-    expect(variables).toHaveBeenCalledWith(4, 0, 5);
-    expect(shown.rows.map((r) => r.value)).toEqual([
-      '[0]: 0',
-      '[1]: 1',
-      '[2]: 2',
-      '[3]: 3',
-      '[4]: 4',
-      '… 995 more',
+    expect(variables).not.toHaveBeenCalled();
+    expect(result.rows).toEqual([
+      {
+        name: 'p: list with 1000 items',
+        value: 'p: list with 1000 items',
+        type: 'list',
+        variablesReference: 4,
+        indexedVariables: 1000,
+      },
     ]);
-    expect(shown.rows[5]).toMatchObject({ variablesReference: 4, indexedVariables: 1000 });
   });
 
-  it('lists only the first few of an object with many attributes', async () => {
-    const variables = vi.fn<Pause['variables']>((_ref, start, count) =>
-      Promise.resolve(items(count, start)),
+  it('shows a dict as one closed row too, however few its entries', async () => {
+    const variables = vi.fn<Pause['variables']>();
+
+    const result = await shown(
+      value("{'a': 1}", { variablesReference: 4, namedVariables: 1, children: 'dict' }),
+      { variables },
     );
 
-    const shown = await shownUnder(
-      value('Wide()', { variablesReference: 4, namedVariables: 30 }),
-      variables,
+    expect(variables).not.toHaveBeenCalled();
+    expect(result.rows).toEqual([
+      expect.objectContaining({ value: "p: {'a': 1}", variablesReference: 4, namedVariables: 1 }),
+    ]);
+  });
+
+  it('shows an object with more than twenty attributes as one closed row', async () => {
+    const variables = vi.fn<Pause['variables']>();
+
+    const result = await shown(
+      value('Wide()', { variablesReference: 4, namedVariables: 21, children: 'attrs' }),
+      { variables },
     );
 
-    expect(variables).toHaveBeenCalledWith(4, 0, 5);
-    expect(shown.rows.map((r) => r.value).pop()).toBe('… 25 more');
+    expect(variables).not.toHaveBeenCalled();
+    expect(result.rows).toHaveLength(1);
   });
 
   it('runs an expression with self bound to the row, echoing it, and refreshes Variables', async () => {
-    const evaluate = vi.fn<Evaluate>().mockResolvedValue(value('2', { output: 'hi\n' }));
-    const { request, events } = started(evaluate, undefined, { showRow: vi.fn() });
+    const result = await shown(value('2', { output: 'hi\n' }), {
+      expression: 'len(self.history)',
+    });
 
-    request('gemdbShowRow', { handle: 7, name: 'p', expression: 'len(self.history)', frameId: 2 });
-    await settle();
-
-    expect(evaluate).toHaveBeenCalledWith('len(self.history)', 2, 'repl', expect.anything(), 7);
-    expect(events('output').map((e) => e.body)).toEqual([
+    expect(result.evaluate).toHaveBeenCalledWith(
+      'len(self.history)',
+      2,
+      'repl',
+      expect.anything(),
+      7,
+    );
+    expect(result.outputs.slice(0, 2)).toEqual([
       { category: 'console', output: '>>> len(self.history)  # self is p\n' },
       { category: 'stdout', output: 'hi\n' },
-      { category: 'console', output: '2\n' },
     ]);
-    expect(events('invalidated')).toHaveLength(1);
+    expect(result.rows.map((r) => r.value)).toEqual(['2']);
+    expect(result.invalidated).toBe(1);
   });
 
   it('shows an error’s traceback in the console', async () => {
-    const evaluate = vi
-      .fn<Evaluate>()
-      .mockResolvedValue({ kind: 'error', output: '', traceback: 'TB' } as ConsoleAnswer);
-    const { request, events, responseTo } = started(evaluate, undefined, { showRow: vi.fn() });
+    const result = await shown({ kind: 'error', output: '', traceback: 'TB' } as ConsoleAnswer, {
+      expression: 'self.nope',
+    });
 
-    const seq = request('gemdbShowRow', { handle: 7, name: 'p', expression: 'self.nope' });
-    await settle();
-
-    expect(events('output').pop()?.body).toEqual({ category: 'stderr', output: 'TB\n' });
-    expect(responseTo(seq)?.success).toBe(true);
+    expect(result.outputs.pop()).toEqual({ category: 'stderr', output: 'TB\n' });
+    expect(result.ok).toBe(true);
   });
 
   it('refuses where the pause has no rows to show, such as a saved stack', async () => {
