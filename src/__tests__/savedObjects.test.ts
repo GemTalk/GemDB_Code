@@ -142,6 +142,8 @@ describe('inspecting a saved object on hover', () => {
     indexed,
     named,
     handle: 1,
+    size: -1,
+    readOnly: false,
   });
 
   it('shows the type, the text, and the first children with their values aligned', () => {
@@ -304,7 +306,17 @@ describe('remembering where a persisted object came from', () => {
     const markdown = inspectMarkdown(
       'barbara',
       true,
-      { name: 'value', value: '<E>', type: 'Employee', ref: 0, indexed: 0, named: 0, handle: 1 },
+      {
+        name: 'value',
+        value: '<E>',
+        type: 'Employee',
+        ref: 0,
+        indexed: 0,
+        named: 0,
+        handle: 1,
+        size: -1,
+        readOnly: false,
+      },
       [],
       { notebook: 'breakpoint.ipynb', type: 'Employee', at: '2026-10-01T16:20:00.000Z' },
     );

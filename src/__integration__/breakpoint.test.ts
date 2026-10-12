@@ -22,6 +22,7 @@ import {
   rootListingQuery,
   saveSuggestionQuery,
   saveToRootQuery,
+  setVariableQuery,
   unquote,
 } from '../pauseVariables';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
@@ -229,10 +230,14 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
         ['local', "[P('ann'), (1, 2)]", 'list'],
       ]),
     );
-    expect(seen.p.map((v) => v.name).sort()).toEqual(['name', 'tags']);
+    // An object opens on its dunders, folded, then its data.
+    expect(seen.p.map((v) => v.name)).toEqual(['special variables', 'name', 'tags']);
     // A list reads by position from 0, not as Smalltalk's 1-based keys.
     expect(seen.local.map((v) => v.name)).toEqual(['[0]', '[1]']);
-    expect(seen.local[1]).toMatchObject({ value: '(1, 2)', type: 'tuple', indexed: 2 });
+    expect(seen.local[1]).toMatchObject({ value: '(1, 2)', type: 'tuple', indexed: 2, size: 2 });
+    // A container carries its size for the row's badge; anything else carries none.
+    expect(seen.go.find((v) => v.name === 'local')).toMatchObject({ size: 2 });
+    expect(seen.go.find((v) => v.name === 'p')).toMatchObject({ size: -1 });
     expect(seen.tags.map((v) => v.value).sort()).toEqual(["'a'", "'b'"]);
     // Globals are the notebook's names — this cell's and earlier cells' — without the dunder
     // noise, with classes and functions folded into groups at the top and the data sorted below.
@@ -269,6 +274,404 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
     // __repr__ printed while the Variables were read, and none of it reached the cell.
     expect(printed.join('')).toBe('after\n');
     expect(result.value).toBe('2');
+  });
+
+  it('shows an object whole: dunders and methods folded, class attributes, properties and slots', async () => {
+    const seen: Record<string, PauseVariable[]> = {};
+    const nb = notebook('bp-shape');
+    setHaltHandler(async (request) => {
+      const children = async (ref: number) =>
+        parseChildren(await request.query(childrenQuery(ref, 0, 500)));
+      const { globals } = parsePausedStack(
+        await request.query(pausedStackQuery(request.process, nb.key)),
+      );
+      seen.globals = await children(globals);
+      const ref = (rows: PauseVariable[], name: string) => rows.find((v) => v.name === name)!.ref;
+      seen.p = await children(ref(seen.globals, 'p'));
+      seen.special = await children(ref(seen.p, 'special variables'));
+      seen.functions = await children(ref(seen.p, 'function variables'));
+      seen.v = await children(ref(seen.globals, 'v'));
+      seen.classes = await children(ref(seen.globals, 'class variables'));
+      seen.Point = await children(ref(seen.classes, 'Point'));
+      seen.modules = await children(ref(seen.globals, 'module variables'));
+      seen.globalFunctions = await children(ref(seen.globals, 'function variables'));
+      seen.t = await children(ref(seen.globals, 't'));
+      return 'continue';
+    });
+
+    await runPython(
+      [
+        'class Point:',
+        '    kind = "pt"',
+        '    def __init__(self, x, y):',
+        '        self.x, self.y = x, y',
+        '    def distance(self):',
+        '        return 0',
+        '    @property',
+        '    def norm(self):',
+        '        return 5',
+        'class Vec:',
+        '    __slots__ = ("x", "y")',
+        '    def __init__(self, x, y):',
+        '        self.x, self.y = x, y',
+        'class Empty:',
+        '    pass',
+        'class Temp:',
+        '    unit = "C"',
+        '    @property',
+        '    def kelvin(self):',
+        '        return 273',
+        'def helper():',
+        '    return 1',
+        'import os',
+        'p = Point(3, 4)',
+        'v = Vec(1, 2)',
+        'e = Empty()',
+        't = Temp()',
+        'breakpoint()',
+      ].join('\n'),
+      nb,
+    );
+    // The database allows ten sessions, and this file opens one per notebook.
+    closeSessionFor(nb.key);
+
+    // Groups first, then the data — its own attributes, the class's, and a
+    // property's value, read through its getter — sorted by name.
+    expect(seen.p.map((v) => v.name)).toEqual([
+      'special variables',
+      'function variables',
+      'kind',
+      'norm',
+      'x',
+      'y',
+    ]);
+    expect(seen.p.find((v) => v.name === 'norm')).toMatchObject({ value: '5', type: 'int' });
+    expect(seen.special.map((v) => v.name)).toEqual(
+      expect.arrayContaining(['__class__', '__dict__', '__init__', '__module__']),
+    );
+    expect(seen.functions.map((v) => v.name)).toEqual(['distance']);
+    // Something with nothing of its own to show stays a leaf: a method, an empty object.
+    expect(seen.functions[0].ref).toBe(0);
+    expect(seen.globals.find((v) => v.name === 'e')).toMatchObject({ ref: 0, type: 'Empty' });
+    // An object with nothing of its own still opens when its class gives it data.
+    expect(seen.t.map((v) => [v.name, v.value])).toEqual(
+      expect.arrayContaining([
+        ['kelvin', '273'],
+        ['unit', "'C'"],
+      ]),
+    );
+    expect(seen.globalFunctions.find((v) => v.name === 'helper')).toMatchObject({
+      ref: 0,
+      type: 'function',
+    });
+    // Only a container trades its repr for a size: a module with hundreds of names keeps its own.
+    expect(seen.modules.find((v) => v.name === 'os')?.value).toMatch(/^<module 'os'/);
+    // Group headings cannot be changed; the attributes can.
+    expect(seen.p.find((v) => v.name === 'special variables')).toMatchObject({ readOnly: true });
+    expect(seen.p.find((v) => v.name === 'x')).toMatchObject({ readOnly: false });
+    // A __slots__ object has no __dict__ and no instance variables, and still opens.
+    expect(
+      seen.v.filter((v) => !v.name.endsWith('variables')).map((v) => [v.name, v.value]),
+    ).toEqual([
+      ['x', '1'],
+      ['y', '2'],
+    ]);
+    // A class shows its own methods apart from the dunders it is full of.
+    const pointNames = seen.Point.map((v) => v.name);
+    expect(pointNames.slice(0, 2)).toEqual(['special variables', 'function variables']);
+    expect(pointNames.filter((n) => /^__.*__$/.test(n))).toEqual([]);
+    expect(pointNames).toEqual(expect.arrayContaining(['kind', 'norm']));
+  });
+
+  it('sets a local, a global, an attribute, a list item and a dict entry, and the run sees them', async () => {
+    const seen: Record<string, string> = {};
+    const nb = notebook('bp-set');
+    setHaltHandler(async (request) => {
+      const children = async (ref: number) =>
+        parseChildren(await request.query(childrenQuery(ref, 0, 500)));
+      const set = (ref: number, name: string, value: string) =>
+        request.query(setVariableQuery(request.process, ref, name, value));
+      const { frames, globals } = parsePausedStack(
+        await request.query(pausedStackQuery(request.process, nb.key)),
+      );
+      const tour = frames.find((f) => f.name === 'tour')!.locals!;
+      const method = frames.find((f) => f.name === 'P.look')!.locals!;
+      const globalRows = await children(globals);
+      const ref = (rows: PauseVariable[], name: string) => rows.find((v) => v.name === name)!.ref;
+      const locals = await children(tour);
+      seen.selfReadOnly = String((await children(method)).find((v) => v.name === 'self')?.readOnly);
+      seen.n = await set(tour, 'n', 'n + 92');
+      seen.label = await set(tour, 'label', '"changed"');
+      seen.g = await set(globals, 'g', '5');
+      seen.x = await set(ref(locals, 'p'), 'x', '10');
+      seen.item = await set(ref(globalRows, 'items'), '[1]', '"two"');
+      seen.entry = await set(ref(globalRows, 'd'), "'k'", '[1, 2]');
+      seen.tuple = await set(ref(globalRows, 't'), '[0]', '9');
+      seen.norm = await set(ref(locals, 'p'), 'norm', '1');
+      seen.self = await set(method, 'self', '1');
+      seen.syntax = await set(tour, 'n', '1 +');
+      // An assignment is a statement, not a value: refused, where it would have stored None.
+      seen.statement = await set(tour, 'n', 'n = 5');
+      seen.commented = await set(globals, 'g', '5  # a comment');
+      seen.afterRows = JSON.stringify(
+        (await children(tour)).filter((v) => v.name === 'n').map((v) => v.value),
+      );
+      return 'continue';
+    });
+
+    const result = await runPython(
+      [
+        'class P:',
+        '    def __init__(self):',
+        '        self.x = 1',
+        '    @property',
+        '    def norm(self):',
+        '        return 5',
+        '    def look(self):',
+        '        return tour(self)',
+        'g = 1',
+        'items = [1, 2, 3]',
+        'd = {"k": 0}',
+        't = (1, 2)',
+        'def tour(p):',
+        '    n = 7',
+        '    label = "in"',
+        '    breakpoint()',
+        '    return n, label, p.x',
+        '(P().look(), g, items, d, t)',
+      ].join('\n'),
+      nb,
+    );
+    closeSessionFor(nb.key);
+
+    const row = (raw: string) => parseChildren(raw)[0];
+    expect(row(seen.n)).toMatchObject({ name: 'n', value: '99', type: 'int' });
+    expect(row(seen.label)).toMatchObject({ value: "'changed'", type: 'str' });
+    expect(row(seen.g)).toMatchObject({ value: '5' });
+    expect(row(seen.x)).toMatchObject({ value: '10' });
+    expect(row(seen.item)).toMatchObject({ value: "'two'" });
+    expect(row(seen.entry)).toMatchObject({ value: '[1, 2]', size: 2 });
+    // What Python refuses is refused, with Python's reason.
+    expect(seen.tuple).toMatch(/^Error: TypeError/);
+    expect(seen.norm).toMatch(/^Error: AttributeError/);
+    expect(seen.syntax).toMatch(/^Error: SyntaxError/);
+    expect(seen.statement).toMatch(/^Error: SyntaxError/);
+    expect(row(seen.commented)).toMatchObject({ value: '5' });
+    // A method's self is its receiver, which no frame write can replace.
+    expect(seen.selfReadOnly).toBe('true');
+    expect(seen.self).toBe('Error: self cannot be changed here');
+    // The row reads the new value, and the run went on with every change.
+    expect(seen.afterRows).toBe('["99"]');
+    expect(result.value).toBe("((99, 'changed', 10), 5, [1, 'two', 3], {'k': [1, 2]}, (1, 2))");
+  });
+
+  it('writes a local in an outer frame, a closed-over local, and one set inside try:', async () => {
+    const nb = notebook('bp-set-frames');
+    const answers: string[] = [];
+    setHaltHandler(async (request) => {
+      const set = (ref: number, name: string, value: string) =>
+        request.query(setVariableQuery(request.process, ref, name, value));
+      const { frames } = parsePausedStack(
+        await request.query(pausedStackQuery(request.process, nb.key)),
+      );
+      const outer = frames.find((f) => f.name === 'outer');
+      if (outer) {
+        // Not the innermost frame: the paused one is inner(), called from inside try:.
+        answers.push(await set(outer.locals!, 'a', '10'), await set(outer.locals!, 'b', '20'));
+      } else {
+        answers.push(await set(frames.find((f) => f.name === 'tryer')!.locals!, 'c', '30'));
+      }
+      return 'continue';
+    });
+
+    const result = await runPython(
+      [
+        'def inner():',
+        '    breakpoint()',
+        '    return 0',
+        'def outer():',
+        '    a = 1',
+        '    seen = lambda: a',
+        '    try:',
+        '        b = 2',
+        '        inner()',
+        '    finally:',
+        '        pass',
+        '    return a, seen(), b',
+        'def tryer():',
+        '    c = 1',
+        '    try:',
+        '        breakpoint()',
+        '    finally:',
+        '        pass',
+        '    return c',
+        '(outer(), tryer())',
+      ].join('\n'),
+      nb,
+    );
+    closeSessionFor(nb.key);
+
+    expect(answers.map((a) => parseChildren(a)[0]?.value ?? a)).toEqual(['10', '20', '30']);
+    // The run read every new value, the closure included.
+    expect(result.value).toBe('((10, 10, 20), 30)');
+  });
+
+  it('offers Set Value on real locals only: not on a receiver, whatever the def calls it', async () => {
+    const nb = notebook('bp-receivers');
+    const seen: Array<Record<string, string>> = [];
+    setHaltHandler(async (request) => {
+      const { frames } = parsePausedStack(
+        await request.query(pausedStackQuery(request.process, nb.key)),
+      );
+      const locals = frames[0].locals!;
+      const rows = parseChildren(await request.query(childrenQuery(locals, 0, 500)));
+      const set = (name: string, value: string) =>
+        request.query(setVariableQuery(request.process, locals, name, value));
+      const readOnly = (name: string) => String(rows.find((v) => v.name === name)?.readOnly);
+      if (frames[0].name.endsWith('mk')) {
+        // A value with a side effect must not run when its row cannot be changed.
+        seen.push({
+          cls: readOnly('cls'),
+          k: readOnly('k'),
+          write: await set('cls', 'log.append(9)'),
+        });
+      } else {
+        seen.push({ this: readOnly('this'), j: readOnly('j') });
+      }
+      return 'continue';
+    });
+
+    const result = await runPython(
+      [
+        'class A:',
+        '    @classmethod',
+        '    def mk(cls):',
+        '        k = 1',
+        '        log = []',
+        '        breakpoint()',
+        '        return log',
+        '    def see(this):',
+        '        j = 2',
+        '        breakpoint()',
+        '        return j',
+        '(A.mk(), A().see())',
+      ].join('\n'),
+      nb,
+    );
+    closeSessionFor(nb.key);
+
+    // Grail may leave a classmethod's cls out of Locals altogether; it is never offered as writable.
+    expect(seen[0].cls).not.toBe('false');
+    expect(seen[0].write).toMatch(/^Error: cls cannot be changed here/);
+    // A method's receiver is read-only whatever the def calls it; its real locals are not.
+    expect(seen[1]).toEqual({ this: 'true', j: 'false' });
+    // A real local beside the receiver stays writable.
+    expect(seen[0].k).toBe('false');
+    // Refused before the value ran: log, which the value could see, is unchanged.
+    expect(result.value).toBe('([], 2)');
+  });
+
+  it('reads a tuple’s and a tuple subclass’s items as read-only, and a list subclass’s as writable', async () => {
+    const nb = notebook('bp-tuples');
+    const seen: Record<string, PauseVariable[]> = {};
+    setHaltHandler(async (request) => {
+      const children = async (ref: number) =>
+        parseChildren(await request.query(childrenQuery(ref, 0, 500)));
+      const { globals } = parsePausedStack(
+        await request.query(pausedStackQuery(request.process, nb.key)),
+      );
+      const rows = await children(globals);
+      seen.pt = await children(rows.find((v) => v.name === 'pt')!.ref);
+      seen.ll = await children(rows.find((v) => v.name === 'll')!.ref);
+      seen.tt = await children(rows.find((v) => v.name === 'tt')!.ref);
+      return 'continue';
+    });
+
+    await runPython(
+      [
+        'from collections import namedtuple',
+        'Pt = namedtuple("Pt", "x y")',
+        'class L(list):',
+        '    pass',
+        'pt = Pt(1, 2)',
+        'll = L([1, 2])',
+        'tt = (1, 2)',
+        'breakpoint()',
+      ].join('\n'),
+      nb,
+    );
+    closeSessionFor(nb.key);
+
+    expect(seen.pt.filter((v) => v.name.startsWith('[')).map((v) => v.readOnly)).toEqual([
+      true,
+      true,
+    ]);
+    expect(seen.ll.map((v) => v.readOnly)).toEqual([false, false]);
+    // And the common case, a plain tuple.
+    expect(seen.tt.map((v) => v.readOnly)).toEqual([true, true]);
+  });
+
+  it('lets every Set Value use the globals, with a frame’s locals over them', async () => {
+    const nb = notebook('bp-set-globals');
+    const seen: Record<string, string> = {};
+    setHaltHandler(async (request) => {
+      const children = async (ref: number) =>
+        parseChildren(await request.query(childrenQuery(ref, 0, 500)));
+      const { frames, globals } = parsePausedStack(
+        await request.query(pausedStackQuery(request.process, nb.key)),
+      );
+      const locals = frames[0].locals!;
+      const set = (ref: number, name: string, value: string) =>
+        request.query(setVariableQuery(request.process, ref, name, value, globals));
+      const rows = await children(globals);
+      const ref = (name: string) => rows.find((v) => v.name === name)!.ref;
+      // A notebook class on an attribute row, a global on a list item and a dict entry.
+      seen.attribute = await set(ref('holder'), 'x', 'Point(1, 2)');
+      seen.item = await set(ref('items'), '[0]', 'g + 1');
+      seen.entry = await set(ref('d'), "'k'", 'g + 1');
+      // On a Locals row, a local and a global together.
+      seen.sum = await set(locals, 'n', 'n + g');
+      // A local shadows the global of the same name.
+      seen.shadowed = await set(locals, 'y', 'x');
+      // Still refused: a name that is neither.
+      seen.unknown = await set(locals, 'z', 'nope');
+      return 'continue';
+    });
+
+    const result = await runPython(
+      [
+        'class Point:',
+        '    def __init__(self, x, y):',
+        '        self.x, self.y = x, y',
+        '    def __repr__(self):',
+        '        return f"Point({self.x}, {self.y})"',
+        'g = 5',
+        'x = 100',
+        'holder = Point(0, 0)',
+        'items = [1, 2]',
+        'd = {"k": 0}',
+        'def f():',
+        '    n = 1',
+        '    x = 7',
+        '    y = 0',
+        '    z = 0',
+        '    breakpoint()',
+        '    return n, x, y, z',
+        '(f(), holder.x, items, d)',
+      ].join('\n'),
+      nb,
+    );
+    closeSessionFor(nb.key);
+
+    const value = (raw: string) => (raw.startsWith('Error: ') ? raw : parseChildren(raw)[0]?.value);
+    expect(value(seen.attribute)).toBe('Point(1, 2)');
+    expect(value(seen.item)).toBe('6');
+    expect(value(seen.entry)).toBe('6');
+    expect(value(seen.sum)).toBe('6');
+    expect(value(seen.shadowed)).toBe('7');
+    expect(seen.unknown).toMatch(/^Error: NameError/);
+    // The run saw every change, and z was left alone.
+    expect(result.value).toBe("((6, 7, 7, 0), Point(1, 2), [6, 2], {'k': 6})");
   });
 
   it('reads dicts whole: every entry, a page at a time when big, keys told apart', async () => {
@@ -314,6 +717,69 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
         ["'a\\x1fb'", "'odd'"],
       ]),
     );
+  });
+
+  it('stops running getters once one runs past the budget, and says which', async () => {
+    const nb = notebook('bp-getters');
+    const seen: Record<string, PauseVariable[]> = {};
+    let took = 0;
+    setHaltHandler(async (request) => {
+      const children = async (ref: number) =>
+        parseChildren(await request.query(childrenQuery(ref, 0, 500)));
+      const { globals } = parsePausedStack(
+        await request.query(pausedStackQuery(request.process, nb.key)),
+      );
+      const rows = await children(globals);
+      const started = Date.now();
+      seen.s = await children(rows.find((v) => v.name === 's')!.ref);
+      took = Date.now() - started;
+      seen.d = await children(rows.find((v) => v.name === 'd')!.ref);
+      return 'continue';
+    });
+
+    const result = await runPython(
+      [
+        'class Slow:',
+        '    def __init__(self):',
+        '        self.own = 2',
+        '    @property',
+        '    def a(self):',
+        '        while True:',
+        '            pass',
+        '    @property',
+        '    def b(self):',
+        '        while True:',
+        '            pass',
+        '    @property',
+        '    def fast(self):',
+        '        return 1',
+        'class SpinDir:',
+        '    def __init__(self):',
+        '        self.x = 1',
+        '    def __dir__(self):',
+        '        while True:',
+        '            pass',
+        's = Slow()',
+        'd = SpinDir()',
+        'breakpoint()',
+        '"went on"',
+      ].join('\n'),
+      nb,
+    );
+    closeSessionFor(nb.key);
+
+    const value = (rows: PauseVariable[], name: string) => rows.find((v) => v.name === name)?.value;
+    // The getter the break stopped, and the one after it, say so; neither is left out.
+    expect(value(seen.s, 'a')).toBe('<getter took too long>');
+    expect(value(seen.s, 'b')).toBe('<getter took too long>');
+    expect(seen.s.map((v) => v.name)).toContain('fast');
+    // What the object holds itself needs no getter, so it still reads.
+    expect(value(seen.s, 'own')).toBe('2');
+    // One budget, not one per slow getter.
+    expect(took).toBeLessThan(3500);
+    // A __dir__ that never returns leaves the object's own attributes, not nothing.
+    expect(value(seen.d, 'x')).toBe('1');
+    expect(result.value).toBe("'went on'");
   });
 
   it('gives up on a __repr__ that never returns, keeping the other rows and the pause', async () => {
@@ -625,6 +1091,7 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
     const lines = [
       'import gemdb',
       'total = 10',
+      'bonus = 0',
       'def step(n):',
       '    x = n * 2',
       '    breakpoint()',
@@ -632,6 +1099,7 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
       'print("as", __name__)',
       'total = total + step(3)',
       'print("total", total)',
+      'print("bonus", bonus)',
     ];
     fs.writeFileSync(file, lines.join('\n'));
     const owner = fileOwner(file);
@@ -639,6 +1107,7 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
     let locals: string[] = [];
     let globalNames: string[] = [];
     let saved = '';
+    let setGlobal = '';
     setHaltHandler(async (request) => {
       const stack = parsePausedStack(
         await request.query(pausedStackQuery(request.process, MAIN_MODULE)),
@@ -668,6 +1137,10 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
           ),
         ),
       );
+      // A file run's globals are its __main__ module's: Set Value writes the module, and the run reads it.
+      setGlobal = await request.query(
+        setVariableQuery(request.process, stack.globals, 'bonus', '7'),
+      );
       return 'continue';
     });
     const printed: string[] = [];
@@ -685,14 +1158,15 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
     closeSessionFor(owner.key);
 
     expect(frames).toEqual([
-      ['step', file, 5],
-      ['<module>', file, 8],
+      ['step', file, 6],
+      ['<module>', file, 9],
     ]);
     expect(locals).toEqual(['n=3', 'x=6']);
     // The script's globals, data first; dunders such as __name__ are left out.
     expect(globalNames).toEqual(expect.arrayContaining(['total']));
     expect(globalNames.filter((n) => n.startsWith('__') && n.endsWith('__'))).toEqual([]);
-    expect(printed.join('')).toBe('as __main__\ntotal 16\n');
+    expect(parseChildren(setGlobal)[0]).toMatchObject({ name: 'bonus', value: '7' });
+    expect(printed.join('')).toBe('as __main__\ntotal 16\nbonus 7\n');
     expect(result.value).toBe('');
     expect(saved).toBe('saved');
     expect(opened.meta.frames.map((f) => f.name)).toEqual(['step', '<module>']);
