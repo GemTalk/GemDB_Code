@@ -32,7 +32,7 @@ const originalPlatform = process.platform;
 const sent = (): Record<string, unknown>[] =>
   eventsNamed('osConfigPrompted').map((e) => e.properties as Record<string, unknown>);
 
-let answer: (choice: string | undefined) => void;
+let answer: ((choice: string | undefined) => void) | undefined;
 let modal: ReturnType<typeof vi.spyOn>;
 let information: ReturnType<typeof vi.spyOn>;
 let error: ReturnType<typeof vi.spyOn>;
@@ -50,6 +50,7 @@ beforeEach(() => {
   vscode.__terminals.length = 0;
   vscode.__openTerminals.length = 0;
   initTelemetry(fakeExtensionContext(), false);
+  answer = undefined;
   modal = vi.spyOn(vscode.window, 'showWarningMessage').mockImplementation(
     () =>
       new Promise((resolve) => {
@@ -60,7 +61,16 @@ beforeEach(() => {
   error = vi.spyOn(vscode.window, 'showErrorMessage');
 });
 
-afterEach(() => {
+// The prompt and the script are module-level single flights. A test that fails
+// with one still open would hand it to every later test, which would join it
+// and time out, so settle whatever is left — cancel the modal, close the
+// terminals — before the spies are restored.
+afterEach(async () => {
+  for (let round = 0; round < 5; round++) {
+    answer?.(undefined);
+    vscode.__closeAllTerminals();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
   Object.defineProperty(process, 'platform', { value: originalPlatform });
   vi.restoreAllMocks();
 });
@@ -71,7 +81,7 @@ describe('one OS prompt at a time', () => {
     const second = ensureOsConfigured('/ext', TRIGGER.notebook);
     await vi.waitFor(() => expect(modal).toHaveBeenCalledTimes(1));
 
-    answer('Configure');
+    answer?.('Configure');
     await vi.waitFor(() => expect(vscode.__openTerminals).toHaveLength(1));
     finishScript({ took: true });
 
@@ -86,7 +96,7 @@ describe('one OS prompt at a time', () => {
   it('lets the command join a prompt whose script is running, without a second terminal or event', async () => {
     const prompt = ensureOsConfigured('/ext', TRIGGER.firstRun);
     await vi.waitFor(() => expect(modal).toHaveBeenCalledTimes(1));
-    answer('Configure');
+    answer?.('Configure');
     await vi.waitFor(() => expect(vscode.__openTerminals).toHaveLength(1));
 
     const command = configureSharedMemory('/ext');
@@ -109,7 +119,7 @@ describe('one OS prompt at a time', () => {
 
     const command = configureSharedMemory('/ext');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    answer('Configure');
+    answer?.('Configure');
     await vi.waitFor(() => expect(vscode.__openTerminals).toHaveLength(1));
     finishScript({ took: false });
     await command;
@@ -155,12 +165,12 @@ describe('one OS prompt at a time', () => {
   it('starts afresh once the first prompt has settled', async () => {
     const first = ensureOsConfigured('/ext', TRIGGER.firstRun);
     await vi.waitFor(() => expect(modal).toHaveBeenCalledTimes(1));
-    answer(undefined);
+    answer?.(undefined);
     expect(await first).toBe('declined');
 
     const second = ensureOsConfigured('/ext', TRIGGER.notebook);
     await vi.waitFor(() => expect(modal).toHaveBeenCalledTimes(2));
-    answer(undefined);
+    answer?.(undefined);
     expect(await second).toBe('declined');
   });
 });

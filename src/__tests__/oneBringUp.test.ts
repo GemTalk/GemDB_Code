@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { __resetSettings, __setSetting } from '../__mocks__/vscode';
 import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 
@@ -93,6 +93,9 @@ const { ensureRunning, resumeMcpServing } = await import('../lifecycle');
 const { TRIGGER, initTelemetry } = await import('../telemetry');
 const { initUnattendedSetupMarker } = await import('../unattendedSetupMarker');
 
+/** Every deferred a test made, so `afterEach` can release whatever a failed test left waiting. */
+const deferreds: Array<{ resolve: () => void }> = [];
+
 /** A promise the test settles by hand, so a bring-up stays in progress until it chooses. */
 function deferred() {
   let resolve!: () => void;
@@ -101,8 +104,17 @@ function deferred() {
     resolve = res;
     reject = rej;
   });
+  deferreds.push({ resolve });
   return { promise, resolve, reject };
 }
+
+// The bring-up and the MCP step are module-level single flights. A test that
+// fails with one still held open would hand it to every later test, which
+// would join it and time out — so release every deferred and let it drain.
+afterEach(async () => {
+  for (const d of deferreds.splice(0)) d.resolve();
+  for (let round = 0; round < 5; round++) await new Promise((resolve) => setTimeout(resolve, 0));
+});
 
 describe('ensureRunning', () => {
   beforeEach(() => {

@@ -505,6 +505,13 @@ const __closeTerminalListeners: Array<(terminal: unknown) => void> = [];
 export function __closeTerminal(terminal: object): void {
   for (const listener of [...__closeTerminalListeners]) listener(terminal);
 }
+/**
+ * Close every terminal still open, so a test that failed half way does not
+ * leave a setup script waiting for the next test to finish it.
+ */
+export function __closeAllTerminals(): void {
+  for (const terminal of __openTerminals.splice(0)) __closeTerminal(terminal);
+}
 
 export const workspace = {
   notebookDocuments: [] as unknown[],
