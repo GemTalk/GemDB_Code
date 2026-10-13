@@ -378,12 +378,13 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
     // The console prints the repr, as debugpy and PyCharm do: no type badge.
     expect(seen.p).toMatchObject({ ok: true, result: "P('ann')", type: 'P' });
     expect(seen.p.ref).toBeGreaterThan(0);
-    expect(kids).toEqual(['name', 'tags']);
+    // Opened as a Variables row is: its data, with its dunders folded into a group.
+    expect(kids).toEqual(['name', 'special variables', 'tags']);
     // A watch is a row, so it reads as the Variables row for the same object does.
     expect(seen.watch).toMatchObject({ ok: true, result: localRow });
     expect(seen.none).toMatchObject({ ok: true, result: '', ref: 0 });
     expect(seen.big.indexed).toBe(1000);
-    expect(pageOfBig).toEqual(['998', '999']);
+    expect(pageOfBig).toEqual(['{int} 998', '{int} 999']);
   });
 
   it('keeps names typed in the console for the rest of the pause, and only that long', async () => {
@@ -780,8 +781,9 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
     closeSessionFor(nb.key);
 
     expect(change).toMatchObject({ ok: true, invalidated: true });
-    expect(watched).toMatchObject({ ok: true, result: '10', invalidated: false });
-    expect(x).toBe('10');
+    // A watch is a row, so it reads as one, type badge and all.
+    expect(watched).toMatchObject({ ok: true, result: '{int} 10', invalidated: false });
+    expect(x).toBe('{int} 10');
   });
 
   it('puts a change to a persistent object made in the console in the notebook’s transaction', async () => {
@@ -894,12 +896,13 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
     closeSessionFor(nb.key);
 
     expect(seen.shown).toMatchObject({ ok: true, out: [{ category: 'console', output: '' }] });
-    expect(seen.rows).toEqual([expect.stringMatching(/^other: .*Box/), 'x: 5', 'items: [5, 5]']);
-    expect(seen.items).toEqual(['5', '5']);
+    // Its data in name order, as Variables lists it, without the folded groups.
+    expect(seen.rows).toEqual([expect.stringMatching(/^other: .*Box/), 'items: [5, 5]', 'x: 5']);
+    expect(seen.items).toEqual(['{int} 5', '{int} 5']);
     expect(seen.big).toEqual(['big: list with 1000 items']);
     expect(seen.bigOpened).toEqual([
-      expect.objectContaining({ name: '[998]', value: '998' }),
-      expect.objectContaining({ name: '[999]', value: '999' }),
+      expect.objectContaining({ name: '[998]', value: '{int} 998' }),
+      expect.objectContaining({ name: '[999]', value: '{int} 999' }),
     ]);
     expect(seen.echo).toEqual({
       category: 'console',

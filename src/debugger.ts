@@ -21,6 +21,7 @@ import {
   parseConsoleReply,
   parsePausedStack,
   pausedStackQuery,
+  setVariableQuery,
 } from './pauseVariables';
 import { DotsByFile, armedLinesQuery, parseArmed } from './redDots';
 import { HaltAnswer, HaltRequest, setHaltHandler, setRedDotSource } from './session';
@@ -44,11 +45,12 @@ import { HaltAnswer, HaltRequest, setHaltHandler, setRedDotSource } from './sess
  * breakpoint() must not write the notebook to disk.
  *
  * Deliberately small for now: the call stack, the highlight, each frame's
- * Locals and the notebook's Globals, Continue and Stop, red dots in `.py`
- * files, the Debug Console and the Watch pane, and saving a row's object
- * under gemdb.root (`savedObjects.ts`). Stepping and Restart answer "not
- * yet" rather than pretending, and so do red dots in notebook cells and dots
- * with a condition, hit count or log message.
+ * Locals and the notebook's Globals, Set Value on a row, Continue and Stop,
+ * red dots in `.py` files, the Debug Console and the Watch pane, and saving a
+ * row's object under gemdb.root (`savedObjects.ts`). Stepping and Restart
+ * answer "not yet" rather than pretending, and so do red dots in notebook
+ * cells and dots with a condition, hit count or log message. Copy Value's
+ * evaluation only takes a row's type badge off its text (`copyText`).
  *
  * The adapter is inline (`DebugAdapterInlineImplementation`) and speaks the
  * Debug Adapter Protocol directly rather than through `@vscode/debugadapter`:
@@ -89,6 +91,8 @@ export interface DapVariable {
   variablesReference: number;
   indexedVariables?: number;
   namedVariables?: number;
+  /** `readOnly` keeps VS Code from offering Set Value on the row. */
+  presentationHint?: { attributes?: string[] };
 }
 
 /** Where an `evaluate` came from: the Debug Console, or the Watch pane. */
@@ -126,6 +130,12 @@ export interface Pause {
   scopes(frameId: number): DapScope[];
   /** The children of one expandable row, `count` of them from `start`. */
   variables(ref: number, start: number, count: number): Promise<DapVariable[]>;
+  /**
+   * Give the row `name` under `ref` the value of the Python expression
+   * `value`, and answer the row as it reads now. Rejects with the reason it
+   * could not; absent where nothing can be changed (a saved stack).
+   */
+  setVariable?(ref: number, name: string, value: string): Promise<DapVariable>;
   /** Settle the pause. Only the first call counts. */
   answer(choice: HaltAnswer): void;
   /**
@@ -203,18 +213,53 @@ export function scopesFor(locals: number, globals: number): DapScope[] {
 }
 
 /**
- * A row for the Variables view. A list or set — or a dict too big for one
- * page — says how many items it has, so VS Code pages it rather than asking
- * for ten million rows at once.
+ * A row's type badge, as PyCharm shows one: `{Point}`, or with a container's
+ * size, `{list: 3}`. Empty for a row with no type, such as a group heading.
+ */
+export function badgeOf(v: Pick<PauseVariable, 'type' | 'size'>): string {
+  if (!v.type) return '';
+  return v.size >= 0 ? `{${v.type}: ${v.size}}` : `{${v.type}}`;
+}
+
+/**
+ * What Copy Value copies for a row whose value text is `value`: the value
+ * without the type badge in front of it, so `{str} 'hello'` copies as
+ * `'hello'`. A container too big for its repr shows only its badge,
+ * `{list: 150}`, and copies as the gem wrote it, `list with 150 items`.
+ *
+ * VS Code's Copy Value sends the row's text (or its `evaluateName`, which
+ * GemDB rows do not have) as an `evaluate` request in the `clipboard`
+ * context, and copies the answer; refused, it copies the value text as shown,
+ * badge and all (read from VS Code 1.134's copy-value command).
+ */
+export function copyText(value: string): string {
+  const sized = /^\{([^{}:]+): (\d+)\}$/.exec(value);
+  if (sized) return `${sized[1]} with ${sized[2]} items`;
+  const badged = /^\{[^{}]*\} /.exec(value);
+  return badged ? value.slice(badged[0].length) : value;
+}
+
+/**
+ * A row for the Variables view. Its value leads with its type badge, because
+ * VS Code shows a row's `type` only in a hover unless the user turns on
+ * `debug.showVariableTypes`. A container too big to show its repr, which reads
+ * `list with 150 items`, shows the badge alone, which says the same.
+ *
+ * A list or set — or a dict too big for one page — says how many items it
+ * has, so VS Code pages it rather than asking for ten million rows at once.
  */
 export function toDapVariable(v: PauseVariable): DapVariable {
+  const badge = badgeOf(v);
+  const sized = v.size >= 0 && v.value === `${v.type} with ${v.size} items`;
+  const value = !badge ? v.value : sized ? badge : `${badge} ${v.value}`;
   return {
     name: v.name,
-    value: v.value,
+    value,
     ...(v.type ? { type: v.type } : {}),
     variablesReference: v.ref,
     ...(v.indexed > 0 ? { indexedVariables: v.indexed } : {}),
     ...(v.named > 0 ? { namedVariables: v.named } : {}),
+    ...(v.readOnly ? { presentationHint: { attributes: ['readOnly'] } } : {}),
   };
 }
 
@@ -521,6 +566,7 @@ interface DapRequest {
 }
 
 const NOT_YET_STEP = "Stepping isn't supported yet. Use Continue to resume or Stop to end the run.";
+const NOT_CHANGEABLE = 'This is a saved stack: its values cannot be changed.';
 const NOT_HERE = 'Evaluating expressions is not available here.';
 const NO_HOVER = "GemDB doesn't evaluate on hover: a hover must not run code.";
 const INTERRUPTED = 'Interrupted.';
@@ -542,6 +588,14 @@ const SHOWN_REFS = 1_000_000_000;
 
 /** An object with up to this many attributes has them listed in the console; one with more opens like a container. */
 const SHOW_ALL = 20;
+
+/** The most group rows (`special`, `class`, `function`, `module variables`) an object's listing starts with. */
+const GROUPS = 4;
+
+/** A folded group heading among an object's rows: it opens, but has no value or type of its own. */
+function isGroupRow(row: DapVariable): boolean {
+  return row.variablesReference > 0 && row.value === '' && !row.type;
+}
 const NOT_YET_RESTART =
   "Restarting isn't supported yet. Use Continue to resume or Stop to end the run.";
 
@@ -603,6 +657,10 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
         this.respond(request, {
           supportsConfigurationDoneRequest: true,
           supportsTerminateRequest: true,
+          supportsSetVariable: true,
+          // Copy Value asks for the row's text through evaluate in this
+          // context, and copies the answer: see copyText.
+          supportsClipboardContext: true,
           // A console line can run for as long as the user's code does.
           supportsCancelRequest: true,
           // Claimed so Restart arrives as a request this adapter can decline.
@@ -681,9 +739,11 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
       case 'variables': {
         const ref = Number(request.arguments?.variablesReference ?? 0);
         const start = Number(request.arguments?.start ?? 0);
-        // No count means "all". A row with more than a page reports its
-        // children as indexed, which VS Code asks for a page at a time, so
-        // capping here never hides a row.
+        // No count means "all". A container with more than a page reports
+        // its children as indexed, which VS Code asks for a page at a time, so
+        // capping here hides none of them. A scope or an object is grouped,
+        // and a group cannot be paged into, so past a page it ends in a
+        // "... N more not shown" row instead.
         const count = Number(request.arguments?.count ?? 0) || PAGE;
         const pause = this.pause;
         const shown = this.shown.get(ref);
@@ -698,6 +758,28 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
         void pause
           .variables(ref, start, Math.min(count, PAGE))
           .then((variables) => this.respond(request, { variables }));
+        return;
+      }
+      case 'setVariable': {
+        const ref = Number(request.arguments?.variablesReference ?? 0);
+        const name = String(request.arguments?.name ?? '');
+        const value = String(request.arguments?.value ?? '');
+        const set = this.pause?.setVariable;
+        if (!set) {
+          this.fail(request, NOT_CHANGEABLE, true);
+          return;
+        }
+        void set(ref, name, value).then(
+          (v) =>
+            this.respond(request, {
+              value: v.value,
+              ...(v.type ? { type: v.type } : {}),
+              variablesReference: v.variablesReference,
+              ...(v.indexedVariables ? { indexedVariables: v.indexedVariables } : {}),
+              ...(v.namedVariables ? { namedVariables: v.namedVariables } : {}),
+            }),
+          (e: unknown) => this.fail(request, `Could not set ${name}: ${errorMessage(e)}`, true),
+        );
         return;
       }
       case 'continue':
@@ -801,15 +883,24 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
     const context = String(request.arguments?.context ?? 'repl');
     const source = String(request.arguments?.expression ?? '');
     const pause = this.pause;
+    if (context === 'clipboard') {
+      // Copy Value on a Variables row: the expression is the row's value
+      // text, and what is copied is the value without its type badge.
+      this.respond(request, { result: copyText(source), variablesReference: 0 });
+      return;
+    }
     if (context === 'hover') {
       this.fail(request, NO_HOVER, false);
       return;
     }
-    if (!pause?.evaluate) {
+    // Only the console and Watch run code. Another context — `variables`, which
+    // a client without the clipboard context sends for Copy Value with the
+    // row's text — would run that text as Python.
+    if (!pause?.evaluate || (context !== 'repl' && context !== 'watch')) {
       this.fail(request, NOT_HERE, false);
       return;
     }
-    const kind: ConsoleContext = context === 'watch' ? 'watch' : 'repl';
+    const kind: ConsoleContext = context;
     const frameId = Number(request.arguments?.frameId ?? pause.frames[0]?.id ?? 1);
     const { controller, finish } = this.track(request, kind === 'repl');
     pause.evaluate(source, frameId, kind, controller.signal).then(
@@ -977,18 +1068,19 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
     const total = (answer.indexedVariables ?? 0) + (answer.namedVariables ?? 0);
     const listed =
       answer.variablesReference > 0 &&
-      (answer.children === 'attrs' || answer.children === 'ivars') &&
+      (answer.children === 'obj' || answer.children === 'ivars') &&
       total <= SHOW_ALL;
     const rows: DapVariable[] = listed
       ? [
           { name: text, value: text, variablesReference: 0 },
-          ...(await pause.variables(answer.variablesReference, 0, total || SHOW_ALL)).map(
-            (kid) => ({
-              ...kid,
-              name: `${kid.name}: ${kid.value}`,
-              value: `${kid.name}: ${kid.value}`,
+          ...(await pause.variables(answer.variablesReference, 0, (total || SHOW_ALL) + GROUPS))
+            // An object's rows start with its folded groups (special, class,
+            // function variables), which are noise here: the data is the point.
+            .filter((kid) => !isGroupRow(kid))
+            .map((kid) => {
+              const label = `${kid.name}: ${copyText(kid.value) || kid.value}`;
+              return { ...kid, name: label, value: label };
             }),
-          ),
         ]
       : [
           {
@@ -1108,6 +1200,8 @@ interface PauseView {
   frames: DapFrame[];
   scopes: Map<number, DapScope[]>;
   texts: Array<string[] | undefined>;
+  /** Registry position of the notebook's or file run's globals; 0 for none. */
+  globals: number;
   /** Where each frame's Debug Console names come from, by DAP frame id. */
   consoles: Map<number, ConsoleScope>;
 }
@@ -1151,36 +1245,97 @@ async function readPause(request: HaltRequest): Promise<PauseView> {
       frames: toDapFrames(frames, running, cells, readFileLines, texts),
       scopes,
       texts,
+      globals,
       consoles,
     };
   } catch (e) {
     log(`Could not read the stack at a pause: ${errorMessage(e)}`);
-    return { frames: [], scopes: new Map(), texts: [], consoles: new Map() };
+    return { frames: [], scopes: new Map(), texts: [], globals: 0, consoles: new Map() };
   }
 }
 
 /**
+ * What the pause remembers of each row it has listed, keyed by the row's
+ * container and name, which is all a Variables-row command or a Set Value
+ * request is handed: the row's handle, and the badge its value starts with.
+ */
+interface ListedRows {
+  handles: Map<string, number>;
+  badges: Map<string, string>;
+}
+
+/**
+ * The value Set Value was given, without the row's own type badge in front.
+ * VS Code opens Set Value's box on the row's value text, so a value edited in
+ * place still starts with `{int} ` — which as Python is a set followed by a
+ * number, a syntax error. Only the row's exact badge is taken off, followed by
+ * a space or alone, so an expression the user typed is never changed. Alone
+ * matters most: a container too big for its repr shows only its badge,
+ * `{list: 150}`, which is a valid dict display; left in, accepting the box
+ * unchanged would replace the list with a dict.
+ */
+export function withoutBadge(value: string, badge: string | undefined): string {
+  if (!badge) return value;
+  if (value.trim() === badge) return '';
+  return value.startsWith(`${badge} `) ? value.slice(badge.length + 1) : value;
+}
+
+/** Note a listed row's handle and badge under its container and name. */
+function remember(listed: ListedRows, ref: number, row: PauseVariable): void {
+  const key = handleKey(ref, row.name);
+  if (row.handle > 0) listed.handles.set(key, row.handle);
+  const badge = badgeOf(row);
+  if (badge) listed.badges.set(key, badge);
+  else listed.badges.delete(key);
+}
+
+/**
  * The children of one registered object. A failure shows as no children, not
- * an error. Each row's handle is noted under `handles`, keyed by its
- * container and name, which is all a Variables-row command is handed.
+ * an error. Each row is remembered (`ListedRows`) for the commands and Set
+ * Value requests that name it later.
  */
 async function readChildren(
   request: HaltRequest,
-  handles: Map<string, number>,
+  listed: ListedRows,
   ref: number,
   start: number,
   count: number,
 ): Promise<DapVariable[]> {
   try {
     const rows = parseChildren(await request.query(childrenQuery(ref, start, count)));
-    for (const row of rows) {
-      if (row.handle > 0) handles.set(handleKey(ref, row.name), row.handle);
-    }
-    return rows.map(toDapVariable);
+    for (const row of rows) remember(listed, ref, row);
+    return rows.map((row) => toDapVariable(row));
   } catch (e) {
     log(`Could not read variable ${ref} at breakpoint(): ${errorMessage(e)}`);
     return [];
   }
+}
+
+/**
+ * Set Value on a row: write it in the gem and answer the row as it reads now.
+ * The value can use the pause's globals, at registry position `globals`. The
+ * new row is remembered in place of the old, so a command on the row reaches
+ * the new object. Rejects with the gem's reason, which VS Code shows.
+ */
+async function writeVariable(
+  request: HaltRequest,
+  listed: ListedRows,
+  globals: number,
+  ref: number,
+  name: string,
+  value: string,
+): Promise<DapVariable> {
+  const source = withoutBadge(value, listed.badges.get(handleKey(ref, name)));
+  if (!source.trim()) throw new Error('Set Value takes a Python expression, such as 5 or n + 1');
+  const raw = await request.query(setVariableQuery(request.process, ref, name, source, globals));
+  if (raw.startsWith('Error: SyntaxError')) {
+    throw new Error(`Set Value takes a Python expression, such as 5 or n + 1 (${raw.slice(7)})`);
+  }
+  if (raw.startsWith('Error: ')) throw new Error(raw.slice('Error: '.length));
+  const [row] = parseChildren(raw);
+  if (!row) throw new Error('nothing came back');
+  remember(listed, ref, row);
+  return toDapVariable(row);
 }
 
 function handleKey(containerRef: number, name: string): string {
@@ -1296,7 +1451,8 @@ async function showRowAt(
   return {
     kind: 'value',
     output: '',
-    value: dap.value,
+    // The plain repr, as the console prints a value, without the row's badge.
+    value: row.value,
     ...(dap.type ? { type: dap.type } : {}),
     variablesReference: dap.variablesReference,
     ...(dap.indexedVariables ? { indexedVariables: dap.indexedVariables } : {}),
@@ -1338,7 +1494,9 @@ async function evaluateAt(
       return {
         kind: 'value',
         output,
-        value: row.value,
+        // A watch is a row and reads as one, type badge and all; a console
+        // line prints the plain repr, as Python's debuggers do.
+        value: context === 'watch' ? row.value : reply.row.value,
         ...(row.type ? { type: row.type } : {}),
         variablesReference: row.variablesReference,
         ...(row.indexedVariables ? { indexedVariables: row.indexedVariables } : {}),
@@ -1431,18 +1589,20 @@ export function registerBreakpointDebugger(): vscode.Disposable {
         const where = request.reason === 'red dot' ? 'a red dot' : 'breakpoint()';
         log(`${where} in ${label}: paused`);
         void readPause(request).then((view) => {
-          const { frames, scopes, texts } = view;
+          const { frames, scopes, texts, globals } = view;
           if (settled) return;
-          const handles = new Map<string, number>();
+          const listed: ListedRows = { handles: new Map(), badges: new Map() };
           const consoleRefs = new Map<number, number>();
           pauses.set(id, {
             label,
             ownerKey: request.session.owner.key,
             frames,
             scopes: (frameId) => scopes.get(frameId) ?? [],
-            variables: (ref, start, count) => readChildren(request, handles, ref, start, count),
+            variables: (ref, start, count) => readChildren(request, listed, ref, start, count),
+            setVariable: (ref, name, value) =>
+              writeVariable(request, listed, globals, ref, name, value),
             answer,
-            handleFor: (containerRef, name) => handles.get(handleKey(containerRef, name)),
+            handleFor: (containerRef, name) => listed.handles.get(handleKey(containerRef, name)),
             query: (code) => request.query(code),
             evaluate: (source, frameId, context, signal, selfHandle) =>
               evaluateAt(request, view, consoleRefs, source, frameId, context, signal, selfHandle),

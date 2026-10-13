@@ -202,7 +202,8 @@ machine-wide, it prompts you and waits for your permission:
   the shared-memory dialog appears, it lists this change as recommended, and GemDB Code runs it in
   its own terminal. Otherwise, click the **Survives logout** row in the GemDB Code sidebar, or run
   **GemDB: Keep the Database Running After Logout** from the Command Palette. The change takes
-  effect after you restart your computer.
+  effect at once. If systemd cannot load it straight away, the row stays and reads **not yet
+  applied** until you restart your computer.
 
 #### Your shell profile and AI clients
 
@@ -414,7 +415,13 @@ database, select that kernel from the kernel picker at the top right.
 - `breakpoint()` pauses the cell and opens VS Code's debugger on it, with no setup: the Call Stack
   shows the Python frames, the paused line is highlighted, and Variables shows each frame's locals
   and the notebook's globals, expandable into attributes, items and entries, with classes and
-  functions folded into their own rows. **Continue** resumes the cell where it paused; **Stop**
+  functions folded into their own rows. Each value starts with its type, and a container's with its
+  size too (`{Point} Point(3, 4)`, `{list: 3} […]`); **Copy Value** copies the value without them.
+  An object with attributes, its own or its class's, opens on everything it has: its own attributes, its class's, its properties and slots,
+  with its methods under **function variables** and its dunders under **special variables**. Right-click a row and choose **Set Value** to change
+  a local, a global, an attribute, a list item or a dict entry. The value you type is a Python
+  expression, and the run continues with it. It can use the notebook's globals, or a `.py` file's,
+  on any row, and on a Locals row the frame's locals too. **Continue** resumes the cell where it paused; **Stop**
   ends it, along with any cells queued after it. The **Debug Console** and **Watch** work at the
   pause: type Python and it runs in the frame selected in the Call Stack, with that frame's locals,
   its module's globals and the builtins, and a result opens like a Variables row. Names you bind
@@ -425,8 +432,8 @@ database, select that kernel from the kernel picker at the top right.
   listed, a list or dict as one row that opens) and leaves its name at the prompt, or `_` for a
   nested row, ready for the next line, or **Evaluate with self…**,
   which runs an expression with `self` bound to it (`len(self.history)`) and shows the answer
-  there. Stepping is not supported yet, and neither are
-  red dots in a cell (they work in `.py` files; see above). Right-click a Variables row and choose **Add to Persisted Objects…** to keep that object: it
+  there. Stepping is not supported yet, and neither are red
+  dots in a cell (they work in `.py` files; see above). Right-click a Variables row and choose **Add to Persisted Objects…** to keep that object: it
   goes in `gemdb.root` under the key you give (one is suggested) and is written at the notebook's
   next commit. The **Persisted Objects** view, under GemDB and in Run and Debug, lists what `gemdb.root`
   holds; its title bar always has **Commit** and **Abort** for the notebook you are working in. **Add Stack to Persisted Objects…** on the Call Stack saves the whole paused stack the same

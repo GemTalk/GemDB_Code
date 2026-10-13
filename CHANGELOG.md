@@ -25,6 +25,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   more than 20 attributes, as one row that opens like the Variables row. Its name is left at the
   console's prompt, or `_` bound to it for a row whose name means nothing there, such as a list item. **Evaluate with self…** asks for an expression and shows what it gives
   with `self` bound to the row's object, in the frame selected in Call Stack.
+- **Variables shows each value's type, and opens objects whole.** Every row starts with its type,
+  and a container's with its size too, as PyCharm shows them: `{Point} Point(3, 4)`,
+  `{list: 3} […]`, `{list: 150}` for one too big to show. **Copy Value** copies the value alone,
+  without the type. An object with attributes, its own or its class's, now opens on everything
+  `dir()` lists: its own attributes, its class's, its
+  properties (read through their getters) and its `__slots__`, which before did not open at all.
+  Its methods are folded under **function variables** and its dunders under
+  **special variables**, as in VS Code's Python debugger, so a class no longer buries its own
+  methods under `__module__`, `__dict__` and the rest. A getter that runs past the time limit reads
+  `<getter took too long>`, and the getters after it are not run. Modules now land under
+  **module variables**; before, they were listed with the data.
+- **Set Value in Variables.** Right-click a row while paused and choose **Set Value** to change a
+  local, a global, an attribute, a list item or a dict entry. The value is a Python expression,
+  and on any row it can use the notebook's globals, or a `.py` file's (`Point(1, 2)`, `g + 1`). In
+  Locals it can use the frame's locals too (`n + 1`), and a local wins over a global of the same
+  name. A statement such as `n = 5` is
+  refused rather than stored as None. A local is written into the paused frame, so the run
+  continues with it. What Python refuses is refused with Python's reason, such as a property with
+  no setter. A method's receiver (`self`, or whatever the def calls it), a tuple's items, group
+  rows and a saved stack's values cannot be changed, and VS Code does not offer Set Value on them.
 
 ### Fixed
 

@@ -90,6 +90,17 @@ describe('what the adapter claims', () => {
     expect(body.supportsEvaluateForHovers).toBeFalsy();
   });
 
+  it('runs nothing for a context that is not the console or Watch, such as Copy Value’s old one', async () => {
+    const evaluate = vi.fn<Evaluate>();
+    const { request, responseTo } = started(evaluate);
+
+    const seq = request('evaluate', { expression: '{int} 3', frameId: 1, context: 'variables' });
+    await settle();
+
+    expect(responseTo(seq)?.success).toBe(false);
+    expect(evaluate).not.toHaveBeenCalled();
+  });
+
   it('refuses a hover evaluate without running anything', async () => {
     const evaluate = vi.fn<Evaluate>();
     const { request, responseTo } = started(evaluate);
@@ -524,20 +535,24 @@ describe('putting a Variables row in the Debug Console', () => {
 
   it('names an object, then lists its attributes beneath, each with its name', async () => {
     const variables = vi.fn<Pause['variables']>().mockResolvedValue([
-      { name: 'owner', value: "'ada'", variablesReference: 0 },
+      // A folded group heading, as an object's rows start: left out of the listing.
+      { name: 'special variables', value: '', variablesReference: 11, namedVariables: 9 },
+      { name: 'owner', value: "{str} 'ada'", type: 'str', variablesReference: 0 },
       { name: 'history', value: '[10]', type: 'list', variablesReference: 9, indexedVariables: 1 },
     ]);
 
     const result = await shown(
-      value("Account('ada', 10)", { variablesReference: 7, namedVariables: 2, children: 'attrs' }),
+      value("Account('ada', 10)", { variablesReference: 7, namedVariables: 2, children: 'obj' }),
       { variables },
     );
 
-    expect(variables).toHaveBeenCalledWith(7, 0, 2);
+    // Room for the group headings that come first.
+    expect(variables).toHaveBeenCalledWith(7, 0, 6);
     // VS Code shows these with their names hidden, so each name is in its text.
     expect(result.rows).toEqual([
       { name: "p: Account('ada', 10)", value: "p: Account('ada', 10)", variablesReference: 0 },
-      { name: "owner: 'ada'", value: "owner: 'ada'", variablesReference: 0 },
+      // The console prints plain reprs: the Variables row's type badge comes off.
+      { name: "owner: 'ada'", value: "owner: 'ada'", type: 'str', variablesReference: 0 },
       {
         name: 'history: [10]',
         value: 'history: [10]',
@@ -591,7 +606,7 @@ describe('putting a Variables row in the Debug Console', () => {
     const variables = vi.fn<Pause['variables']>();
 
     const result = await shown(
-      value('Wide()', { variablesReference: 4, namedVariables: 21, children: 'attrs' }),
+      value('Wide()', { variablesReference: 4, namedVariables: 21, children: 'obj' }),
       { variables },
     );
 

@@ -163,7 +163,18 @@ reads locals with `PyFrame ___pyLocalsFromFrameContentsList___:` (which merges
 a Python frame's Smalltalk frames and adds `self`), in the same walk as the
 stack so a frame cannot be paired with another's locals, and keeps every
 object it may expand in a per-pause registry in `SessionTemps`, dropped before
-the evaluation resumes (`pauseVariables.ts`). Every query made while paused
+the evaluation resumes (`pauseVariables.ts`). An object's rows are its
+`__dir__` read through `___pyAttrLoad___:`, so a `__slots__` object (no
+`__dict__`, no Smalltalk instance variables) opens too, and Grail names a bound
+method's type `BoundMethod`, not `method`. Set Value writes a local back into
+the paused frame with `GsProcess>>_frameAt:tempAt:put:`, at the levels the walk
+recorded for that frame; `_frameAt:tempNamed:put:` fails on a local a block
+closes over, which lives in a VariableContext (measured:
+rtErrShouldNotImplement). Only a temp can be written that way, and two names
+in Locals are not temps: a method's receiver, which Grail adds under whatever
+name the def gave it; and a classmethod's `cls`, which Grail leaves out of
+Locals altogether (measured). A parameter of a plain function
+spelled `self` is left out too, by `___isInternalTempName___`. Every query made while paused
 goes through `queryWhilePaused` in `session.ts` — nonblocking, one at a time,
 soft-broken past a two-second budget — never `execute`, because a Variables
 row runs the user's own `__repr__`. Measured traps there: every Smalltalk

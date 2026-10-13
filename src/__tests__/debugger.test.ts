@@ -9,6 +9,7 @@ import {
   debug,
   window,
 } from '../__mocks__/vscode';
+import type { PauseVariable } from '../pauseVariables';
 import type { DotsByFile } from '../redDots';
 import type { HaltAnswer, HaltHandler, HaltRequest, RedDotSource } from '../session';
 
@@ -44,6 +45,8 @@ const {
   toDapVariable,
   verifiedDots,
   withFileDots,
+  withoutBadge,
+  copyText,
 } = await import('../debugger');
 
 const F = '\u001f';
@@ -313,34 +316,83 @@ describe('scopes and variable rows', () => {
     expect(scopesFor(0, 4).map((s) => s.name)).toEqual(['Globals']);
   });
 
+  /** A row as the gem writes it, with the fields a test cares about. */
+  const pauseRow = (fields: Partial<PauseVariable> & { name: string }): PauseVariable => ({
+    value: '',
+    type: '',
+    ref: 0,
+    indexed: 0,
+    named: 0,
+    handle: 0,
+    size: -1,
+    readOnly: false,
+    ...fields,
+  });
+
   it('tells VS Code how many items a list has, so it pages them', () => {
-    const rows = toDapVariable({
-      name: 'rows',
-      value: '[...]',
-      type: 'list',
-      ref: 7,
-      indexed: 10_000,
-      named: 0,
-      handle: 7,
-    });
-    const leaf = toDapVariable({
-      name: 'n',
-      value: '3',
-      type: 'int',
-      ref: 0,
-      indexed: 0,
-      named: 0,
-      handle: 8,
-    });
+    const rows = toDapVariable(
+      pauseRow({
+        name: 'rows',
+        value: '[...]',
+        type: 'list',
+        ref: 7,
+        indexed: 10_000,
+        size: 10_000,
+      }),
+    );
+    const leaf = toDapVariable(pauseRow({ name: 'n', value: '3', type: 'int', handle: 8 }));
 
     expect(rows).toEqual({
       name: 'rows',
-      value: '[...]',
+      value: '{list: 10000} [...]',
       type: 'list',
       variablesReference: 7,
       indexedVariables: 10_000,
     });
-    expect(leaf).toEqual({ name: 'n', value: '3', type: 'int', variablesReference: 0 });
+    expect(leaf).toEqual({ name: 'n', value: '{int} 3', type: 'int', variablesReference: 0 });
+  });
+
+  it('leads every value with its type, and a container’s with its size, as PyCharm does', () => {
+    const value = (fields: Partial<PauseVariable>) =>
+      toDapVariable(pauseRow({ name: 'x', ...fields })).value;
+
+    expect(value({ value: 'Point(3, 4)', type: 'Point' })).toBe('{Point} Point(3, 4)');
+    expect(value({ value: '[1, 2]', type: 'list', size: 2 })).toBe('{list: 2} [1, 2]');
+    expect(value({ value: '[]', type: 'list', size: 0 })).toBe('{list: 0} []');
+    // Too big for a repr, the gem writes its size in words; the badge says it already.
+    expect(value({ value: 'list with 150 items', type: 'list', size: 150 })).toBe('{list: 150}');
+    // A group heading has no type, and no badge.
+    expect(value({ name: 'special variables', value: '' })).toBe('');
+  });
+
+  it('takes the row’s own badge off a value edited in place, and nothing else', () => {
+    // VS Code opens Set Value's box on the value text, badge and all.
+    expect(withoutBadge('{int} 42', '{int}')).toBe('42');
+    expect(withoutBadge('{list: 3} [1, 2, 3, 4]', '{list: 3}')).toBe('[1, 2, 3, 4]');
+    // A value typed fresh, or a set expression that merely looks like a badge, is left alone.
+    expect(withoutBadge('42', '{int}')).toBe('42');
+    expect(withoutBadge('{x} | {y}', '{int}')).toBe('{x} | {y}');
+    expect(withoutBadge('{int} 42', undefined)).toBe('{int} 42');
+    // A row too big for its repr shows the badge alone, and that is a dict display in Python:
+    // left in, Enter would replace a 150-item list with {list: 150}.
+    expect(withoutBadge('{list: 150}', '{list: 150}')).toBe('');
+  });
+
+  it('copies a value without its type badge, as Copy Value should', () => {
+    expect(copyText("{str} 'hello'")).toBe("'hello'");
+    expect(copyText('{Point} Point(3, 4)')).toBe('Point(3, 4)');
+    expect(copyText('{list: 3} [1, 2, 3]')).toBe('[1, 2, 3]');
+    // A container too big for its repr shows its badge alone; it copies as the gem wrote it.
+    expect(copyText('{list: 150}')).toBe('list with 150 items');
+    // A group heading has no value and no badge.
+    expect(copyText('')).toBe('');
+  });
+
+  it('marks a row that cannot be changed, so VS Code offers no Set Value on it', () => {
+    expect(toDapVariable(pauseRow({ name: 'self', readOnly: true })).presentationHint).toEqual({
+      attributes: ['readOnly'],
+    });
+    expect(toDapVariable(pauseRow({ name: 'n' })).presentationHint).toBeUndefined();
   });
 });
 
@@ -781,6 +833,69 @@ describe('the debug adapter', () => {
     expect(events()).toContain('stopped');
   });
 
+  it('offers Set Value, and answers it with the row as it reads now', async () => {
+    const setVariable = vi.fn(() =>
+      Promise.resolve({ name: 'n', value: '{int} 99', type: 'int', variablesReference: 0 }),
+    );
+    const { request, response } = adapterFor({ answer: () => {}, setVariable });
+    request('initialize');
+    request('launch', { gemdbPause: '1' });
+
+    request('setVariable', { variablesReference: 3, name: 'n', value: '99' });
+    await settle();
+
+    expect(response('initialize')?.body).toMatchObject({ supportsSetVariable: true });
+    expect(setVariable).toHaveBeenCalledWith(3, 'n', '99');
+    expect(response('setVariable')).toMatchObject({
+      success: true,
+      body: { value: '{int} 99', type: 'int', variablesReference: 0 },
+    });
+  });
+
+  it('shows the user why Set Value failed', async () => {
+    const setVariable = () => Promise.reject(new Error('TypeError - tuple is immutable'));
+    const { request, response } = adapterFor({ answer: () => {}, setVariable });
+    request('initialize');
+    request('launch', { gemdbPause: '1' });
+
+    request('setVariable', { variablesReference: 5, name: '[0]', value: '9' });
+    await settle();
+
+    expect(response('setVariable')).toMatchObject({
+      success: false,
+      message: 'Could not set [0]: TypeError - tuple is immutable',
+      body: { error: { showUser: true } },
+    });
+  });
+
+  it('changes nothing in a saved stack, saying so', () => {
+    const { request, response } = adapterFor({ answer: () => {}, saved: true });
+    request('initialize');
+    request('launch', { gemdbPause: '1' });
+
+    request('setVariable', { variablesReference: 3, name: 'n', value: '1' });
+
+    expect(response('setVariable')).toMatchObject({
+      success: false,
+      message: 'This is a saved stack: its values cannot be changed.',
+    });
+  });
+
+  it('answers Copy Value with the value alone, and runs nothing for another context', () => {
+    const { request, response } = adapterFor({ answer: () => {} });
+    request('initialize');
+    request('launch', { gemdbPause: '1' });
+
+    request('evaluate', { expression: "{str} 'hello'", frameId: 1, context: 'clipboard' });
+    const copied = response('evaluate');
+    // Not the clipboard: running a row's text as Python would answer nonsense, or worse.
+    request('evaluate', { expression: '{int} 3', frameId: 1, context: 'variables' });
+
+    expect(response('initialize')?.body).toMatchObject({ supportsClipboardContext: true });
+    expect(copied).toMatchObject({ success: true, body: { result: "'hello'" } });
+    expect(response('evaluate')).toMatchObject({ success: false });
+  });
+
   it('declines Restart with a message, leaving the pause alone', () => {
     const answer = vi.fn();
     const { request, response } = adapterFor({ answer });
@@ -1073,6 +1188,96 @@ describe('opening the debugger at a breakpoint()', () => {
     registration.dispose();
   });
 
+  it('sets a value in the paused session, and the new row’s handle replaces the old', async () => {
+    const registration = registerBreakpointDebugger();
+    const request = haltRequest();
+    request.query = (code) => {
+      request.queries.push(code);
+      if (code.includes('Suspended')) return Promise.resolve(PAUSED);
+      if (code.includes('_frameAt:')) return Promise.resolve(row('n', '99', 'int', 0, 0, 0, 21));
+      return Promise.resolve(row('n', '7', 'int', 0, 0, 0, 20));
+    };
+    void installed!(request);
+    await settle();
+    const adapter = adapterForLastStart();
+    ask(adapter, 'launch', { gemdbPause: pauseIdOf(0) });
+    ask(adapter, 'variables', { variablesReference: 3 });
+    await settle();
+    const sent: Array<Record<string, unknown>> = [];
+    adapter.onDidSendMessage((m) => sent.push(m as Record<string, unknown>));
+
+    // Edited in place: the box held the row's value text, badge and all.
+    adapter.handleMessage({
+      seq: 9,
+      type: 'request',
+      command: 'setVariable',
+      arguments: { variablesReference: 3, name: 'n', value: '{int} n + 92' },
+    });
+    await settle();
+
+    const query = request.queries[request.queries.length - 1];
+    // The query knows the paused process, so a local can be written into its frame.
+    expect(query).toContain('_objectForOop: 42');
+    // The pause's globals (registry position 9) are what every Set Value can see.
+    expect(query).toContain('(9 between: 1 and: reg size)');
+    expect(query).toContain("evaluateSource: '(\nn + 92\n)'");
+    expect(sent.find((m) => m.command === 'setVariable')).toMatchObject({
+      success: true,
+      body: { value: '{int} 99', type: 'int' },
+    });
+    expect(pauseForOwner('file:///a.ipynb')!.handleFor?.(3, 'n')).toBe(21);
+    registration.dispose();
+  });
+
+  it('says Set Value wants an expression when it was given a statement', async () => {
+    const registration = registerBreakpointDebugger();
+    const request = haltRequest();
+    request.query = (code) => {
+      request.queries.push(code);
+      if (code.includes('Suspended')) return Promise.resolve(PAUSED);
+      if (code.includes('_frameAt:')) {
+        return Promise.resolve('Error: SyntaxError - invalid syntax');
+      }
+      return Promise.resolve('');
+    };
+    void installed!(request);
+    await settle();
+    const pause = pauseForOwner('file:///a.ipynb')!;
+
+    await expect(pause.setVariable!(3, 'n', 'n = 5')).rejects.toThrow(
+      'Set Value takes a Python expression, such as 5 or n + 1 (SyntaxError - invalid syntax)',
+    );
+    // Parenthesized on lines of their own, so a statement cannot run and a comment cannot
+    // swallow the closing parenthesis.
+    expect(request.queries[request.queries.length - 1]).toContain("'(\nn = 5\n)'");
+    registration.dispose();
+  });
+
+  it('refuses an empty Set Value rather than running it', async () => {
+    const registration = registerBreakpointDebugger();
+    const request = haltRequest();
+    request.query = (code) => {
+      request.queries.push(code);
+      if (code.includes('Suspended')) return Promise.resolve(PAUSED);
+      if (code.includes('_frameAt:')) return Promise.resolve(row('big', '{}', 'dict', 0, 0, 0, 1));
+      return Promise.resolve(row('big', 'list with 150 items', 'list', 5, 150, 0, 5, 150, 0));
+    };
+    void installed!(request);
+    await settle();
+    const adapter = adapterForLastStart();
+    ask(adapter, 'launch', { gemdbPause: pauseIdOf(0) });
+    ask(adapter, 'variables', { variablesReference: 3 });
+    await settle();
+    const pause = pauseForOwner('file:///a.ipynb')!;
+
+    // The box held only the badge, and Enter was pressed.
+    await expect(pause.setVariable!(3, 'big', '{list: 150}')).rejects.toThrow(
+      'Set Value takes a Python expression',
+    );
+    expect(request.queries.some((q) => q.includes('_frameAt:'))).toBe(false);
+    registration.dispose();
+  });
+
   it('keeps two pauses in one run apart: a late disconnect from the first settles nothing', async () => {
     const registration = registerBreakpointDebugger();
     const first = installed!(haltRequest());
@@ -1166,8 +1371,38 @@ describe('the variables queries’ answers', () => {
 
     // A leaf has no ref — it cannot be expanded — but it has a handle, so it can be saved.
     expect(rows).toEqual([
-      { name: 'tags', value: "{'a', 'b'}", type: 'set', ref: 8, indexed: 2, named: 0, handle: 8 },
-      { name: 'n', value: '2', type: 'int', ref: 0, indexed: 0, named: 0, handle: 9 },
+      {
+        name: 'tags',
+        value: "{'a', 'b'}",
+        type: 'set',
+        ref: 8,
+        indexed: 2,
+        named: 0,
+        handle: 8,
+        size: -1,
+        readOnly: false,
+      },
+      {
+        name: 'n',
+        value: '2',
+        type: 'int',
+        ref: 0,
+        indexed: 0,
+        named: 0,
+        handle: 9,
+        size: -1,
+        readOnly: false,
+      },
+    ]);
+  });
+
+  it('reads a row’s size and whether it can be changed', () => {
+    const raw =
+      row('items', '[1, 2]', 'list', 4, 2, 0, 4, 2, 0) + row('self', 'P()', 'P', 5, 0, 1, 5, -1, 1);
+
+    expect(parseChildren(raw).map((v) => [v.name, v.size, v.readOnly])).toEqual([
+      ['items', 2, false],
+      ['self', -1, true],
     ]);
   });
 });
