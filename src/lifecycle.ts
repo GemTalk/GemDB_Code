@@ -511,16 +511,52 @@ export async function start(extensionPath: string): Promise<void> {
  * `databaseStarted` is sent once, by the caller that started the call, under
  * that caller's trigger.
  *
+ * Except after a Stop: a caller other than auto-start that arrives once Stop
+ * has been pressed on the bring-up under way is asking for the database back, so it waits for that
+ * bring-up and the Stop to finish and then starts again, rather than taking a
+ * result that described a database Stop has since taken down. A Stop pressed
+ * after the caller joined wins: it was pressed later, so it is the latest word.
+ *
  * Returns true when the database is up and Python will run.
  */
-export function ensureRunning(extensionPath: string, trigger: Trigger): Promise<boolean> {
-  return bringUp.run(
-    () => ensureRunningOnce(extensionPath, trigger),
-    () => log('GemDB is already starting; waiting for it.'),
+export async function ensureRunning(extensionPath: string, trigger: Trigger): Promise<boolean> {
+  // Asking for a running database is the clearest possible retraction of an
+  // earlier "stop it". Running a cell counts: `ensureRunning` is the one path
+  // to a running database, so it is the one place this belongs — here rather
+  // than in the bring-up, so that a caller who joins one counts too. Auto-start
+  // is GemDB's own doing, not a request from anybody, so it retracts nothing.
+  if (trigger !== TRIGGER.autoStart) allowAutoStart();
+  let stoppedBeforeJoining = false;
+  const running = await bringUp.run(
+    () => {
+      stopsWhenBringUpBegan = stopsBegun;
+      return ensureRunningOnce(extensionPath, trigger);
+    },
+    () => {
+      stoppedBeforeJoining = stopsBegun !== stopsWhenBringUpBegan;
+      log('GemDB is already starting; waiting for it.');
+    },
   );
+  // Whatever the shared result, true or false, it predates this caller's
+  // request. Each rerun needs another Stop to have begun, so this cannot loop.
+  // Auto-start asks for nothing, so it takes the result and lets the Stop stand.
+  if (!stoppedBeforeJoining || trigger === TRIGGER.autoStart) return running;
+  await stopInFlight;
+  log('GemDB was stopped while it was starting; starting it again.');
+  return ensureRunning(extensionPath, trigger);
 }
 
 const bringUp = singleFlight<boolean>();
+/**
+ * How many times `stop` has begun in this window, and that count when the
+ * bring-up in flight began. Counted rather than asked of the processes:
+ * `isRunning` blocks the extension host, and a stone that is up says nothing
+ * about whether a Stop is on its way to it.
+ */
+let stopsBegun = 0;
+let stopsWhenBringUpBegan = 0;
+/** The Stop under way, if any, so a caller starting again goes after it. */
+let stopInFlight: Promise<void> | undefined;
 
 async function ensureRunningOnce(extensionPath: string, trigger: Trigger): Promise<boolean> {
   const stopwatch = Stopwatch.start();
@@ -529,10 +565,6 @@ async function ensureRunningOnce(extensionPath: string, trigger: Trigger): Promi
     return false;
   };
 
-  // Asking for a running database is the clearest possible retraction of an
-  // earlier "stop it". Running a cell counts: `ensureRunning` is the one path
-  // to a running database, so it is the one place this belongs.
-  allowAutoStart();
   if (!requireSupportedPlatform()) return failed(DATABASE_OUTCOME.unsupportedPlatform);
   if (!requireGrailPayload(extensionPath)) return failed(DATABASE_OUTCOME.missingPayload);
 
@@ -920,6 +952,17 @@ export async function stop(): Promise<void> {
     );
     return;
   }
+  stopsBegun++;
+  const stopping = stopOnce();
+  stopInFlight = stopping;
+  try {
+    await stopping;
+  } finally {
+    if (stopInFlight === stopping) stopInFlight = undefined;
+  }
+}
+
+async function stopOnce(): Promise<void> {
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: 'Stopping GemDB' },
     async () => {

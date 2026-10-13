@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as vscode from 'vscode';
 import { __resetSettings, __setSetting } from '../__mocks__/vscode';
 import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
 
@@ -53,6 +54,9 @@ const findStone = vi.fn(() => true);
 const findNetldi = vi.fn(() => true);
 const startStone = vi.fn(async () => {});
 const startNetldi = vi.fn(async () => {});
+const stopStone = vi.fn(async (_force: boolean) => {
+  findStone.mockReturnValue(false);
+});
 vi.mock('../processes', () => ({
   listProcesses: () => [],
   findStone: () => findStone(),
@@ -60,9 +64,9 @@ vi.mock('../processes', () => ({
   startStone: () => startStone(),
   startNetldi: () => startNetldi(),
   isListening: () => true,
-  isRunning: () => true,
+  isRunning: () => findStone(),
   stopNetldi: async () => {},
-  stopStone: async () => {},
+  stopStone: (force: boolean) => stopStone(force),
 }));
 
 // The MCP server is off unless a test turns `gemdb.mcp.enabled` on.
@@ -79,17 +83,19 @@ vi.mock('../mcp', async (importOriginal) => ({
   recordMcpInstalled: () => {},
   isMcpRunning: () => isMcpRunning(),
   startMcpServer: () => startMcpServer(),
+  stopMcpServer: async () => {},
 }));
 
 vi.mock('../platform', () => ({ isSupportedPlatform: () => true, setContext: () => {} }));
+const allowAutoStart = vi.fn();
 vi.mock('../autoStart', () => ({
-  allowAutoStart: () => {},
+  allowAutoStart: () => allowAutoStart(),
   autoStartSuppressed: () => false,
   initAutoStart: () => {},
   suppressAutoStart: () => {},
 }));
 
-const { ensureRunning, resumeMcpServing } = await import('../lifecycle');
+const { ensureRunning, resumeMcpServing, stop } = await import('../lifecycle');
 const { TRIGGER, initTelemetry } = await import('../telemetry');
 const { initUnattendedSetupMarker } = await import('../unattendedSetupMarker');
 
@@ -229,5 +235,164 @@ describe('ensureMcpServing', () => {
     expect(await Promise.all([resumed, started])).toEqual([true, true]);
     expect(installMcp).toHaveBeenCalledTimes(1);
     expect(startMcpServer).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Stop takes no lock, so it can land on a bring-up under way. A caller who
+// arrives after that Stop is asking for the database back: it must not be
+// handed a result that described a database Stop has since taken down.
+describe('ensureRunning after a Stop', () => {
+  beforeEach(() => {
+    __resetSettings();
+    __setSetting('gemdb.mcp.enabled', true);
+    grailNeedsUpdate.mockReturnValue(false);
+    grailInstalled.mockReturnValue(true);
+    isInstalled.mockReturnValue(true);
+    ensureOsConfigured.mockReset().mockResolvedValue('alreadyConfigured');
+    fileInGrail.mockReset();
+    findStone.mockReturnValue(false);
+    findNetldi.mockReturnValue(true);
+    startStone.mockReset().mockImplementation(async () => {
+      findStone.mockReturnValue(true);
+    });
+    stopStone.mockClear();
+    mcpNeedsUpdate.mockReturnValue(true);
+    installMcp.mockReset();
+    isMcpRunning.mockReset().mockResolvedValue(false);
+    startMcpServer.mockReset().mockResolvedValue(true);
+    allowAutoStart.mockClear();
+
+    const context = fakeExtensionContext();
+    initTelemetry(context, false);
+    initUnattendedSetupMarker(context.globalStorageUri.fsPath);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('starts the database again for a cell run after Stop, while auto-start is in the MCP step', async () => {
+    const install = deferred();
+    installMcp.mockImplementationOnce(() => install.promise);
+
+    const auto = ensureRunning('/ext', TRIGGER.autoStart);
+    await vi.waitFor(() => expect(installMcp).toHaveBeenCalledTimes(1));
+    await stop();
+    expect(findStone()).toBeFalsy();
+
+    const cell = ensureRunning('/ext', TRIGGER.notebook);
+    install.resolve();
+
+    expect(await auto).toBe(true);
+    expect(await cell).toBe(true);
+    expect(findStone()).toBe(true);
+    expect(startStone).toHaveBeenCalledTimes(2);
+    // The cell retracted the Stop, once per pass; auto-start, GemDB's own doing, did not.
+    expect(allowAutoStart).toHaveBeenCalledTimes(2);
+  });
+
+  it('starts again for a cell run after Stop even when the bring-up it joined failed', async () => {
+    // Stop lands during the Grail file-in, which then fails for want of a stone.
+    grailNeedsUpdate.mockReturnValue(true);
+    grailInstalled.mockReturnValue(false);
+    const fileIn = deferred();
+    fileInGrail.mockImplementationOnce(() => fileIn.promise);
+
+    const auto = ensureRunning('/ext', TRIGGER.autoStart);
+    await vi.waitFor(() => expect(fileInGrail).toHaveBeenCalledTimes(1));
+    await stop();
+    const cell = ensureRunning('/ext', TRIGGER.notebook);
+    fileIn.reject(new Error('no stone'));
+
+    expect(await auto).toBe(false);
+    expect(await cell).toBe(true);
+    expect(findStone()).toBe(true);
+    expect(fileInGrail).toHaveBeenCalledTimes(2);
+  });
+
+  it('joins without starting again when no Stop came between', async () => {
+    const install = deferred();
+    installMcp.mockImplementationOnce(() => install.promise);
+
+    const first = ensureRunning('/ext', TRIGGER.notebook);
+    await vi.waitFor(() => expect(installMcp).toHaveBeenCalledTimes(1));
+    const second = ensureRunning('/ext', TRIGGER.startCommand);
+    install.resolve();
+
+    expect(await Promise.all([first, second])).toEqual([true, true]);
+    expect(startStone).toHaveBeenCalledTimes(1);
+    expect(allowAutoStart).toHaveBeenCalledTimes(2);
+  });
+
+  it('lets a Stop pressed after the cell joined win', async () => {
+    const install = deferred();
+    installMcp.mockImplementationOnce(() => install.promise);
+
+    const auto = ensureRunning('/ext', TRIGGER.autoStart);
+    await vi.waitFor(() => expect(installMcp).toHaveBeenCalledTimes(1));
+    const cell = ensureRunning('/ext', TRIGGER.notebook);
+    await stop();
+    install.resolve();
+
+    await auto;
+    await cell;
+    expect(startStone).toHaveBeenCalledTimes(1);
+    expect(findStone()).toBeFalsy();
+  });
+
+  it('lets a Stop stand for an auto-start that joins after it', async () => {
+    const install = deferred();
+    installMcp.mockImplementationOnce(() => install.promise);
+
+    const cell = ensureRunning('/ext', TRIGGER.notebook);
+    await vi.waitFor(() => expect(installMcp).toHaveBeenCalledTimes(1));
+    await stop();
+    const auto = ensureRunning('/ext', TRIGGER.autoStart);
+    install.resolve();
+
+    await cell;
+    await auto;
+    expect(startStone).toHaveBeenCalledTimes(1);
+    expect(findStone()).toBeFalsy();
+  });
+
+  it('leaves the database up when the Stop the cell came after is cancelled at its modal', async () => {
+    const install = deferred();
+    installMcp.mockImplementationOnce(() => install.promise);
+    // A session holds the stone up, so Stop asks before forcing it; the user
+    // dismisses the modal, which is the same answer as Cancel.
+    stopStone.mockImplementationOnce(async () => {
+      throw new Error('sessions are still logged in');
+    });
+    const modal = deferred();
+    const warning = vi
+      .spyOn(vscode.window, 'showWarningMessage')
+      .mockImplementationOnce(() => modal.promise.then(() => undefined));
+
+    const auto = ensureRunning('/ext', TRIGGER.autoStart);
+    await vi.waitFor(() => expect(installMcp).toHaveBeenCalledTimes(1));
+    const stopping = stop();
+    await vi.waitFor(() => expect(warning).toHaveBeenCalledTimes(1));
+
+    let cellDone = false;
+    const cell = ensureRunning('/ext', TRIGGER.notebook).then((running) => {
+      cellDone = true;
+      return running;
+    });
+    install.resolve();
+    expect(await auto).toBe(true);
+    // The cell goes after the Stop it followed, so it waits on that modal.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(cellDone).toBe(false);
+
+    modal.resolve();
+    await stopping;
+    expect(await cell).toBe(true);
+    // Nothing was stopped, so nothing was started again: the second pass
+    // found the stone up and only brought back the MCP server Stop had taken down.
+    expect(stopStone).toHaveBeenCalledTimes(1);
+    expect(startStone).toHaveBeenCalledTimes(1);
+    expect(startMcpServer).toHaveBeenCalledTimes(2);
+    expect(findStone()).toBe(true);
   });
 });
