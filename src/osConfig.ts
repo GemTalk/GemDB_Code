@@ -349,7 +349,9 @@ export async function runEnsureOsConfigured(world: OsConfigWorld): Promise<OsCon
  * first, and both could run the script. A caller arriving while one is in
  * progress gets its answer, and `osConfigPrompted` is sent once, under the
  * first caller's trigger. If "GemDB: Configure Shared Memory" is already
- * running the script, this waits for it and checks again rather than asking.
+ * running the script, the modal still decides — raising shared memory always
+ * asks — but "Configure" joins that script rather than opening a second
+ * terminal.
  */
 export function ensureOsConfigured(
   extensionPath: string,
@@ -367,14 +369,6 @@ async function ensureOsConfiguredOnce(
   extensionPath: string,
   trigger: Trigger,
 ): Promise<OsConfigResult> {
-  const scriptRunning = sharedMemoryScriptFlight.current;
-  if (scriptRunning) {
-    log('Shared memory is already being configured; waiting for it.');
-    await scriptRunning;
-    return (await isSharedMemoryConfigured())
-      ? OS_CONFIG_RESULT.configured
-      : OS_CONFIG_RESULT.stillUnconfigured;
-  }
   return runEnsureOsConfigured({
     sharedMemoryOk: isSharedMemoryConfigured,
     removeIpcOk: isRemoveIpcConfigured,
@@ -398,19 +392,14 @@ async function ensureOsConfiguredOnce(
  * shared memory was actually short, because this is the path back after
  * declining the modal, and without it that recovery is invisible.
  *
- * When the prompt, or the script it opened, is already under way in this
- * window, this waits for it and says how it went instead of opening a second
- * terminal; the prompt reports that run, so this reports nothing.
+ * When the script is already running in this window — the prompt opened it,
+ * or this command did a moment ago — this joins it instead of opening a second
+ * terminal, then checks and reports as usual. It never waits on the prompt
+ * itself: not on a modal nobody has answered, nor on the RemoveIPC step that
+ * follows the script.
  */
 export async function configureSharedMemory(extensionPath: string): Promise<void> {
   const wasShort = !(await isSharedMemoryConfigured());
-  const inFlight = promptFlight.current ?? sharedMemoryScriptFlight.current;
-  if (inFlight) {
-    log('Shared memory is already being configured; waiting for it.');
-    await inFlight.catch(() => undefined);
-    showSharedMemoryResult(await isSharedMemoryConfigured());
-    return;
-  }
   await runSharedMemoryScript(extensionPath);
   const configured = await isSharedMemoryConfigured();
   if (wasShort) {
@@ -420,10 +409,6 @@ export async function configureSharedMemory(extensionPath: string): Promise<void
       OS_CONFIG_MISSING.sharedMemory,
     );
   }
-  showSharedMemoryResult(configured);
-}
-
-function showSharedMemoryResult(configured: boolean): void {
   if (configured) {
     void vscode.window.showInformationMessage('Shared memory configured.');
   } else {
@@ -439,15 +424,17 @@ function showSharedMemoryResult(configured: boolean): void {
  * password prompts on screen for one change.
  */
 function runSharedMemoryScript(extensionPath: string): Promise<void> {
-  return sharedMemoryScriptFlight.run(() =>
-    runSetupScript(
-      SHARED_MEMORY_TERMINAL,
-      path.join(
-        extensionPath,
-        'resources',
-        process.platform === 'linux' ? 'setSharedMemoryLinux.sh' : 'setSharedMemoryDarwin.sh',
+  return sharedMemoryScriptFlight.run(
+    () =>
+      runSetupScript(
+        SHARED_MEMORY_TERMINAL,
+        path.join(
+          extensionPath,
+          'resources',
+          process.platform === 'linux' ? 'setSharedMemoryLinux.sh' : 'setSharedMemoryDarwin.sh',
+        ),
       ),
-    ),
+    () => log('The shared-memory setup is already open in a terminal; waiting for it.'),
   );
 }
 

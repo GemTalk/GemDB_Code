@@ -13,8 +13,6 @@
 export interface SingleFlight<T> {
   /** Start `start` unless a call is already in flight; then join that one. */
   run(start: () => Promise<T>, onJoin?: () => void): Promise<T>;
-  /** The call in flight, if any. */
-  readonly current: Promise<T> | undefined;
 }
 
 export function singleFlight<T>(): SingleFlight<T> {
@@ -30,9 +28,6 @@ export function singleFlight<T>(): SingleFlight<T> {
       });
       inFlight = run;
       return run;
-    },
-    get current() {
-      return inFlight;
     },
   };
 }

@@ -24,7 +24,6 @@ describe('singleFlight', () => {
 
     const first = flight.run(start, onJoin);
     const second = flight.run(start, onJoin);
-    expect(flight.current).toBeDefined();
     work.resolve('done');
 
     expect(await Promise.all([first, second])).toEqual(['done', 'done']);
@@ -37,7 +36,6 @@ describe('singleFlight', () => {
     const start = vi.fn(() => Promise.resolve(1));
 
     await flight.run(start);
-    expect(flight.current).toBeUndefined();
     await flight.run(start);
 
     expect(start).toHaveBeenCalledTimes(2);
@@ -51,7 +49,6 @@ describe('singleFlight', () => {
       .mockResolvedValueOnce(2);
 
     await expect(flight.run(start)).rejects.toThrow('first');
-    expect(flight.current).toBeUndefined();
     expect(await flight.run(start)).toBe(2);
   });
 
