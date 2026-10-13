@@ -1055,8 +1055,9 @@ async function openSavedStack(key: string): Promise<void> {
       scopes: (frameId) => scopes.get(frameId) ?? [],
       variables: async (ref, start, count) => {
         try {
-          return parseChildren(await extensionQuery(childrenQuery(ref, start, count))).map(
-            toDapVariable,
+          // Read-only: a saved stack's objects are committed copies, with no run to change.
+          return parseChildren(await extensionQuery(childrenQuery(ref, start, count))).map((row) =>
+            toDapVariable({ ...row, readOnly: true }),
           );
         } catch (e) {
           log(`Could not read a saved stack's variable ${ref}: ${errorMessage(e)}`);

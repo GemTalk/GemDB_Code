@@ -415,7 +415,13 @@ database, select that kernel from the kernel picker at the top right.
 - `breakpoint()` pauses the cell and opens VS Code's debugger on it, with no setup: the Call Stack
   shows the Python frames, the paused line is highlighted, and Variables shows each frame's locals
   and the notebook's globals, expandable into attributes, items and entries, with classes and
-  functions folded into their own rows. **Continue** resumes the cell where it paused; **Stop**
+  functions folded into their own rows. Each value starts with its type, and a container's with its
+  size too (`{Point} Point(3, 4)`, `{list: 3} […]`); **Copy Value** copies the value without them.
+  An object with attributes, its own or its class's, opens on everything it has: its own attributes, its class's, its properties and slots,
+  with its methods under **function variables** and its dunders under **special variables**. Right-click a row and choose **Set Value** to change
+  a local, a global, an attribute, a list item or a dict entry. The value you type is a Python
+  expression, and the run continues with it. It can use the notebook's globals, or a `.py` file's,
+  on any row, and on a Locals row the frame's locals too. **Continue** resumes the cell where it paused; **Stop**
   ends it, along with any cells queued after it. Stepping is not supported yet, and neither are red
   dots in a cell (they work in `.py` files; see above). Right-click a Variables row and choose **Add to Persisted Objects…** to keep that object: it
   goes in `gemdb.root` under the key you give (one is suggested) and is written at the notebook's
