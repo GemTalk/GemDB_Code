@@ -202,7 +202,8 @@ machine-wide, it prompts you and waits for your permission:
   the shared-memory dialog appears, it lists this change as recommended, and GemDB Code runs it in
   its own terminal. Otherwise, click the **Survives logout** row in the GemDB Code sidebar, or run
   **GemDB: Keep the Database Running After Logout** from the Command Palette. The change takes
-  effect after you restart your computer.
+  effect at once. If systemd cannot load it straight away, the row stays and reads **not yet
+  applied** until you restart your computer.
 
 #### Your shell profile and AI clients
 

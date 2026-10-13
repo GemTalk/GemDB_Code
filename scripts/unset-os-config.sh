@@ -84,8 +84,12 @@ Linux)
   if [ -f "${IPC_CONF}" ]; then
     rm -f "${IPC_CONF}"
     echo "Removed ${IPC_CONF}"
-    echo "  RemoveIPC goes back to the systemd default at the next boot, or now"
-    echo "  with: sudo systemctl restart systemd-logind"
+    # logind re-reads its config on SIGHUP, as setRemoveIPC.sh relies on.
+    if systemctl kill --signal=SIGHUP systemd-logind.service 2>/dev/null; then
+      echo "  systemd-logind reloaded: RemoveIPC is back to the systemd default"
+    else
+      echo "  RemoveIPC goes back to the systemd default at the next boot"
+    fi
   fi
 
   # The kernel's own default since 3.16: ULONG_MAX - (1 << 24), i.e. no

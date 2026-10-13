@@ -26,7 +26,12 @@ import {
   spaceReading,
   usedMb,
 } from './maintenance';
-import { isRemoveIpcConfigured, isSharedMemoryConfigured, sharedMemoryLabel } from './osConfig';
+import {
+  REMOVE_IPC_STATUS,
+  isSharedMemoryConfigured,
+  removeIpcStatus,
+  sharedMemoryLabel,
+} from './osConfig';
 import {
   databaseExists,
   databasePath,
@@ -570,14 +575,20 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
     });
 
     // Only worth a row when it is wrong — on macOS it never applies, and on a
-    // correctly configured Linux box it is noise.
-    if (process.platform === 'linux' && !isRemoveIpcConfigured()) {
+    // correctly configured Linux box it is noise. "Wrong" means the running
+    // logind would still remove IPC, not just that the config file says so.
+    const removeIpc = await removeIpcStatus();
+    if (removeIpc !== REMOVE_IPC_STATUS.inEffect) {
+      const pending = removeIpc === REMOVE_IPC_STATUS.pending;
       rows.push({
         label: 'Survives logout',
-        description: 'not configured',
+        description: pending ? 'not yet applied' : 'not configured',
         tooltip:
           'systemd will destroy the database’s shared memory when you log out of this machine. ' +
-          'Click to fix it — this runs a setup script with sudo.',
+          (pending
+            ? 'The fix is saved but systemd has not loaded it. Click to apply it now, or ' +
+              'restart your computer.'
+            : 'Click to fix it — this runs a setup script with sudo.'),
         icon: warn('warning'),
         command: {
           command: 'gemdb.configureRemoveIpc',

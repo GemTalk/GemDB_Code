@@ -114,15 +114,91 @@ export async function sharedMemoryLabel(): Promise<string> {
 }
 
 /**
+ * Where `RemoveIPC=no` stands, as far as a logout is concerned.
+ *
+ *   inEffect — the running logind has it, so a logout leaves the database alone.
+ *   pending  — it is written to logind's config, but the running logind has not
+ *              read it, so a logout still destroys the database. Without this
+ *              state the status view called a machine fixed the moment the
+ *              script wrote the file, and the next logout killed the database
+ *              anyway.
+ *   unset    — neither.
+ */
+export const REMOVE_IPC_STATUS = {
+  inEffect: 'inEffect',
+  pending: 'pending',
+  unset: 'unset',
+} as const;
+export type RemoveIpcStatus = (typeof REMOVE_IPC_STATUS)[keyof typeof REMOVE_IPC_STATUS];
+
+/**
+ * Combine what the running logind says with what its config files say.
+ *
+ * The running value is the truth, because logind reads `remove_ipc` at the
+ * moment a user's last session ends (`user_finalize`). It is undefined when it
+ * cannot be read — no `busctl`, or no logind on the bus — and then the config
+ * files are the best guess left, which is all this check used to read.
+ */
+export function removeIpcStatusFrom(
+  running: boolean | undefined,
+  inConfig: boolean,
+): RemoveIpcStatus {
+  if (running === undefined) return inConfig ? REMOVE_IPC_STATUS.inEffect : REMOVE_IPC_STATUS.unset;
+  if (running) return REMOVE_IPC_STATUS.inEffect;
+  return inConfig ? REMOVE_IPC_STATUS.pending : REMOVE_IPC_STATUS.unset;
+}
+
+/**
+ * Read `busctl get-property`'s answer for logind's `RemoveIPC`: true when IPC
+ * is kept (`RemoveIPC=no`), undefined when the answer is not a boolean.
+ */
+export function parseRemoveIpcProperty(stdout: string): boolean | undefined {
+  const match = stdout.trim().match(/^b\s+(true|false)$/);
+  return match ? match[1] === 'false' : undefined;
+}
+
+/**
+ * Does the running logind keep IPC at logout? Read from its `RemoveIPC`
+ * D-Bus property, which any user may read — it reflects the config logind
+ * last loaded, so a file written since then does not count until logind is
+ * sent SIGHUP (which `setRemoveIPC.sh` does) or restarted.
+ */
+function isRemoveIpcRunning(): Promise<boolean | undefined> {
+  return new Promise((resolve) => {
+    execFile(
+      'busctl',
+      [
+        'get-property',
+        'org.freedesktop.login1',
+        '/org/freedesktop/login1',
+        'org.freedesktop.login1.Manager',
+        'RemoveIPC',
+      ],
+      { encoding: 'utf-8', timeout: 5000 },
+      (error, stdout) => resolve(error ? undefined : parseRemoveIpcProperty(stdout)),
+    );
+  });
+}
+
+/** Where `RemoveIPC=no` stands on this machine; always `inEffect` off Linux. */
+export async function removeIpcStatus(): Promise<RemoveIpcStatus> {
+  if (process.platform !== 'linux') return REMOVE_IPC_STATUS.inEffect;
+  return removeIpcStatusFrom(await isRemoveIpcRunning(), isRemoveIpcInConfig());
+}
+
+/** Will the database survive its owner logging out? Always true off Linux. */
+export async function isRemoveIpcConfigured(): Promise<boolean> {
+  return (await removeIpcStatus()) === REMOVE_IPC_STATUS.inEffect;
+}
+
+/**
  * Does systemd's logind config set `RemoveIPC=no`?
  *
  * Drop-ins under `logind.conf.d` are applied in alphabetical order after the
  * main file, and the last assignment wins — so read them in that order and
  * keep the final value rather than stopping at the first hit.
  */
-export function isRemoveIpcConfigured(): boolean {
-  if (process.platform !== 'linux') return true;
-
+function isRemoveIpcInConfig(): boolean {
   const dropInDir = '/etc/systemd/logind.conf.d';
   let dropIns: string[] = [];
   try {
@@ -164,7 +240,7 @@ export function isRemoveIpcConfigured(): boolean {
  */
 export interface OsConfigWorld {
   sharedMemoryOk: () => Promise<boolean>;
-  removeIpcOk: () => boolean;
+  removeIpcOk: () => Promise<boolean>;
   /** Show the modal, already worded. True if the user chose to configure. */
   confirm: (message: string) => Promise<boolean>;
   runSharedMemoryScript: () => Promise<void>;
@@ -201,7 +277,7 @@ export async function runEnsureOsConfigured(world: OsConfigWorld): Promise<OsCon
   // it opened ran and closed before anyone saw it.
   const sharedMemoryOk = await world.sharedMemoryOk();
   if (sharedMemoryOk) return OS_CONFIG_RESULT.alreadyConfigured;
-  const removeIpcOk = world.removeIpcOk();
+  const removeIpcOk = await world.removeIpcOk();
 
   const missing: OsConfigMissing = removeIpcOk
     ? OS_CONFIG_MISSING.sharedMemory
@@ -245,7 +321,7 @@ export async function runEnsureOsConfigured(world: OsConfigWorld): Promise<OsCon
   // `stillUnconfigured` would claim the database never started.
   if (!removeIpcOk) {
     await world.runRemoveIpcScript();
-    if (!world.removeIpcOk()) {
+    if (!(await world.removeIpcOk())) {
       world.log(
         'RemoveIPC is still unset — the database will stop when you log out of this machine.',
       );
@@ -339,12 +415,13 @@ export async function configureSharedMemory(extensionPath: string): Promise<void
  * short, which on Linux is nearly every machine.
  */
 export async function configureRemoveIpc(extensionPath: string): Promise<void> {
-  const wasUnset = !isRemoveIpcConfigured();
+  const wasUnset = !(await isRemoveIpcConfigured());
   await runSetupScript(
     REMOVE_IPC_TERMINAL,
     path.join(extensionPath, 'resources', 'setRemoveIPC.sh'),
   );
-  const configured = isRemoveIpcConfigured();
+  const status = await removeIpcStatus();
+  const configured = status === REMOVE_IPC_STATUS.inEffect;
   if (wasUnset) {
     reportOsConfigPrompted(
       TRIGGER.removeIpcCommand,
@@ -354,8 +431,12 @@ export async function configureRemoveIpc(extensionPath: string): Promise<void> {
   }
   if (configured) {
     void vscode.window.showInformationMessage(
-      'The database will now keep running when you log out. ' +
-        'This takes effect after you restart your computer.',
+      'The database will now keep running when you log out.',
+    );
+  } else if (status === REMOVE_IPC_STATUS.pending) {
+    void vscode.window.showWarningMessage(
+      'RemoveIPC=no is saved, but systemd has not loaded it yet, so the database will still ' +
+        'stop if you log out. Restart your computer to apply it.',
     );
   } else {
     void vscode.window.showErrorMessage(
