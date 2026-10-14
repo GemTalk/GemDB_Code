@@ -546,17 +546,17 @@ shutting_down() {
   exit 1
 }
 # Wait while the stone is starting, from the status last seen ($1). $2 is where
-# to look when it fails.
+# to look when it fails. Waits are timed by the clock, not by counting polls:
+# each poll is a gslist call, and those vary from milliseconds to seconds.
 wait_for_stone() {
-  local st="$1" tries=0
+  local st="$1" deadline=$(( $(date +%s) + 60 )) said=""
   while starting "$st"; do
-    if [ "$tries" -ge 600 ]; then
+    if [ "$(date +%s)" -ge "$deadline" ]; then
       echo "gemdb: the database has been starting for over a minute.$2" >&2
       exit 1
     fi
-    [ "$tries" -eq 0 ] && echo "gemdb: waiting for the database to finish starting…" >&2
+    [ -z "$said" ] && said=1 && echo "gemdb: waiting for the database to finish starting…" >&2
     sleep 0.1
-    tries=$((tries + 1))
     st=$(stone_status)
   done
   [ "$st" = shutdown ] && shutting_down
@@ -623,8 +623,8 @@ if [ -z "$STATUS" ] || starting "$STATUS"; then
     return "$took"
   }
   held=""
-  tries=0
-  while [ "$tries" -lt 100 ]; do
+  lock_deadline=$(( $(date +%s) + 10 ))
+  while [ "$(date +%s)" -lt "$lock_deadline" ]; do
     if mkdir "$STONE_LOCK" 2>/dev/null; then
       held=yes
       echo $$ > "$STONE_LOCK/pid" 2>/dev/null
@@ -646,7 +646,6 @@ if [ -z "$STATUS" ] || starting "$STATUS"; then
     STATUS=$(stone_status)
     [ -n "$STATUS" ] && ! starting "$STATUS" && break
     sleep 0.1
-    tries=$((tries + 1))
   done
 
   if [ -n "$held" ]; then
