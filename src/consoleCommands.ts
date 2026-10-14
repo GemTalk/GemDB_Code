@@ -169,7 +169,45 @@ export function commandCompletions(beforeCursor: string, names: string[]): Compl
   return [];
 }
 
-/** Whether completions are wanted at all: only for a `%` line, so Python typing costs nothing. */
-export function wantsCommandCompletions(beforeCursor: string): boolean {
-  return isConsoleCommand(beforeCursor);
+/** A Python name, the only kind of persisted key reachable as `persisted.key`. */
+const PYTHON_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Suggestions for Persisted Objects while Python is typed, so a persisted
+ * object can be found without knowing `persisted` exists:
+ *
+ * - after `persisted.`, the persisted keys;
+ * - while a name is typed (not after a dot), `persisted.key` for each
+ *   persisted key it starts, described as the `gemdb.root` entry it is.
+ *
+ * `keys` is what Persisted Objects holds. Keys that are not Python names are
+ * left out: they are reachable only as `gemdb.root["…"]`.
+ */
+export function persistedCompletions(beforeCursor: string, keys: string[]): CompletionItem[] {
+  const names = keys.filter((k) => PYTHON_NAME.test(k));
+  const after = /(?:^|[^A-Za-z0-9_.])persisted\.([A-Za-z0-9_]*)$/.exec(beforeCursor);
+  if (after) {
+    const typed = after[1];
+    return names
+      .filter((k) => k.startsWith(typed))
+      .map((k) => ({
+        label: k,
+        detail: `gemdb.root[${JSON.stringify(k)}] in Persisted Objects`,
+        type: 'variable',
+        start: beforeCursor.length - typed.length + 1,
+        length: typed.length,
+      }));
+  }
+  const word = /(?:^|[^A-Za-z0-9_.])([A-Za-z_][A-Za-z0-9_]*)$/.exec(beforeCursor);
+  if (!word) return [];
+  const typed = word[1];
+  return names
+    .filter((k) => k.startsWith(typed))
+    .map((k) => ({
+      label: `persisted.${k}`,
+      detail: `gemdb.root[${JSON.stringify(k)}] in Persisted Objects`,
+      type: 'variable',
+      start: beforeCursor.length - typed.length + 1,
+      length: typed.length,
+    }));
 }

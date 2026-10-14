@@ -10,7 +10,7 @@ import {
   helpText,
   isConsoleCommand,
   parseConsoleCommand,
-  wantsCommandCompletions,
+  persistedCompletions,
 } from './consoleCommands';
 import { PlacedFrame, jupyterTraceback } from './consoleTraceback';
 import {
@@ -32,7 +32,9 @@ import {
   parseConsoleNames,
   parseConsoleReply,
   parsePausedStack,
+  parsePersistedKeys,
   pausedStackQuery,
+  persistedKeysQuery,
   setVariableQuery,
 } from './pauseVariables';
 import { DotsByFile, armedLinesQuery, parseArmed } from './redDots';
@@ -180,6 +182,8 @@ export interface Pause {
    * `_`, which it is then bound to (`consoleNameQuery`).
    */
   consoleName?(frameId: number, name: string, handle: number): Promise<string>;
+  /** What Persisted Objects holds: its string keys (`persistedKeysQuery`). */
+  persistedKeys?(): Promise<string[]>;
   /** The names bound in frame `frameId`'s console so far (`consoleNamesQuery`). */
   consoleNames?(frameId: number): Promise<Array<{ name: string; type: string; repr: string }>>;
   /** Each frame's whole cell or file, by frame index, so the stack can be saved. */
@@ -673,6 +677,8 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
    */
   private readonly shown = new Map<number, DapVariable[]>();
   private nextShown = SHOWN_REFS;
+  /** Persisted Objects' keys for autocomplete; dropped after every console line. */
+  private persistedKeysCache: Promise<string[]> | undefined;
 
   constructor(
     private readonly lookup: (id: string) => Pause | undefined,
@@ -941,6 +947,8 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
     }
     const kind: ConsoleContext = context;
     const frameId = Number(request.arguments?.frameId ?? pause.frames[0]?.id ?? 1);
+    // Any console line may change what Persisted Objects holds.
+    if (kind === 'repl') this.persistedKeysCache = undefined;
     if (kind === 'repl' && isConsoleCommand(source)) {
       void this.runCommand(request, source, frameId);
       return;
@@ -1232,25 +1240,42 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
   }
 
   /**
-   * Autocomplete for GemDB's `%` commands, and for a name after `%persist `.
-   * Python is not completed here: any line that is not a `%` command answers
-   * nothing, without asking the database.
+   * Autocomplete. For a `%` line, GemDB's commands, and after `%persist ` the
+   * console's names. For Python, only Persisted Objects: `persisted.o` while
+   * `o` is typed, and the keys after `persisted.` (`persistedCompletions`).
+   * Python names themselves are not completed here.
+   *
+   * It runs on keystrokes, so it never runs the user's code: the persisted keys
+   * are read once a pause and read again only after a console line, which may
+   * have changed them (`persistedKeysCache`).
    */
   private async complete(request: DapRequest): Promise<void> {
     const text = String(request.arguments?.text ?? '');
     const column = Number(request.arguments?.column ?? text.length + 1);
     const before = text.slice(0, Math.max(0, column - 1));
     const pause = this.pause;
-    if (!pause || !wantsCommandCompletions(before)) {
+    if (!pause) {
       this.respond(request, { targets: [] });
       return;
     }
-    const frameId = Number(request.arguments?.frameId ?? pause.frames[0]?.id ?? 1);
-    const names =
-      /^\s*%persist\s+/.test(before) && pause.consoleNames
-        ? (await pause.consoleNames(frameId).catch(() => [])).map((n) => n.name)
-        : [];
-    this.respond(request, { targets: commandCompletions(before, names) });
+    if (isConsoleCommand(before)) {
+      const frameId = Number(request.arguments?.frameId ?? pause.frames[0]?.id ?? 1);
+      const names =
+        /^\s*%persist\s+/.test(before) && pause.consoleNames
+          ? (await pause.consoleNames(frameId).catch(() => [])).map((n) => n.name)
+          : [];
+      this.respond(request, { targets: commandCompletions(before, names) });
+      return;
+    }
+    this.respond(request, { targets: persistedCompletions(before, await this.persistedKeys()) });
+  }
+
+  /** What Persisted Objects holds, read once and kept until a console line runs. */
+  private persistedKeys(): Promise<string[]> {
+    const pause = this.pause;
+    if (!pause?.persistedKeys) return Promise.resolve([]);
+    this.persistedKeysCache ??= pause.persistedKeys().catch(() => []);
+    return this.persistedKeysCache;
   }
 
   dispose(): void {
@@ -1806,6 +1831,8 @@ export function registerBreakpointDebugger(): vscode.Disposable {
             consoleName: (frameId, name, handle) =>
               consoleNameAt(request, view, consoleRefs, frameId, name, handle),
             consoleNames: (frameId) => consoleNamesAt(request, view, consoleRefs, frameId),
+            persistedKeys: async () =>
+              parsePersistedKeys(await request.query(persistedKeysQuery())),
             rearm: (dots) => request.rearm(dots),
             armedDots: request.armedDots,
             reason: request.reason,

@@ -1372,6 +1372,27 @@ export function parseConsoleNames(raw: string): {
   };
 }
 
+/**
+ * Smalltalk answering what Persisted Objects holds: the `gemdb.root` keys that
+ * are strings, separated by the field character, for the console's
+ * autocomplete. A read, run in the paused session, so it sees what the run
+ * has added too.
+ */
+export function persistedKeysQuery(): string {
+  return `| keys out |
+keys := [(System myUserProfile symbolList objectNamed: #'ModuleAst') evaluateSource: 'import gemdb
+sorted(k for k in gemdb.root.keys() if isinstance(k, str))' usingModuleScope: SymbolDictionary new]
+  on: AbstractException do: [:e | e return: #()].
+out := WriteStream on: Unicode7 new.
+keys do: [:k | out nextPutAll: k asString] separatedBy: [out nextPut: (Character codePoint: 31)].
+out contents encodeAsUTF8`;
+}
+
+/** Parse `persistedKeysQuery`'s answer. */
+export function parsePersistedKeys(raw: string): string[] {
+  return raw.split(FIELD).filter((k) => k.length > 0);
+}
+
 /** Parse `consoleQuery`'s answer. */
 export function parseConsoleReply(raw: string): ConsoleReply {
   if (raw.startsWith('Error: ')) {

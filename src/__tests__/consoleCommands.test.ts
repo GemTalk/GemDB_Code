@@ -5,6 +5,7 @@ import {
   helpText,
   isConsoleCommand,
   parseConsoleCommand,
+  persistedCompletions,
 } from '../consoleCommands';
 
 /** GemDB's `%` commands in the Debug Console: reading a line, and what is suggested while typing one. */
@@ -101,5 +102,51 @@ describe('autocomplete', () => {
   it('suggests nothing for Python', () => {
     expect(commandCompletions('len(', ['p'])).toEqual([]);
     expect(commandCompletions('x % ', ['p'])).toEqual([]);
+  });
+});
+
+describe('autocomplete for Persisted Objects while Python is typed', () => {
+  const keys = ['entry', 'o', 'orders', 'two words'];
+
+  it('offers persisted.key for each persisted key the typed name starts, as the gemdb.root entry it is', () => {
+    expect(persistedCompletions('o', keys)).toEqual([
+      {
+        label: 'persisted.o',
+        detail: 'gemdb.root["o"] in Persisted Objects',
+        type: 'variable',
+        start: 1,
+        length: 1,
+      },
+      {
+        label: 'persisted.orders',
+        detail: 'gemdb.root["orders"] in Persisted Objects',
+        type: 'variable',
+        start: 1,
+        length: 1,
+      },
+    ]);
+  });
+
+  it('replaces only the name being typed, inside a longer line', () => {
+    expect(persistedCompletions('len(ent', keys)).toEqual([
+      expect.objectContaining({ label: 'persisted.entry', start: 5, length: 3 }),
+    ]);
+  });
+
+  it('offers the keys after persisted.', () => {
+    expect(persistedCompletions('persisted.', keys).map((c) => c.label)).toEqual([
+      'entry',
+      'o',
+      'orders',
+    ]);
+    expect(persistedCompletions('x = persisted.or', keys)).toEqual([
+      expect.objectContaining({ label: 'orders', start: 15, length: 2 }),
+    ]);
+  });
+
+  it('offers nothing after another dot, or for a key that is not a Python name', () => {
+    expect(persistedCompletions('order.o', keys)).toEqual([]);
+    expect(persistedCompletions('two', keys)).toEqual([]);
+    expect(persistedCompletions('len(', keys)).toEqual([]);
   });
 });

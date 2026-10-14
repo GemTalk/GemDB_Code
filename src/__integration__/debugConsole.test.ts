@@ -1025,6 +1025,13 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
       seen.persistedN = await dap.value('persisted.n');
       seen.persistedList = await dap.value('persisted');
       seen.persistedNope = await dap.raises('persisted.nope');
+      const complete = async (text: string) =>
+        (
+          (await dap.request('completions', { text, column: text.length + 1, frameId: 1 })).body
+            ?.targets as Array<{ label: string }>
+        ).map((t) => t.label);
+      seen.typingKe = await complete('ke');
+      seen.afterDot = await complete('persisted.k');
       // The frame's own name wins over a persisted one of the same name.
       seen.n = await dap.value('n');
       // A builtin is never hidden.
@@ -1044,6 +1051,9 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
         /^Persisted Objects: (.*, )?kept, list, n, (.*, )?two words$/,
       ),
       persistedNope: "AttributeError: Persisted Objects has no 'nope'",
+      // Found by typing: the persisted entry offered while its name is typed, and after persisted.
+      typingKe: ['persisted.kept'],
+      afterDot: ['kept'],
       nSaid: '',
       // A name the user bound is theirs: nothing said.
       rebound: '',

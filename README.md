@@ -438,7 +438,8 @@ database, select that kernel from the kernel picker at the top right.
   console suggests them. `gemdb` is always available in the console, so a line copied from Persisted
   Objects, such as `gemdb.root["orders"]`, works even if the program never imported it. What Persisted Objects holds is available by its
   key too (`o` for `gemdb.root["o"]`), unless the paused code has its own name `o`; `persisted.o` reaches it whatever `o` means, and a
-  bare persisted name is labelled with where it came from. Stepping is not supported yet, and neither are red
+  bare persisted name is labelled with where it came from. While you type a name, autocomplete
+  offers `persisted.o` for each persisted entry it starts (press Tab to take a suggestion). Stepping is not supported yet, and neither are red
   dots in a cell (they work in `.py` files; see above). Right-click a Variables row and choose **Add to Persisted Objects…** to keep that object: it
   goes in `gemdb.root` under the key you give (one is suggested) and is written at the notebook's
   next commit. The **Persisted Objects** view, under GemDB and in Run and Debug, lists what `gemdb.root`

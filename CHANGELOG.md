@@ -54,7 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`gemdb.root["orders"]`) works in any program, and each persisted entry is there by its key
   (`orders`) at every pause, unless the paused code has a name of its own spelled so, and is
   labelled `orders is gemdb.root["orders"]` when typed; `persisted.orders` reaches it whatever
-  `orders` means at the pause.
+  `orders` means at the pause. Typing a name offers `persisted.orders` in autocomplete for each
+  persisted entry it starts, and `persisted.` offers the keys.
 
 ### Fixed
 

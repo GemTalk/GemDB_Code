@@ -842,4 +842,34 @@ describe('GemDB’s % commands in the console', () => {
     expect(saved.events('output')).toEqual([]);
     consoleTip.shown = true;
   });
+
+  it('offers persisted.o while o is typed, reading the persisted keys once until a console line runs', async () => {
+    const persistedKeys = vi.fn().mockResolvedValue(['o', 'orders']);
+    const c = started(vi.fn<Evaluate>().mockResolvedValue(value('1')), undefined, {
+      persistedKeys,
+    });
+    const labels = async (text: string) => {
+      const seq = c.request('completions', { text, column: text.length + 1, frameId: 1 });
+      await settle();
+      await settle();
+      return (c.responseTo(seq)?.body as { targets: Array<{ label: string }> }).targets.map(
+        (t) => t.label,
+      );
+    };
+
+    const typingO = await labels('o');
+    const typingOr = await labels('or');
+    const afterDot = await labels('persisted.');
+    const readsBefore = persistedKeys.mock.calls.length;
+    c.request('evaluate', { expression: 'o = 1', frameId: 1, context: 'repl' });
+    await settle();
+    await labels('o');
+
+    expect(typingO).toEqual(['persisted.o', 'persisted.orders']);
+    expect(typingOr).toEqual(['persisted.orders']);
+    expect(afterDot).toEqual(['o', 'orders']);
+    // Once a pause, not once a keystroke; again after a line that may have changed them.
+    expect(readsBefore).toBe(1);
+    expect(persistedKeys).toHaveBeenCalledTimes(2);
+  });
 });
