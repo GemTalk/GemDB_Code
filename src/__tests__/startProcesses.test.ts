@@ -62,7 +62,8 @@ vi.mock('../lock', async (importOriginal) => {
 });
 
 const { expectedEnginePath } = await import('../paths');
-const { ensureProcesses, stoneReady, stoneState, waitForStoneReady } = await import('../processes');
+const { ensureListener, ensureProcesses, stoneReady, stoneState, waitForStoneReady } =
+  await import('../processes');
 const { parseGslist } = await import('../gslist');
 
 function row(status: string, type: 'Stone' | 'Netldi', name: string): string {
@@ -295,5 +296,35 @@ describe('what the stone’s status means', () => {
     expect(started).toEqual({ startedStone: false, startedNetldi: true });
     expect(spawned).toEqual(['startnetldi']);
     expect(beforeStoneStart).not.toHaveBeenCalled();
+  });
+});
+
+describe('putting the listener back after a declined force-stop', () => {
+  it('starts the listener beside a stone that is still up', async () => {
+    listings = [STONE_UP];
+
+    expect(await ensureListener()).toBe(true);
+    expect(spawned).toEqual(['startnetldi']);
+  });
+
+  it('starts nothing when the stone went away while the user was deciding', async () => {
+    listings = [''];
+
+    expect(await ensureListener()).toBe(false);
+    expect(spawned).toEqual([]);
+  });
+
+  it('starts nothing beside a stone that is shutting down', async () => {
+    listings = [row('Shutdown', 'Stone', 'gemdb')];
+
+    expect(await ensureListener()).toBe(false);
+    expect(spawned).toEqual([]);
+  });
+
+  it('starts nothing when the listener is already back', async () => {
+    listings = [BOTH_UP];
+
+    expect(await ensureListener()).toBe(false);
+    expect(spawned).toEqual([]);
   });
 });

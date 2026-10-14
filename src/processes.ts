@@ -304,9 +304,9 @@ export function externalDatabaseDownError(external: {
  * Bring up whichever of the stone and the session listener is not already
  * up, and say which of them this call started.
  *
- * Every start of GemDB's own database goes through here — the window's, the
- * GemDB Shell's, and the listener a declined force-stop puts back — and all
- * of it happens under the stone lock the `gemdb` wrapper also takes. Checking
+ * Every start of GemDB's own database goes through here — the window's and
+ * the GemDB Shell's (the listener a declined force-stop puts back goes through
+ * {@link ensureListener}) — and all of it happens under the stone lock the `gemdb` wrapper also takes. Checking
  * and starting have to be one step: checked outside the lock, two callers
  * that both found the listener missing both ran `startnetldi`, and the loser
  * reported a failure over a database that was up. So the look happens inside
@@ -359,6 +359,31 @@ export async function ensureProcesses(
     },
   );
   return started ?? { startedStone: false, startedNetldi: false };
+}
+
+/**
+ * Put the session listener back, and never the stone: what a declined
+ * force-stop needs. By the time the user has answered, the stone may have gone
+ * after all, or be on its way down, and starting one then would undo a stop
+ * without the guards a start runs. True when this call started the listener.
+ * Under the stone lock, like every other start.
+ */
+export async function ensureListener(): Promise<boolean> {
+  requireOwnDatabase('start');
+  const started = await withStoneLock(
+    async () => {
+      const running = await listProcessesAsync();
+      const state = stoneState(running);
+      if (state === 'absent' || state === 'stopping') {
+        log('The database is not running; not starting the session listener.');
+        return false;
+      }
+      if (findNetldi(running)) return false;
+      return startNetldi();
+    },
+    { satisfied: async () => findNetldi(await listProcessesAsync()) !== undefined },
+  );
+  return started ?? false;
 }
 
 /**
@@ -465,8 +490,8 @@ function fileSize(file: string): number {
  * Start the session listener. True when this call started it; false when
  * `startnetldi` refused because another process had started it first.
  *
- * Not exported: the listener starts only through {@link ensureProcesses},
- * under the stone lock.
+ * Not exported: the listener starts only through {@link ensureProcesses} or
+ * {@link ensureListener}, under the stone lock.
  *
  * That race is not rare (#89): the window's start, the GemDB Shell's, and
  * releases before this one, which start the listener without any lock, can

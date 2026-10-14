@@ -52,6 +52,7 @@ import {
   mcpPath,
 } from './paths';
 import {
+  ensureListener,
   ensureProcesses,
   externalDatabaseDownError,
   findNetldi,
@@ -901,7 +902,12 @@ export async function runStop(world: StopWorld): Promise<void> {
     if (!(await world.confirmForce(reason))) {
       // Declining means "leave it running", and a running database with no
       // listener accepts no new sessions — so put back what we stopped on the
-      // way in rather than leaving a half-stopped machine behind.
+      // way in rather than leaving a half-stopped machine behind. Unless it
+      // finished stopping while the question was up: then it is stopped.
+      if (!world.stoneUp()) {
+        world.log('GemDB stopped.');
+        return;
+      }
       if (!world.listenerUp()) await world.startNetldi();
       world.log('GemDB is still running.');
       return;
@@ -945,8 +951,9 @@ async function stopOnce(): Promise<void> {
           stopStone,
           stopNetldi,
           // Through the lock, like every other start: the window that declined
-          // is not the only one that may be putting the listener back.
-          startNetldi: () => ensureProcesses(),
+          // is not the only one that may be putting the listener back. The
+          // listener only: a stone gone by now is not this call's to restart.
+          startNetldi: () => ensureListener(),
           confirmForce,
           log,
         });

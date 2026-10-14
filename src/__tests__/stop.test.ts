@@ -37,6 +37,8 @@ function makeWorld(options: {
   stoneRefuses?: boolean;
   /** Fail the stop but go down anyway, the way a timeout does. */
   stoneStopsLate?: boolean;
+  /** Finish stopping while the question is up, as a refused stop that was already under way can. */
+  stoneStopsDuringQuestion?: boolean;
   confirm?: boolean;
 }): { calls: string[]; world: StopWorld } {
   let stoneUp = options.stoneUp ?? true;
@@ -75,6 +77,7 @@ function makeWorld(options: {
     },
     confirmForce: () => {
       calls.push('confirmForce');
+      if (options.stoneStopsDuringQuestion) stoneUp = false;
       return Promise.resolve(options.confirm ?? false);
     },
     log: () => {},
@@ -123,6 +126,24 @@ describe('runStop', () => {
       'stopStone(false)',
       'confirmForce',
       'startNetldi',
+    ]);
+  });
+
+  it('puts nothing back when the stone stopped while the user was deciding', async () => {
+    // Starting the listener now would, through ensureProcesses, start the stone
+    // the user had just stopped, without any of a start's guards.
+    const { calls, world } = makeWorld({
+      stoneRefuses: true,
+      stoneStopsDuringQuestion: true,
+      confirm: false,
+    });
+    await runStop(world);
+    expect(calls).toEqual([
+      'logout',
+      'stopMcpServer',
+      'stopNetldi',
+      'stopStone(false)',
+      'confirmForce',
     ]);
   });
 
