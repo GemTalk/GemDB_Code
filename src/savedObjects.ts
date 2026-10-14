@@ -1,21 +1,24 @@
 import * as vscode from 'vscode';
 import {
+  ConsoleHost,
   Pause,
+  debugConsole,
   openCellTexts,
   openPause,
   pauseForDebugSession,
   pauseForOwner,
+  rowHandles,
   toDapVariable,
 } from './debugger';
 import { errorMessage, log } from './log';
 import { runFileOf } from './fileOwner';
 import {
+  ConsoleScope,
   MAIN_MODULE,
   PauseVariable,
   ROOT_LISTING_LIMIT,
   abortQuery,
   childrenQuery,
-  clearRegistryQuery,
   commitQuery,
   freeKeyQuery,
   inspectQuery,
@@ -32,6 +35,7 @@ import {
 } from './pauseVariables';
 import { isRunning, listProcesses } from './processes';
 import {
+  SAVED_STACK_NOTE,
   liveSourceWorld,
   openStackQuery,
   parseOpenedStack,
@@ -44,7 +48,16 @@ import {
   savedStackKeysQuery,
   stackKeyFor,
 } from './savedStacks';
-import { SessionOwner, executeAsync, sessionForIfOpen, sessionRegistry } from './session';
+import {
+  PAUSED_QUERY_BUDGET_MS,
+  SessionOwner,
+  closeSessionFor,
+  executeAsync,
+  interruptSessionFor,
+  sessionFor,
+  sessionForIfOpen,
+  sessionRegistry,
+} from './session';
 
 /**
  * Run Smalltalk in the extension's own session, one query at a time. The
@@ -775,7 +788,7 @@ async function targetOf(
 ): Promise<{ notebook: NotebookState; saves: PendingSave[] } | undefined> {
   if (clicked) return view.notebookOf(clicked);
   const connected = sessionRegistry()
-    .filter((info) => info.owner.kind === 'notebook' || info.owner.kind === 'file')
+    .filter((info) => ['notebook', 'file', 'stack'].includes(info.owner.kind))
     .map((info) => info.owner);
   if (connected.length === 0) {
     void vscode.window.showInformationMessage(
@@ -1027,11 +1040,110 @@ function setSavedStackOpen(open: boolean): void {
   void vscode.commands.executeCommand('setContext', 'gemdb.savedStackOpen', open);
 }
 
+/** The session a saved stack works in while it is open: one of its own, as a notebook has. */
+export function stackOwner(key: string): SessionOwner {
+  return { key: `saved-stack:${key}`, kind: 'stack', label: `Saved stack ${key}` };
+}
+
+/**
+ * Run Smalltalk in `owner`'s session, one query at a time, cut short as a
+ * paused query is (`PausedQueryOptions`): soft-broken when `signal` aborts
+ * and, with `budget`, every `PAUSED_QUERY_BUDGET_MS`.
+ */
+export function stackQuery(owner: SessionOwner): ConsoleHost['query'] {
+  let chain: Promise<unknown> = Promise.resolve();
+  return (code, { budget = true, signal } = {}) => {
+    let running = false;
+    const interrupt = (): void => {
+      if (running) interruptSessionFor(owner.key);
+    };
+    const run = chain.then(async () => {
+      running = true;
+      signal?.addEventListener('abort', interrupt);
+      const timer = budget ? setInterval(interrupt, PAUSED_QUERY_BUDGET_MS) : undefined;
+      if (signal?.aborted) interrupt();
+      try {
+        return await sessionFor(owner).executeAsync(code);
+      } finally {
+        running = false;
+        clearInterval(timer);
+        signal?.removeEventListener('abort', interrupt);
+      }
+    });
+    chain = run.catch(() => undefined);
+    return run;
+  };
+}
+
+/**
+ * A saved stack's Debug Console, in the stack's own session. Each frame's
+ * console is made first and what that wrote is undone (making one writes,
+ * measured: a frame's first line always left something to commit, the same
+ * line again never), so the session starts with nothing to commit, and what it
+ * has to commit later is only what the user changed — what closing the stack
+ * asks about.
+ */
+export async function savedStackConsole(
+  query: ConsoleHost['query'],
+  ownerKey: string,
+  consoles: Map<number, ConsoleScope>,
+): Promise<ReturnType<typeof debugConsole>> {
+  const con = debugConsole({ query, ownerKey, consoles });
+  for (const frameId of consoles.keys()) {
+    await con.evaluate!('None', frameId, 'repl', new AbortController().signal).catch(
+      () => undefined,
+    );
+  }
+  await query(`System abortTransaction. 'aborted' encodeAsUTF8`, { budget: false });
+  return con;
+}
+
+/**
+ * Close a saved stack's session when its debugger ends. Changes made in its
+ * Debug Console and not committed are asked about first: committing them
+ * changes the saved stack for good, and closing the session discards them.
+ */
+async function closeSavedStack(
+  key: string,
+  owner: SessionOwner,
+  query: ConsoleHost['query'],
+): Promise<void> {
+  try {
+    if ((await query(needsCommitQuery(), { budget: false })) === 'true') {
+      const commit = 'Commit';
+      const choice = await vscode.window.showWarningMessage(
+        `${accessCode(key)} has changes made in the Debug Console that are not committed.`,
+        {
+          modal: true,
+          detail:
+            'Commit saves them, and the saved stack keeps the changed values from now on. ' +
+            'Otherwise they are discarded, and the stack stays as it was saved.',
+        },
+        commit,
+      );
+      if (choice === commit) orThrow(await query(commitQuery(), { budget: false }));
+    }
+  } catch (e) {
+    void vscode.window.showErrorMessage(
+      `Could not commit the changes to ${accessCode(key)}: ${errorMessage(e)}`,
+    );
+  } finally {
+    closeSessionFor(owner.key);
+    // What it had added to Persisted Objects and not committed went with it.
+    Promise.resolve(vscode.commands.executeCommand('gemdb.savedObjects.refresh')).catch(
+      () => undefined,
+    );
+  }
+}
+
 /**
  * Open a committed saved stack in Run and Debug: the Call Stack, the
- * highlighted lines and the Variables, rebuilt from the objects saved with
- * it, read-only. Each frame shows the copy of its source saved with it, never
- * the live cell or file.
+ * highlighted lines and the Variables, rebuilt from the objects saved with it,
+ * and a Debug Console on them. It gets a session of its own
+ * (`stackOwner`), so what its console changes waits there, as a notebook's
+ * changes do, until `%commit` or ✓ commits it or closing the stack discards
+ * it. Each frame shows the copy of its source saved with it, never the live
+ * cell or file.
  */
 async function openSavedStack(key: string): Promise<void> {
   if (savedStackOpen) {
@@ -1040,39 +1152,51 @@ async function openSavedStack(key: string): Promise<void> {
     );
     return;
   }
+  const owner = stackOwner(key);
+  const query = stackQuery(owner);
+  setSavedStackOpen(true);
+  let started = false;
   try {
-    const { meta, locals, globals } = parseOpenedStack(await extensionQuery(openStackQuery(key)));
-    const { frames, scopes, texts } = restoredFrames(
+    const { meta, locals, globals } = parseOpenedStack(
+      await query(openStackQuery(key), { budget: false }),
+    );
+    const { frames, scopes, texts, consoles } = restoredFrames(
       meta,
       locals,
       globals,
       liveSourceWorld(openCellTexts),
     );
-    setSavedStackOpen(true);
+    const con = await savedStackConsole(query, owner.key, consoles);
+    const rows = rowHandles();
     const pause: Pause = {
       label: savedPauseLabel(meta),
+      ownerKey: owner.key,
       frames,
       scopes: (frameId) => scopes.get(frameId) ?? [],
       variables: async (ref, start, count) => {
         try {
-          // Read-only: a saved stack's objects are committed copies, with no run to change.
-          return parseChildren(await extensionQuery(childrenQuery(ref, start, count))).map((row) =>
-            toDapVariable({ ...row, readOnly: true }),
-          );
+          // Set Value is not offered here: the Debug Console is where a saved stack is changed.
+          const children = parseChildren(await query(childrenQuery(ref, start, count)));
+          rows.remember(ref, children);
+          return children.map((row) => toDapVariable({ ...row, readOnly: true }));
         } catch (e) {
           log(`Could not read a saved stack's variable ${ref}: ${errorMessage(e)}`);
           return [];
         }
       },
+      handleFor: rows.handleFor,
+      query: (code) => query(code, { budget: false }),
       answer: () => {
         setSavedStackOpen(false);
-        extensionQuery(clearRegistryQuery()).catch(() => undefined);
+        void closeSavedStack(key, owner, query);
       },
+      ...con,
       sourceText: (ref) => texts.get(ref),
-      description: `Saved stack from ${meta.saved_at} (read-only)`,
+      openingNote: SAVED_STACK_NOTE,
+      description: `Saved stack from ${meta.saved_at}`,
       saved: true,
     };
-    const started = await openPause(pause);
+    started = await openPause(pause);
     if (!started) {
       void vscode.window.showErrorMessage(
         `GemDB could not open ${accessCode(key)} in the debugger.`,
@@ -1084,8 +1208,12 @@ async function openSavedStack(key: string): Promise<void> {
       await vscode.commands.executeCommand('workbench.view.debug');
     }
   } catch (e) {
-    setSavedStackOpen(false);
     void vscode.window.showErrorMessage(`Could not open the saved stack: ${errorMessage(e)}`);
+  } finally {
+    if (!started) {
+      setSavedStackOpen(false);
+      closeSessionFor(owner.key);
+    }
   }
 }
 
@@ -1159,6 +1287,20 @@ export function registerSavedObjects(context: vscode.ExtensionContext): SavedObj
       saveVariable(view, treeViews, ctx),
     ),
     vscode.commands.registerCommand('gemdb.savedObjects.refresh', () => view.refresh()),
+    // Internal, for `%persist` in the Debug Console (`debugger.ts`): show the
+    // save as pending, as Add to Persisted Objects does.
+    vscode.commands.registerCommand(
+      'gemdb.savedObjects.notePersisted',
+      (save: Omit<PendingSave, 'at'>) => {
+        view.notePending({ ...save, at: new Date().toISOString() });
+        const shown = treeViews.get(DEBUG_VIEW_ID);
+        if (shown) {
+          view
+            .revealSaved(shown, save.key)
+            .catch((e: unknown) => log(`Could not show ${save.key}: ${errorMessage(e)}`));
+        }
+      },
+    ),
     vscode.commands.registerCommand('gemdb.saveStack', () => saveStack(view, treeViews)),
     vscode.commands.registerCommand('gemdb.restoreStack', () => restoreStack()),
     vscode.commands.registerCommand('gemdb.savedObjects.openStack', (row: SavedRow) =>

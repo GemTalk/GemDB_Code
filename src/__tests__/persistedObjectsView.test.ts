@@ -111,6 +111,10 @@ class FakeGem {
       additions.clear();
       return "'aborted'";
     }
+    if (code.includes("System abortTransaction. 'aborted'")) {
+      additions.clear();
+      return 'aborted';
+    }
     const taken = /"([^"]+)" in gemdb\.root/.exec(code);
     if (taken) return this.committed.has(taken[1]) || additions.has(taken[1]) ? 'true' : 'false';
     throw new Error(`the fake gem does not answer: ${code.slice(0, 80)}`);
@@ -118,6 +122,8 @@ class FakeGem {
 }
 
 let gem: FakeGem;
+/** The sessions closed, by owner key. */
+const closedSessions: string[] = [];
 let running = true;
 const connected: Array<{ key: string; label: string }> = [];
 const paused = new Map<string, Pause>();
@@ -131,6 +137,13 @@ vi.mock('../session', () => ({
       openedAt: 0,
       idleMs: 0,
     })),
+  PAUSED_QUERY_BUDGET_MS: 2000,
+  interruptSessionFor: () => {},
+  // A saved stack opened in the debugger works in a session of its own.
+  sessionFor: (owner: { key: string }) => ({
+    executeAsync: (code: string) => Promise.resolve(gem.run(owner.key, code)),
+  }),
+  closeSessionFor: (key: string) => closedSessions.push(key),
   sessionForIfOpen: (key: string) =>
     connected.some((o) => o.key === key)
       ? { executeAsync: (code: string) => Promise.resolve(gem.run(key, code)) }
@@ -146,6 +159,8 @@ vi.mock('../debugger', () => ({
     return Promise.resolve(true);
   },
   openCellTexts: () => [],
+  rowHandles: () => ({ remember: () => {}, handleFor: () => undefined }),
+  debugConsole: () => ({ evaluate: () => Promise.reject(new Error('not in these tests')) }),
   toDapVariable: (v: { name: string; value: string; ref: number }) => ({
     name: v.name,
     value: v.value,
@@ -314,6 +329,35 @@ describe('adding an object from the debugger', () => {
     expect((item(view, notebook).tooltip as MarkdownString).value).toMatch(
       /\*\*Commit\*\* \(✓\) persists/,
     );
+  });
+
+  it('shows a %persist from the Debug Console as waiting under its notebook, and reveals it', async () => {
+    pauseIn(NB);
+    connected.push({ key: NB, label: 'breakpoint.ipynb' });
+    const { view } = setUp();
+    // What %persist p did in the paused session, before telling the view.
+    gem.pending.set(NB, new Map([['p', 'list']]));
+
+    await command('gemdb.savedObjects.notePersisted')({
+      key: 'p',
+      type: 'list',
+      ownerKey: NB,
+      notebook: 'breakpoint.ipynb',
+    });
+    await vi.waitFor(() => expect(__treeViews.get(DEBUG_VIEW_ID)!.reveals).toHaveLength(1));
+    const rows = await topOf(view);
+
+    const notebook = rows.find((r) => r.kind === 'notebook')!;
+    const [waiting] = view.getChildren(notebook);
+    expect(item(view, waiting)).toMatchObject({
+      label: 'p',
+      description: 'list · added, not persisted yet',
+      contextValue: 'gemdbSavedPending',
+    });
+    expect(__treeViews.get(DEBUG_VIEW_ID)!.reveals[0].element).toMatchObject({
+      kind: 'pending',
+      save: { key: 'p' },
+    });
   });
 
   it('opens Persisted Objects in Run and Debug on the new row, leaving focus in Variables', async () => {
@@ -660,6 +704,65 @@ describe('saved stacks', () => {
     expect(told.mock.calls[0][0]).toMatch(
       /^No saved stacks yet\..*Add Stack to Persisted Objects…/,
     );
+  });
+
+  it('opens the stack in a session of its own, which closes with it', async () => {
+    gem.committed.set('stack_bp', 'dict');
+    gem.stacks.set('stack_bp', snapshot('breakpoint.ipynb'));
+    opened.length = 0;
+    closedSessions.length = 0;
+    const { view } = setUp();
+    const [root] = await topOf(view);
+
+    await command('gemdb.savedObjects.openStack')(view.getChildren(root)[0]);
+    const [pause] = opened;
+    const warned = vi.spyOn(window, 'showWarningMessage');
+    pause.answer('stop');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(pause.ownerKey).toBe('saved-stack:stack_bp');
+    expect(gem.queries.some((q) => q.session === 'saved-stack:stack_bp')).toBe(true);
+    // Nothing was changed, so nothing is asked.
+    expect(warned).not.toHaveBeenCalled();
+    expect(closedSessions).toEqual(['saved-stack:stack_bp']);
+  });
+
+  it('asks about changes made in its Debug Console when it closes, and commits them if told to', async () => {
+    gem.committed.set('stack_bp', 'dict');
+    gem.stacks.set('stack_bp', snapshot('breakpoint.ipynb'));
+    opened.length = 0;
+    closedSessions.length = 0;
+    const { view } = setUp();
+    const [root] = await topOf(view);
+    await command('gemdb.savedObjects.openStack')(view.getChildren(root)[0]);
+    const warned = vi.spyOn(window, 'showWarningMessage').mockResolvedValue('Commit' as never);
+    // A console line changed something in the stack's session.
+    gem.pending.set('saved-stack:stack_bp', new Map([['changed', 'Employee']]));
+
+    opened[0].answer('stop');
+    await vi.waitFor(() => expect(closedSessions).toHaveLength(1));
+
+    expect(warned.mock.calls[0][0]).toMatch(/stack_bp.*has changes made in the Debug Console/);
+    expect(warned.mock.calls[0][1]).toMatchObject({ modal: true });
+    expect(gem.committed.get('changed')).toBe('Employee');
+  });
+
+  it('discards them when not told to commit', async () => {
+    gem.committed.set('stack_bp', 'dict');
+    gem.stacks.set('stack_bp', snapshot('breakpoint.ipynb'));
+    gem.committed.delete('changed');
+    opened.length = 0;
+    closedSessions.length = 0;
+    const { view } = setUp();
+    const [root] = await topOf(view);
+    await command('gemdb.savedObjects.openStack')(view.getChildren(root)[0]);
+    vi.spyOn(window, 'showWarningMessage').mockResolvedValue(undefined as never);
+    gem.pending.set('saved-stack:stack_bp', new Map([['changed', 'Employee']]));
+
+    opened[0].answer('stop');
+    await vi.waitFor(() => expect(closedSessions).toHaveLength(1));
+
+    expect(gem.committed.has('changed')).toBe(false);
   });
 
   it('opens one saved stack at a time', async () => {

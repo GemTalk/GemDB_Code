@@ -34,6 +34,7 @@ import {
 import { collectGarbageCommand, startMaintenance, stopSessionCommand } from './maintenance';
 import { isMcpRunning, startMcpServer, stopMcpServer } from './mcp';
 import { registerBreakpointDebugger } from './debugger';
+import { registerVariableCommands } from './variableCommands';
 import { registerSavedObjects } from './savedObjects';
 import { onSavedStacksChanged } from './savedStacks';
 import { cloneBrainFreeze, initPendingReadme, showPromisedReadme } from './demo';
@@ -192,6 +193,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // paused cell — no Debug command, no launch configuration: the user just
   // runs the code. Continue resumes the cell; Stop ends it.
   context.subscriptions.push(registerBreakpointDebugger());
+  context.subscriptions.push(registerVariableCommands());
 
   // Every command that changes state refreshes the view afterwards, so the
   // status readout can never disagree with what just happened.

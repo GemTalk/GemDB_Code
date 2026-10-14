@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Debug Console and Watch work at a `breakpoint()` or red dot.** Type Python into the Debug
+  Console and it runs in the frame selected in the Call Stack: its locals, closed-over names, its
+  module's globals (an imported module's own, not the notebook's) and the builtins, as the paused
+  line itself would see them. A result opens like a Variables row; `print()` shows in the console;
+  names you bind (`y = 5`, `import json`, a `def`) last until the run resumes. An error reads as a
+  Jupyter traceback, frame by frame with the line that raised marked. A line runs as long as it
+  takes, and after a few seconds a notification offers to stop it; a watch keeps a two-second limit.
+  Code the console calls runs straight past `breakpoint()` and red dots. Not yet: `cls` in a
+  classmethod's frame, and rebinding a local (`n = 99`) changes the console's copy, not the paused
+  function.
+- **Show in Debug Console and Evaluate with self… on a Variables row.** Right-click any row, however
+  deep in the tree, and **Show in Debug Console** opens the console with that object in it: an
+  object with its attributes listed beneath, each by name; a list, set or dict, or an object with
+  more than 20 attributes, as one row that opens like the Variables row. Its name is left at the
+  console's prompt, or `_` bound to it for a row whose name means nothing there, such as a list item. **Evaluate with self…** asks for an expression and shows what it gives
+  with `self` bound to the row's object, in the frame selected in Call Stack.
 - **Variables shows each value's type, and opens objects whole.** Every row starts with its type,
   and a container's with its size too, as PyCharm shows them: `{Point} Point(3, 4)`,
   `{list: 3} […]`, `{list: 150}` for one too big to show. **Copy Value** copies the value alone,
@@ -29,6 +45,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   continues with it. What Python refuses is refused with Python's reason, such as a property with
   no setter. A method's receiver (`self`, or whatever the def calls it), a tuple's items, group
   rows and a saved stack's values cannot be changed, and VS Code does not offer Set Value on them.
+- **GemDB commands in the Debug Console.** A line starting with `%` is a GemDB command rather than
+  Python: `%persist p` adds `p` to Persisted Objects (or `%persist expr as key`), shown there as
+  added until the notebook commits; `%commit` commits the notebook; `%names` lists the names you
+  have bound in the console at this pause; `%help` lists the commands. Typing `%` suggests them,
+  and `%persist ` suggests your console names. The first pause in a window says so, once. `gemdb`
+  is available in the console without an import, so a line copied from Persisted Objects
+  (`gemdb.root["orders"]`) works in any program, and each persisted entry is there by its key
+  (`orders`) at every pause, unless the paused code has a name of its own spelled so, and is
+  labelled `orders is gemdb.root["orders"]` when typed; `persisted.orders` reaches it whatever
+  `orders` means at the pause. Typing a name offers `persisted.orders` in autocomplete for each
+  persisted entry it starts, and `persisted.` offers the keys.
+- **The Debug Console on a saved stack.** A stack reopened with **Restore a Saved Stack…** now has a
+  Debug Console, in each frame, on the saved objects: evaluate, call methods, bind names, change
+  objects, `%names`, `%persist`, `%commit`, Show in Debug Console and Evaluate with self…. The stack
+  opens in a database session of its own, so a change waits there uncommitted, as a notebook's
+  does. When the stack opens, the console warns that `%commit` (or ✓ in Persisted Objects) would
+  write a change into the saved stack, which then no longer holds the values it was saved with. Closing the stack
+  with changes pending asks whether to commit them; otherwise they are discarded.
+
+### Fixed
+
+- **A classmethod's or staticmethod's frame is named by its class.** The Call Stack read
+  `Account class.open` for a paused `@classmethod` or `@staticmethod`; it now reads `Account.open`,
+  as CPython names it.
 
 ### Fixed
 
@@ -214,7 +254,7 @@ The engine is unchanged at GemStone 4.0.0.a4, so a database created by GemDB
   Saved Stack…** (a button in Run and Debug, and in the GemDB panel) lists the saved stacks, or
   opens the only one, in Run and Debug again; Persisted Objects can open it from its row too — after
   a restart, and with the notebook or file gone. Each frame shows the copy of its source saved with
-  the stack, marked "(saved <time>)" in its tab and Call Stack row. It is a read-only snapshot: the run itself is not resumed.
+  the stack, marked "(saved <time>)" in its tab and Call Stack row. It is a snapshot: the run itself is not resumed.
 - **A Persisted Objects view** under GemDB, and in Run and Debug while a cell is paused, lists what
   `gemdb.root` has committed, with a check mark, and under each notebook the objects added from the
   debugger that it has not committed yet. Its title bar always has **Commit** and **Abort**, for the

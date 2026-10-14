@@ -881,26 +881,19 @@ describe('the debug adapter', () => {
     });
   });
 
-  it('answers Copy Value with the value alone, and still refuses other evaluation', () => {
+  it('answers Copy Value with the value alone, and runs nothing for another context', () => {
     const { request, response } = adapterFor({ answer: () => {} });
     request('initialize');
     request('launch', { gemdbPause: '1' });
 
     request('evaluate', { expression: "{str} 'hello'", frameId: 1, context: 'clipboard' });
     const copied = response('evaluate');
-    request('evaluate', { expression: 'p.x', frameId: 1, context: 'repl' });
-    const repl = response('evaluate');
-    // Only the clipboard: answering another context would echo text back as if evaluated.
+    // Not the clipboard: running a row's text as Python would answer nonsense, or worse.
     request('evaluate', { expression: '{int} 3', frameId: 1, context: 'variables' });
 
     expect(response('initialize')?.body).toMatchObject({ supportsClipboardContext: true });
     expect(copied).toMatchObject({ success: true, body: { result: "'hello'" } });
-    for (const refused of [repl, response('evaluate')]) {
-      expect(refused).toMatchObject({
-        success: false,
-        message: "Evaluating expressions isn't supported yet.",
-      });
-    }
+    expect(response('evaluate')).toMatchObject({ success: false });
   });
 
   it('declines Restart with a message, leaving the pause alone', () => {

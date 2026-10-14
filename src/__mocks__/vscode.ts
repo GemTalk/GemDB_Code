@@ -264,18 +264,23 @@ export const window = {
   },
   /**
    * Progress is a pass-through here: run the callback and return its result.
-   * Nothing asserts on the notification itself — that is the editor's job,
-   * not ours — and the token never reports cancelled, since nothing here can
-   * drive one.
+   * The token never reports cancelled; a test that needs to cancel spies on
+   * this and hands over a token it can drive.
    */
   withProgress<T>(
     _options: unknown,
     task: (
       progress: { report: (value: { message?: string }) => void },
-      token: { isCancellationRequested: boolean },
+      token: {
+        isCancellationRequested: boolean;
+        onCancellationRequested: (listener: () => void) => { dispose(): void };
+      },
     ) => Thenable<T>,
   ): Thenable<T> {
-    return task({ report: () => {} }, { isCancellationRequested: false });
+    return task(
+      { report: () => {} },
+      { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => {} }) },
+    );
   },
 };
 
@@ -425,11 +430,22 @@ export const debug = {
   },
   stopDebugging: (): Promise<void> => Promise.resolve(),
   activeDebugSession: undefined as { id: string; type: string } | undefined,
+  /** The frame selected in Call Stack; a test sets it to a `DebugStackFrame`. */
+  activeStackItem: undefined as unknown,
   /** The gutter's breakpoints; a test fills it with `SourceBreakpoint`s. */
   breakpoints: [] as unknown[],
 };
 
 /** A gutter breakpoint, with just the location shape red dots read. */
+/** A frame selected in Call Stack. */
+export class DebugStackFrame {
+  constructor(
+    readonly session: { id: string; type: string; name?: string; customRequest: unknown },
+    readonly threadId: number,
+    readonly frameId: number,
+  ) {}
+}
+
 export class SourceBreakpoint {
   constructor(
     readonly location: {

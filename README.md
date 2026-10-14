@@ -422,12 +422,33 @@ database, select that kernel from the kernel picker at the top right.
   a local, a global, an attribute, a list item or a dict entry. The value you type is a Python
   expression, and the run continues with it. It can use the notebook's globals, or a `.py` file's,
   on any row, and on a Locals row the frame's locals too. **Continue** resumes the cell where it paused; **Stop**
-  ends it, along with any cells queued after it. Stepping is not supported yet, and neither are red
+  ends it, along with any cells queued after it. The **Debug Console** and **Watch** work at the
+  pause: type Python and it runs in the frame selected in the Call Stack, with that frame's locals,
+  its module's globals and the builtins, and a result opens like a Variables row. Names you bind
+  there last until the run resumes; an error reads as a notebook traceback; a long-running line can
+  be stopped from the notification that appears. A change to an object made there is in the
+  notebook's transaction, as it would be from a cell. Right-click a Variables row for **Show in
+  Debug Console**, which puts that object in the console (an object with its attributes
+  listed, a list or dict as one row that opens) and leaves its name at the prompt, or `_` for a
+  nested row, ready for the next line, or **Evaluate with self…**,
+  which runs an expression with `self` bound to it (`len(self.history)`) and shows the answer
+  there. Lines starting with `%` are GemDB commands, not Python: `%persist p` adds `p` to
+  Persisted Objects (`%persist expr as key` for anything else), `%commit` commits the notebook,
+  `%names` lists what you have bound in the console, and `%help` lists them all. Type `%` and the
+  console suggests them. `gemdb` is always available in the console, so a line copied from Persisted
+  Objects, such as `gemdb.root["orders"]`, works even if the program never imported it. What Persisted Objects holds is available by its
+  key too (`o` for `gemdb.root["o"]`), unless the paused code has its own name `o`; `persisted.o` reaches it whatever `o` means, and a
+  bare persisted name is labelled with where it came from. While you type a name, autocomplete
+  offers `persisted.o` for each persisted entry it starts (press Tab to take a suggestion). Stepping is not supported yet, and neither are red
   dots in a cell (they work in `.py` files; see above). Right-click a Variables row and choose **Add to Persisted Objects…** to keep that object: it
   goes in `gemdb.root` under the key you give (one is suggested) and is written at the notebook's
   next commit. The **Persisted Objects** view, under GemDB and in Run and Debug, lists what `gemdb.root`
   holds; its title bar always has **Commit** and **Abort** for the notebook you are working in. **Add Stack to Persisted Objects…** on the Call Stack saves the whole paused stack the same
-  way; once committed, Persisted Objects reopens it in the debugger, even after a restart.
+  way; once committed, Persisted Objects reopens it in the debugger, even after a restart. Its
+  Debug Console works on the saved objects: call a method, bind a name, change an object,
+  `%persist` one. A change waits uncommitted; the console says when the stack opens that `%commit`
+  (or ✓) would write it into the saved stack, and closing the stack asks whether to commit or
+  discard what is pending.
   **Debug Python File in GemDB** does the same for a `.py` file (see above). In the GemDB Shell
   and in **Run Python File in GemDB**, `breakpoint()` prints where it was and the code carries on.
 - Each notebook has its own session and its own transaction, so a commit in one notebook never

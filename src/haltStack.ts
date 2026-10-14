@@ -122,7 +122,9 @@ export interface StackQueryExtras {
  * source records (`___curPosPositionsFromSource___:`). A frame is
  * qualified with its class when its method belongs to a Python class rather
  * than to a module — the receiver-side test Grail's own walk makes, done on
- * the defining class.
+ * the defining class. A classmethod or staticmethod is compiled on the
+ * class's metaclass, whose name reads `Account class`, so the class it
+ * belongs to names it instead: `Account.open`, as CPython says.
  *
  * Each frame is described inside its own error guard: a frame Grail cannot
  * place becomes a `?` row with no line, rather than failing the query and
@@ -166,6 +168,8 @@ both isNil ifFalse: [
     meth := p at: 1.
     home := [meth homeMethod] on: Error do: [:e | meth].
     cls := home inClass.
+    "A classmethod or staticmethod is compiled class-side; its class, not the metaclass, names it."
+    (cls notNil and: [cls isMeta]) ifTrue: [cls := cls thisClass].
     name := (p at: 3) asString.
     (cls notNil and: [modCls notNil and: [(cls inheritsFrom: modCls) not]])
       ifTrue: [name := cls name asString , '.' , name].

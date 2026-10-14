@@ -1221,6 +1221,38 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
     expect(result.value).toBe('7');
   });
 
+  it('names a classmethod’s and a staticmethod’s frame by their class, as CPython does', async () => {
+    const names: string[][] = [];
+    setHaltHandler(async (request) => {
+      names.push(
+        parsePythonStack(await request.query(pythonStackQuery(request.process))).map((f) => f.name),
+      );
+      return 'continue';
+    });
+
+    await runPython(
+      [
+        'class Account:',
+        '    @classmethod',
+        '    def open(cls):',
+        '        breakpoint()',
+        '        return cls()',
+        '    @staticmethod',
+        '    def check():',
+        '        breakpoint()',
+        '        return 1',
+        'Account.open()',
+        'Account.check()',
+      ].join('\n'),
+      NB,
+    );
+
+    expect(names).toEqual([
+      ['Account.open', '<module>'],
+      ['Account.check', '<module>'],
+    ]);
+  });
+
   it('turns an interrupt while paused into KeyboardInterrupt and tells the handler', async () => {
     let cancelled = false;
     setHaltHandler(

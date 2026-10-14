@@ -85,7 +85,7 @@ const SESSION_LIMIT_ERRORS = new Set([4039, 4041, 4050]);
 const GCI_LOGIN_QUIET = 0x10;
 
 /** What kind of user interface a session belongs to. */
-export type SessionKind = 'notebook' | 'file' | 'shell' | 'extension';
+export type SessionKind = 'notebook' | 'file' | 'shell' | 'extension' | 'stack';
 
 /**
  * Who a session is for.
@@ -138,6 +138,7 @@ const CACHE_NAME_TAGS: Record<SessionKind, string> = {
   file: 'GemDB py',
   shell: 'GemDB Shell',
   extension: 'GemDB Code',
+  stack: 'GemDB stack',
 };
 
 /**
@@ -304,13 +305,30 @@ export interface HaltRequest {
   /**
    * Run Smalltalk while the evaluation stays paused — what the debugger reads
    * the stack and the Variables with. Nonblocking, one query at a time, and
-   * soft-broken past a time budget; see `queryWhilePaused`. Refused once the
-   * pause is settled.
+   * soft-broken past a time budget unless `options` says otherwise; see
+   * `queryWhilePaused`. Refused once the pause is settled.
    */
-  query(code: string): Promise<string>;
+  query(code: string, options?: PausedQueryOptions): Promise<string>;
   /** Runs if the evaluation is interrupted or its session closed while paused,
    * so the handler can take down its debugger (the halt is already answered). */
   onCancel(callback: () => void): void;
+}
+
+/**
+ * How a query while paused runs. The defaults suit a Variables row: a two-second
+ * budget, and a query that reaches breakpoint() fails. The Debug Console asks for
+ * the opposite of both.
+ */
+export interface PausedQueryOptions {
+  /** Soft-break the query every `PAUSED_QUERY_BUDGET_MS`. Default true. */
+  budget?: boolean;
+  /** Soft-break the query when this aborts. */
+  signal?: AbortSignal;
+  /**
+   * Run straight past a breakpoint() or red dot the query reaches, as
+   * debugpy and PyCharm do for an evaluation, rather than failing. Default false.
+   */
+  passHalts?: boolean;
 }
 
 export type HaltHandler = (request: HaltRequest) => Promise<HaltAnswer>;
@@ -484,7 +502,7 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * then how often it is broken again. A Variables row runs the user's own
  * `__repr__`, and one that never returns must not wedge the pause.
  */
-const PAUSED_QUERY_BUDGET_MS = 2000;
+export const PAUSED_QUERY_BUDGET_MS = 2000;
 
 /**
  * One logged-in session.
@@ -898,16 +916,19 @@ export class GciSession {
    * returned would freeze the extension host with no way to send a break.
    * Past `PAUSED_QUERY_BUDGET_MS` the query is soft-broken, again each budget
    * after; the Variables query catches that break around a `__repr__` and
-   * shows the rest without one.
+   * shows the rest without one. A Debug Console line runs without the budget
+   * and is broken only when its `signal` aborts (`PausedQueryOptions`).
    *
    * Queries run one at a time, chained, and the paused evaluation waits for
    * the chain before it resumes or ends. A query that itself stops — a
    * `__repr__` that reached breakpoint() or input(), or a break nothing
    * caught — has its stack cleared, which runs its `ensure:` blocks, and
-   * fails.
+   * fails; with `passHalts`, a breakpoint() is run past instead.
    */
-  private queryWhilePaused(code: string): Promise<string> {
-    const run = this.pausedQueries.then(() => this.runPausedQuery(code));
+  private queryWhilePaused(code: string, options: PausedQueryOptions = {}): Promise<string> {
+    const run = this.pausedQueries.then(() =>
+      this.runPausedQuery(code, options.budget ?? true, options),
+    );
     this.pausedQueries = run.then(
       () => undefined,
       () => undefined,
@@ -915,16 +936,44 @@ export class GciSession {
     return run;
   }
 
-  private async runPausedQuery(code: string, softBreak = true): Promise<string> {
+  private async runPausedQuery(
+    code: string,
+    softBreak = true,
+    { signal, passHalts = false }: PausedQueryOptions = {},
+  ): Promise<string> {
     const handle = this.requireHandle();
     let deadline = Date.now() + PAUSED_QUERY_BUDGET_MS;
     this.pausedQueryRunning = true;
+    // A soft break, like the budget's: the query catches it where it can and
+    // says it was interrupted, rather than losing its stack.
+    const onAbort = (): void => {
+      if (this.handle !== undefined) this.gci.GciTsBreak(handle, false);
+    };
+    if (signal?.aborted) onAbort();
+    signal?.addEventListener('abort', onAbort);
     try {
-      const { result: oop, err } = await this.submitAndWait(handle, code, () => {
+      let { result: oop, err } = await this.submitAndWait(handle, code, () => {
         if (!softBreak || Date.now() < deadline) return;
         deadline = Date.now() + PAUSED_QUERY_BUDGET_MS;
         this.gci.GciTsBreak(handle, false);
       });
+      // A breakpoint() or a red dot in code the query ran: go on past it. The
+      // run's flags stay 0, as every paused query's do, so no red dot fires and
+      // only breakpoint()'s Halt arrives here; BREAKPOINT is passed for safety.
+      while (
+        passHalts &&
+        oop === OOP_ILLEGAL &&
+        (err.number === HALT || err.number === BREAKPOINT) &&
+        isProcess(err.context)
+      ) {
+        ({ result: oop, err } = await this.gci.GciTsContinueWithAsync(
+          handle,
+          err.context,
+          OOP_ILLEGAL,
+          null,
+          0,
+        ));
+      }
       if (oop === OOP_ILLEGAL) {
         if (isProcess(err.context)) this.gci.GciTsClearStack(handle, err.context);
         throw new SessionError(err.message || 'The query failed.');
@@ -933,6 +982,7 @@ export class GciSession {
     } catch (e) {
       throw this.asSessionError(e);
     } finally {
+      signal?.removeEventListener('abort', onAbort);
       this.pausedQueryRunning = false;
     }
   }
@@ -1126,10 +1176,10 @@ export class GciSession {
           this.gci.GciTsBreak(this.handle, false);
         }
       };
-      const query = (code: string): Promise<string> =>
+      const query = (code: string, options?: PausedQueryOptions): Promise<string> =>
         settled
           ? Promise.reject(new SessionError('The pause is over.'))
-          : this.queryWhilePaused(code);
+          : this.queryWhilePaused(code, options);
       handler({
         session: this,
         process,

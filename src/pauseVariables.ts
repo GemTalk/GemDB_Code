@@ -70,7 +70,15 @@ export interface PauseVariable {
   size: number;
   /** The row cannot be changed with Set Value: a tuple's item, a group heading, a method's `self`. */
   readOnly: boolean;
+  /**
+   * How its children are read, when it has any (`CHILDREN_OF`): `seq`, `coll`
+   * and `dict` are containers, `obj` and `ivars` an object's attributes.
+   * Absent on a row with no object, such as a group heading.
+   */
+  kind?: ChildKind;
 }
+
+export type ChildKind = 'seq' | 'coll' | 'dict' | 'obj' | 'ivars';
 
 /**
  * Smalltalk that answers `{kind. source. size}` for an object's children, or
@@ -135,7 +143,8 @@ const CHILDREN_OF = `
 /**
  * Smalltalk that writes one row for `v`, named `nm`, and registers `v` — as
  * the row's `ref` when it has children, and always as its `handle`. Whether
- * the row can be changed is `ro`, which the caller sets for each row.
+ * the row can be changed is `ro`, which the caller sets for each row. The row
+ * ends with the kind `childrenOf` reads its children by, or nothing for a leaf.
  *
  * Its repr is the user's `__repr__`, run through `reprOf`: a big container
  * shows its size instead (a container only: a module or an object with many
@@ -182,7 +191,8 @@ const DESCRIBE = `
       ifFalse: [out nextPutAll: '0'].
     out nextPut: field; print: idx; nextPut: field; print: named; nextPut: field; print: reg size; nextPut: field.
     out print: (container ifTrue: [n] ifFalse: [-1]);
-      nextPut: field; nextPutAll: (ro == true ifTrue: ['1'] ifFalse: ['0']); nextPut: record]].`;
+      nextPut: field; nextPutAll: (ro == true ifTrue: ['1'] ifFalse: ['0']);
+      nextPut: field; nextPutAll: (kids isNil ifTrue: [''] ifFalse: [kids at: 1]); nextPut: record]].`;
 
 /**
  * Smalltalk for the blocks every row needs.
@@ -284,6 +294,13 @@ SessionTemps current at: #'GrailConsole' put: (Array with: (WriteStream on: Unic
     ifTrue: [SessionTemps current removeKey: #'GrailConsole' ifAbsent: []]
     ifFalse: [SessionTemps current at: #'GrailConsole' put: saved]].`;
 }
+
+/**
+ * The temps `HELPERS`, `CHILDREN_OF` and `DESCRIBE` use beyond the row's own
+ * (`reg out field record none describe childrenOf reprOf late clean
+ * isLeaf`), for a query that writes rows without listing children.
+ */
+const ROW_TEMPS = 'ro isDunder typeNameOf broke classCounts classData isMethodType tooLong';
 
 const PREAMBLE = `field := Character codePoint: 31.
 record := Character codePoint: 30.
@@ -598,7 +615,8 @@ export function parseChildren(raw: string): PauseVariable[] {
     .split(RECORD)
     .filter((r) => r.length > 0)
     .map((record): PauseVariable => {
-      const [name, value, type, ref, indexed, named, handle, size, readOnly] = record.split(FIELD);
+      const [name, value, type, ref, indexed, named, handle, size, readOnly, kind] =
+        record.split(FIELD);
       const int = (s: string | undefined): number => Number.parseInt(s ?? '', 10) || 0;
       return {
         name: name ?? '?',
@@ -610,6 +628,7 @@ export function parseChildren(raw: string): PauseVariable[] {
         handle: int(handle),
         size: size === undefined || size === '' ? -1 : int(size),
         readOnly: readOnly === '1',
+        ...(kind ? { kind: kind as ChildKind } : {}),
       };
     });
 }
@@ -968,4 +987,467 @@ ${withQuietConsole(`
   describe value: 'value' value: obj.
 ${LIST_CHILDREN}`)}
 out contents encodeAsUTF8]`;
+}
+
+// ---------------------------------------------------------------------------
+// The Debug Console and the Watch pane.
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a frame's console names come from: its Locals (a registry position,
+ * 0 for none) over its globals. Those are the pause's Globals (a registry
+ * position) for a frame in the notebook's cells or the `.py` run's own file,
+ * and for a frame in an imported module, that module's, found by its file.
+ */
+export interface ConsoleScope {
+  locals: number;
+  globals: number;
+  moduleFile?: string;
+}
+
+/** One frame of a console error's traceback, outermost first. */
+export interface TracebackFrame {
+  /** A real path, or `<grail>` for the console's input or a notebook cell. */
+  file: string;
+  line: number;
+  name: string;
+  /** Text from the frame's line, as Grail's codegen recorded it — often a slice. */
+  text: string;
+}
+
+/** A console line's exception, as data. */
+export interface ConsoleError {
+  /** The type as a traceback's last line names it: `ZeroDivisionError`, `json.JSONDecodeError`. */
+  type: string;
+  message: string;
+  /** Where a SyntaxError could not read: 1-based line and column, and the line. */
+  syntax?: { file: string; line: number; offset: number; text: string };
+  frames: TracebackFrame[];
+}
+
+/**
+ * For a console line that is a bare name: `persisted` when its value is the
+ * Persisted Objects entry of that key, rather than a name of the paused code's
+ * own or one the console bound.
+ */
+export type NameOrigin = 'persisted';
+
+/** What `consoleQuery` answered. */
+export type ConsoleReply = { consoleRef: number; output: string } & (
+  | { kind: 'value'; row: PauseVariable; origin?: NameOrigin }
+  | { kind: 'none' }
+  | { kind: 'error'; error: ConsoleError }
+  | { kind: 'interrupted' }
+  | { kind: 'failed'; message: string }
+);
+
+/**
+ * Smalltalk that finds frame `scope`'s console scope at registry entry
+ * `consoleRef`, or makes it and registers it, leaving it in `console` and its
+ * position in `cref` (`consoleQuery` says what it holds). Needs the temps
+ * `reg dispatcher cref console dict g l bind nameAst none`.
+ */
+function consoleScopeSetup(scope: ConsoleScope, consoleRef: number): string {
+  const findModule = scope.moduleFile
+    ? `g := [dispatcher evaluateSource: '${escapeString(
+        [
+          'import sys as _gemdb_sys',
+          '_gemdb_found = None',
+          'for _gemdb_m in list(_gemdb_sys.modules.values()):',
+          `    if getattr(_gemdb_m, "__file__", None) == ${pythonString(scope.moduleFile)}:`,
+          '        _gemdb_found = _gemdb_m.__dict__',
+          '        break',
+          '_gemdb_found',
+        ].join('\n'),
+      )}' usingModuleScope: SymbolDictionary new]
+      on: AbstractException do: [:e | e return: nil].
+    (g notNil and: [g ~~ none and: [g respondsTo: #keysAndValuesDo:]])
+      ifTrue: [g keysAndValuesDo: [:k :x | bind value: k value: x]].`
+    : '';
+  return `reg := SessionTemps current at: #'${REGISTRY}' otherwise: nil.
+reg isNil ifTrue: [^ 'Error: the pause is over' encodeAsUTF8].
+dispatcher := System myUserProfile symbolList objectNamed: #'ModuleAst'.
+cref := ${consoleRef}.
+nameAst := System myUserProfile symbolList objectNamed: #'NameAst'.
+bind := [:k :x | | nm |
+  nm := k asString asSymbol.
+  nameAst notNil ifTrue: [nm := [nameAst doitScopeNameFor: nm] on: Error do: [:e | e return: nm]].
+  dict at: nm put: x].
+console := (cref between: 1 and: reg size) ifTrue: [reg at: cref] ifFalse: [nil].
+(console class == Array and: [console size = 4 and: [(console at: 1) == #gemdbConsole]]) ifFalse: [| persisted |
+  "Which names came from Persisted Objects, so a bare name typed later can say so."
+  persisted := SymbolDictionary new.
+  dict := SymbolDictionary new.
+  g := (${scope.globals} between: 1 and: reg size) ifTrue: [reg at: ${scope.globals}] ifFalse: [nil].
+  (g class == Array and: [g size >= 2 and: [(g at: 1) == #gemdbScope]])
+    ifTrue: [(g at: 2) keysAndValuesDo: [:k :x | bind value: k value: x]].
+  ${findModule}
+  "The frame's locals over its globals: a local shadows a global of its name."
+  l := (${scope.locals} between: 1 and: reg size) ifTrue: [reg at: ${scope.locals}] ifFalse: [nil].
+  (l class == Array and: [l size >= 2 and: [(l at: 1) == #gemdbScope]])
+    ifTrue: [(l at: 2) keysAndValuesDo: [:k :x | bind value: k value: x]].
+  "gemdb itself, unless the frame has a name of its own spelled so: a line copied from
+   Persisted Objects (gemdb.root[...]) then works in any program, imported or not."
+  (dict includesKey: #gemdb) ifFalse: [
+    g := [dispatcher evaluateSource: 'import gemdb
+gemdb' usingModuleScope: SymbolDictionary new] on: AbstractException do: [:e | e return: nil].
+    g notNil ifTrue: [dict at: #gemdb put: g]].
+  "persisted, the same entries by attribute (persisted.o), there even when o means something else.
+   Made once a session: its class is compiled on first use, and that is a write."
+  (dict includesKey: #persisted) ifFalse: [
+    g := SessionTemps current at: #'GemDbPersistedView' otherwise: nil.
+    g isNil ifTrue: [
+      g := [dispatcher evaluateSource: 'import gemdb
+class PersistedObjects:
+    """What Persisted Objects holds, by name: persisted.o is gemdb.root["o"]."""
+    def __getattr__(self, name):
+        try:
+            return gemdb.root[name]
+        except KeyError:
+            raise AttributeError(f"Persisted Objects has no {name!r}") from None
+    def __getitem__(self, key):
+        return gemdb.root[key]
+    def __dir__(self):
+        return sorted(k for k in gemdb.root.keys() if isinstance(k, str))
+    def __repr__(self):
+        return "Persisted Objects: " + (", ".join(self.__dir__()) or "nothing yet")
+PersistedObjects()' usingModuleScope: SymbolDictionary new]
+        on: AbstractException do: [:e | e return: nil].
+      g notNil ifTrue: [SessionTemps current at: #'GemDbPersistedView' put: g]].
+    g notNil ifTrue: [dict at: #persisted put: g]].
+  "Then what Persisted Objects holds, each under its key: o for gemdb.root['o']. Never over a
+   name the frame has, nor over a builtin (list, print), and only keys that are Python names."
+  g := [dispatcher evaluateSource: 'import gemdb, builtins, keyword
+[(k, v) for k, v in gemdb.root.items() if isinstance(k, str) and k.isidentifier() and not keyword.iskeyword(k) and not hasattr(builtins, k)]' usingModuleScope: SymbolDictionary new]
+    on: AbstractException do: [:e | e return: #()].
+  g do: [:pair | | nm |
+    nm := (pair at: 1) asString asSymbol.
+    nameAst notNil ifTrue: [nm := [nameAst doitScopeNameFor: nm] on: Error do: [:e | e return: nm]].
+    (dict includesKey: nm) ifFalse: [dict at: nm put: (pair at: 2). persisted at: nm put: (pair at: 2)]].
+  "The names it starts with, so the ones the console binds can be told apart (%names)."
+  console := { #gemdbConsole. dict. dict keys copy. persisted }.
+  reg add: console.
+  cref := reg size].
+`;
+}
+
+/**
+ * Smalltalk for **Show in Debug Console**: what to type at the console's
+ * prompt to reach registry entry `handle`'s object. When `name` — a Python
+ * identifier — already means that very object in the frame's console scope
+ * (a Locals or Globals row), the answer is
+ * `name`; otherwise the object is bound to `_`, Python's name for the last
+ * result, and the answer is `_`. Answers `<consoleRef> <name>`, or an
+ * `Error: …` line.
+ */
+export function consoleNameQuery(
+  scope: ConsoleScope,
+  consoleRef: number,
+  name: string,
+  handle: number,
+): string {
+  return `| reg dispatcher cref console dict g l bind nameAst none field record out o key |
+${PREAMBLE}
+${consoleScopeSetup(scope, consoleRef)}
+dict := console at: 2.
+${ROW_OBJECT(handle, 'o')}
+key := nil.
+${
+  name
+    ? `key := '${escapeString(name)}' asSymbol.
+nameAst notNil ifTrue: [key := [nameAst doitScopeNameFor: key] on: Error do: [:e | e return: key]].`
+    : ''
+}
+((key notNil and: [dict includesKey: key]) and: [(dict at: key) == o])
+  ifTrue: [^ (cref printString , ' ${escapeString(name)}') encodeAsUTF8].
+"Bound by Python itself: Grail carries \`_\` under a spelling of its own (measured: a read of a
+ dictionary's #'_' raised NameError for '___unused___')."
+dict at: #'_gemdb_shown' put: o.
+[dispatcher evaluateSource: '_ = _gemdb_shown' usingModuleScope: dict]
+  ensure: [dict removeKey: #'_gemdb_shown' ifAbsent: []].
+(cref printString , ' _') encodeAsUTF8`;
+}
+
+/**
+ * Smalltalk that runs Debug Console or watch input `source` in a frame's
+ * console scope and answers what came of it (`parseConsoleReply`).
+ *
+ * The scope is made on a frame's first line and kept in the pause's registry
+ * as `{#gemdbConsole. dict. startingNames. persisted}`, at `consoleRef` once made, so a name the
+ * console binds (`y = 5`, `import json`, a `def`) is there for the next line
+ * and gone with the registry at resume, as under debugpy. It is one
+ * SymbolDictionary run as a module scope: the frame's globals, copied, with
+ * its locals copied over them, so a local shadows a global as it does in the
+ * frame's own code, and a comprehension or lambda sees the locals — with
+ * locals in a dict of their own, as debugpy evaluates, it would not.
+ * `gemdb` is bound too when the frame has no name of that spelling, so a line
+ * copied from Persisted Objects (`gemdb.root["orders"]`) runs in a program
+ * that never imported it; and so is each entry of `gemdb.root` under its key
+ * (`orders`), below the frame's own names and never over a builtin, so what a
+ * user persisted is there by name at every later pause. `persisted` reaches
+ * the same entries by attribute (`persisted.o`), so a persisted object stays
+ * reachable by a short name when `o` means something else here.
+ * Because they are copies, rebinding a name (`x = 5`) stays in the console;
+ * the objects are the real ones, so `p.x = 10` changes the program's `p`.
+ * A frame's locals are keyed by their Python spelling, but a scope evaluated
+ * this way carries the six names that are Smalltalk pseudo-variables — `self`
+ * above all — under Grail's own stand-in, which `NameAst doitScopeNameFor:`
+ * answers (`___pyresv_self___`), so they are copied in under that; copied as
+ * `self`, a method's `self` read as undefined (measured).
+ *
+ * What the input prints is captured, as `withQuietConsole` does for a
+ * `__repr__`, and answered with the result. An exception is caught from
+ * Smalltalk, where Python never gave it a `__traceback__`; Grail's
+ * `pythonTracebackFrames` walks the stack the raise captured instead, which
+ * is the same walk Python's own outermost handler would have made. A soft
+ * break — the watch's time budget, or the user cancelling — lands as a
+ * ControlInterrupt and is answered as interrupted, not as an error in the
+ * user's code.
+ *
+ * `selfHandle`, when given, is a registry entry to run with as `self` — a
+ * Variables row's object, for **Evaluate with self…**. It is bound in a copy
+ * of the console scope, used for this input alone, so the frame's own `self`
+ * and the names the console has bound are left as they were.
+ */
+export function consoleQuery(
+  scope: ConsoleScope,
+  consoleRef: number,
+  source: string,
+  selfHandle = 0,
+  bareName = '',
+): string {
+  const origin = bareName
+    ? `kind == #value ifTrue: [| key |
+  key := '${escapeString(bareName)}' asSymbol.
+  nameAst notNil ifTrue: [key := [nameAst doitScopeNameFor: key] on: Error do: [:e | e return: key]].
+  (((console at: 4) includesKey: key) and: [((console at: 4) at: key) == r])
+    ifTrue: [origin := 'persisted']].`
+    : '';
+  return `| reg out field record none saved describe childrenOf reprOf late clean isLeaf dispatcher cref console dict g l r kind exc captured bind nameAst target origin ${ROW_TEMPS} |
+${PREAMBLE}
+${HELPERS}
+${CHILDREN_OF}
+${DESCRIBE}
+${consoleScopeSetup(scope, consoleRef)}target := console at: 2.
+${
+  selfHandle > 0
+    ? `${ROW_OBJECT(selfHandle, 'g')}
+dict := target copy.
+bind value: #self value: g.
+target := dict.`
+    : ''
+}
+kind := #value.
+exc := nil.
+captured := WriteStream on: Unicode7 new.
+saved := SessionTemps current at: #'GrailConsole' otherwise: nil.
+SessionTemps current at: #'GrailConsole' put: (Array with: captured).
+[r := [[dispatcher evaluateSource: '${escapeString(source)}' usingModuleScope: target]
+    on: AlmostOutOfStack do: [:e | kind := #stack. e return: nil]]
+  on: AbstractException do: [:e |
+    (e isKindOf: ControlInterrupt)
+      ifTrue: [kind := #interrupted]
+      ifFalse: [kind == #value ifTrue: [kind := #error. exc := e]].
+    e return: nil]]
+  ensure: [
+    saved isNil
+      ifTrue: [SessionTemps current removeKey: #'GrailConsole' ifAbsent: []]
+      ifFalse: [SessionTemps current at: #'GrailConsole' put: saved]].
+(kind == #value and: [r == none or: [r isNil]]) ifTrue: [kind := #none].
+origin := ''.
+${origin}
+out nextPutAll: kind; nextPut: field; print: cref; nextPut: field; nextPutAll: (clean value: captured contents);
+  nextPut: field; nextPutAll: origin; nextPut: record.
+kind == #value ifTrue: [
+  "The result's own row, as the Variables pane would write it, with its __repr__ quiet."
+  SessionTemps current at: #'GrailConsole' put: (Array with: (WriteStream on: Unicode7 new)).
+  [describe value: 'result' value: r] ensure: [
+    saved isNil
+      ifTrue: [SessionTemps current removeKey: #'GrailConsole' ifAbsent: []]
+      ifFalse: [SessionTemps current at: #'GrailConsole' put: saved]]].
+kind == #stack ifTrue: [
+  out nextPutAll: 'RecursionError'; nextPut: field; nextPutAll: 'maximum recursion depth exceeded'; nextPut: record].
+kind == #error ifTrue: [| payload frames tname msg attr sx |
+  attr := [:o :name | [o @env1:___pyAttrLoad___: name] on: AbstractException do: [:e | e return: nil]].
+  payload := [exc ensurePythonTraceback] on: AbstractException do: [:e | e return: exc].
+  frames := [exc pythonTracebackFrames] on: AbstractException do: [:e | e return: #()].
+  tname := [payload ___pythonTypeNameForTraceback___] on: AbstractException do: [:e | e return: exc class name asString].
+  msg := [payload ___safeStrForTraceback___] on: AbstractException do: [:e | e return: exc messageText asString].
+  "A SyntaxError says where it could not read, and str() of one is a tuple: its msg is the message."
+  sx := ((attr value: payload value: #'lineno') isNumber and: [(attr value: payload value: #'text') isString])
+    ifTrue: [{ attr value: payload value: #'filename'. attr value: payload value: #'lineno'.
+      attr value: payload value: #'offset'. attr value: payload value: #'text' }]
+    ifFalse: [nil].
+  (sx notNil and: [(attr value: payload value: #'msg') isString]) ifTrue: [msg := attr value: payload value: #'msg'].
+  out nextPutAll: (clean value: tname asString); nextPut: field; nextPutAll: (clean value: msg asString).
+  sx notNil ifTrue: [
+    out nextPut: field; nextPutAll: (clean value: ((sx at: 1) isString ifTrue: [sx at: 1] ifFalse: [''])); nextPut: field;
+      print: (sx at: 2); nextPut: field;
+      print: ((sx at: 3) isNumber ifTrue: [sx at: 3] ifFalse: [0]); nextPut: field;
+      nextPutAll: (clean value: (sx at: 4))].
+  out nextPut: record.
+  frames do: [:f |
+    out nextPutAll: (clean value: ((f at: 1) ifNil: ['<grail>']) asString); nextPut: field;
+      print: ((f at: 2) isNumber ifTrue: [f at: 2] ifFalse: [0]); nextPut: field;
+      nextPutAll: (clean value: ((f at: 3) ifNil: ['?']) asString); nextPut: field;
+      nextPutAll: (clean value: ((f at: 4) isString ifTrue: [f at: 4] ifFalse: [''])); nextPut: record]].
+out contents encodeAsUTF8`;
+}
+
+/**
+ * Smalltalk that puts in `into` the object of registry entry `handle`, the
+ * one a Variables row was registered with, or answers an `Error: …` line when
+ * there is none — a group row (`class variables`) or a scope is not an object.
+ */
+function ROW_OBJECT(handle: number, into: string): string {
+  return `${into} := (${handle} between: 1 and: reg size) ifTrue: [reg at: ${handle}] ifFalse: [nil].
+(${into} isNil or: [${into} class == Array and: [${into} size >= 2
+    and: [#(#gemdbScope #gemdbGroup #gemdbConsole) includes: (${into} at: 1)]]])
+  ifTrue: [^ 'Error: that row is not an object of its own' encodeAsUTF8].`;
+}
+
+/**
+ * Smalltalk that writes one row, named `name`, for the object of registry
+ * entry `handle` — what **Show in Debug Console** puts in the console — in
+ * `childrenQuery`'s format, or answers an `Error: …` line.
+ */
+export function describeRowQuery(handle: number, name: string): string {
+  return `| reg obj out field record none saved describe childrenOf reprOf late clean isLeaf ${ROW_TEMPS} |
+${PREAMBLE}
+reg := SessionTemps current at: #'${REGISTRY}' otherwise: nil.
+reg isNil ifTrue: [^ 'Error: the pause is over' encodeAsUTF8].
+${ROW_OBJECT(handle, 'obj')}
+${HELPERS}
+${CHILDREN_OF}
+${DESCRIBE}
+${withQuietConsole(`describe value: '${escapeString(name)}' value: obj`)}
+out contents encodeAsUTF8`;
+}
+
+/**
+ * Smalltalk answering the names bound in frame `scope`'s console since it was
+ * made — what the user typed, not the frame's own names — one per record, as
+ * `name`, field, `type`, field, short repr, in their Python spelling (`self`,
+ * not Grail's stand-in). GemDB's own `_gemdb…` names are left out, and so are
+Grail's own `___…___` ones that stay so spelled (a saved stack's console gains
+`___pyGlobals___` after it is made). For
+ * `%names`, and for completing a name after `%persist `.
+ */
+export function consoleNamesQuery(scope: ConsoleScope, consoleRef: number): string {
+  return `| reg dispatcher cref console dict g l bind nameAst none field record out names |
+${PREAMBLE}
+${consoleScopeSetup(scope, consoleRef)}
+dict := console at: 2.
+names := (dict keys reject: [:k | (console at: 3) includes: k]) asSortedCollection: [:a :b | a <= b].
+names do: [:k | | v nm tname text |
+  nm := nameAst isNil ifTrue: [k asString]
+    ifFalse: [[(nameAst doitScopeNameToPythonName: k) asString] on: Error do: [:e | e return: k asString]].
+  "Grail carries Python's _ under a spelling of its own (measured: ___unused___)."
+  nm = '___unused___' ifTrue: [nm := '_'].
+  ((nm size >= 6 and: [(nm copyFrom: 1 to: 6) = '_gemdb'])
+    or: [nm size > 6 and: [(nm copyFrom: 1 to: 3) = '___' and: [(nm copyFrom: nm size - 2 to: nm size) = '___']]])
+      ifFalse: [
+    v := dict at: k.
+    tname := [((v @env1:___pyAttrLoad___: #'__class__') @env1:___pyAttrLoad___: #'__name__') asString]
+      on: AbstractException do: [:e | e return: v class name asString].
+    text := [(v @env1:__repr__) asString] on: AbstractException do: [:e | e return: '?'].
+    text size > 80 ifTrue: [text := (text copyFrom: 1 to: 77) , '...'].
+    out nextPutAll: nm; nextPut: field; nextPutAll: tname; nextPut: field;
+      nextPutAll: (text collect: [:c | (c == field or: [c == record]) ifTrue: [$?] ifFalse: [c]]);
+      nextPut: record]].
+(cref printString , (String with: record) , out contents) encodeAsUTF8`;
+}
+
+/** Parse `consoleNamesQuery`'s answer: the console's position, and its names. */
+export function parseConsoleNames(raw: string): {
+  consoleRef: number;
+  names: Array<{ name: string; type: string; repr: string }>;
+} {
+  if (raw.startsWith('Error: ')) throw new Error(raw.slice('Error: '.length));
+  const [ref = '', ...records] = raw.split(RECORD);
+  return {
+    consoleRef: Number.parseInt(ref, 10) || 0,
+    names: records
+      .filter((r) => r.length > 0)
+      .map((r) => {
+        const [name = '', type = '', repr = ''] = r.split(FIELD);
+        return { name, type, repr };
+      }),
+  };
+}
+
+/**
+ * Smalltalk answering what Persisted Objects holds: the `gemdb.root` keys that
+ * are strings, separated by the field character, for the console's
+ * autocomplete. A read, run in the paused session, so it sees what the run
+ * has added too.
+ */
+export function persistedKeysQuery(): string {
+  return `| keys out |
+keys := [(System myUserProfile symbolList objectNamed: #'ModuleAst') evaluateSource: 'import gemdb
+sorted(k for k in gemdb.root.keys() if isinstance(k, str))' usingModuleScope: SymbolDictionary new]
+  on: AbstractException do: [:e | e return: #()].
+out := WriteStream on: Unicode7 new.
+keys do: [:k | out nextPutAll: k asString] separatedBy: [out nextPut: (Character codePoint: 31)].
+out contents encodeAsUTF8`;
+}
+
+/** Parse `persistedKeysQuery`'s answer. */
+export function parsePersistedKeys(raw: string): string[] {
+  return raw.split(FIELD).filter((k) => k.length > 0);
+}
+
+/** Parse `consoleQuery`'s answer. */
+export function parseConsoleReply(raw: string): ConsoleReply {
+  if (raw.startsWith('Error: ')) {
+    return { consoleRef: 0, output: '', kind: 'failed', message: raw.slice('Error: '.length) };
+  }
+  const [head = '', ...rest] = raw.split(RECORD);
+  const [kind, ref, printed, origin] = head.split(FIELD);
+  const consoleRef = Number.parseInt(ref ?? '', 10) || 0;
+  const output = (printed ?? '').replace(/\r\n?/g, '\n');
+  const records = rest.filter((r) => r.length > 0);
+  if (kind === 'value') {
+    const [row] = parseChildren(records.join(RECORD) + RECORD);
+    if (row) {
+      return {
+        consoleRef,
+        output,
+        kind,
+        row,
+        ...(origin === 'persisted' ? { origin } : {}),
+      };
+    }
+    return { consoleRef, output, kind: 'failed', message: 'The result could not be read.' };
+  }
+  if (kind === 'none' || kind === 'interrupted') return { consoleRef, output, kind };
+  if (kind === 'error' || kind === 'stack') {
+    const [type = '', message = '', file, line, offset, text] = (records[0] ?? '').split(FIELD);
+    const int = (s: string | undefined): number => Number.parseInt(s ?? '', 10) || 0;
+    const frames = records.slice(1).map((record): TracebackFrame => {
+      const [frameFile, frameLine, name, frameText] = record.split(FIELD);
+      return {
+        file: frameFile || '<grail>',
+        line: int(frameLine),
+        name: name || '?',
+        text: frameText ?? '',
+      };
+    });
+    return {
+      consoleRef,
+      output,
+      kind: 'error',
+      error: {
+        type,
+        message,
+        ...(line === undefined
+          ? {}
+          : {
+              syntax: { file: file ?? '', line: int(line), offset: int(offset), text: text ?? '' },
+            }),
+        frames,
+      },
+    };
+  }
+  return { consoleRef, output, kind: 'failed', message: raw || 'The console got no answer.' };
 }
