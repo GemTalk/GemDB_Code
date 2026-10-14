@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { __setSetting } from '../__mocks__/vscode';
+import { __resetSettings, __setSetting } from '../__mocks__/vscode';
 import { cliPath, ensureCliCurrent, putCliOnPath, writeCliScripts } from '../cli';
 import { STONE_LOCK_NAME } from '../lock';
 import { cliStampPath, expectedEnginePath } from '../paths';
@@ -35,6 +35,7 @@ function makeExtensionDir(): string {
 }
 
 beforeEach(() => {
+  __resetSettings();
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'gemdb-cli-'));
   ext = makeExtensionDir();
   __setSetting('gemdb.rootPath', root);
@@ -594,5 +595,64 @@ describe('starting the database', () => {
     expect(gslistCalls()).toBe(1);
     expect(stderr).toContain('the database is shutting down');
     expect(stderr).not.toContain("can't open file");
+  });
+
+  describe('for a database this machine’s administrator runs', () => {
+    /** The stubbed engine, configured as someone else's, with a stone named as the stubs name it. */
+    function external(): void {
+      __setSetting('gemdb.externalDatabase.gemstone', expectedEnginePath());
+      __setSetting('gemdb.externalDatabase.globalDirectory', root);
+      __setSetting('gemdb.externalDatabase.stone', 'gemdb');
+    }
+
+    const lock = (): string => path.join(root, STONE_LOCK_NAME);
+
+    it('starts nothing and takes no lock when the stone is not running', async () => {
+      external();
+      writeCliScripts(ext);
+      const { starts } = installEngineStubs();
+
+      const stderr = await runWrapper();
+
+      expect(fs.existsSync(starts)).toBe(false);
+      expect(fs.existsSync(lock())).toBe(false);
+      expect(stderr).toContain("It is run by this machine's administrator");
+    });
+
+    it('waits for a stone that is still starting, and never starts one', async () => {
+      external();
+      writeCliScripts(ext);
+      const { starts } = installEngineStubs();
+      stoneBecomes('Startup', 'OK', 2);
+
+      const stderr = await runWrapper();
+
+      expect(fs.existsSync(starts)).toBe(false);
+      expect(fs.existsSync(lock())).toBe(false);
+      expect(stderr).toContain('waiting for the database to finish starting');
+      expect(stderr).toContain("can't open file");
+    });
+
+    it('does not start a stone that disappears while starting, or point at a log of ours', async () => {
+      external();
+      writeCliScripts(ext);
+      const { starts } = installEngineStubs();
+      stoneBecomes('Startup', undefined, 2);
+
+      const stderr = await runWrapper();
+
+      expect(fs.existsSync(starts)).toBe(false);
+      expect(stderr).toContain('stopped while it was starting.');
+      expect(stderr).not.toContain('gemdb.log');
+    });
+
+    it('generates no way to reach startstone at all', () => {
+      external();
+      writeCliScripts(ext);
+
+      const wrapper = fs.readFileSync(cliPath(), 'utf8');
+      expect(wrapper).not.toContain('bin/startstone');
+      expect(wrapper).not.toContain(STONE_LOCK_NAME);
+    });
   });
 });

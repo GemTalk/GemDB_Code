@@ -567,18 +567,19 @@ wait_for_stone() {
 }
 
 STATUS=$(stone_status)
+[ "$STATUS" = shutdown ] && shutting_down
 ${
   external
     ? `# This machine's administrator runs the database, so a stopped stone is theirs
-# to start: starting it here would run it as this user.
+# to start: starting it here would run it as this user. So no lock and no
+# start, only a wait for one that is still starting.
 if [ -z "$STATUS" ]; then
   echo "gemdb: the database (stone $STONE) is not running. It is run by this machine's administrator." >&2
   exit 1
 fi
+wait_for_stone "$STATUS" ""
 `
-    : ''
-}[ "$STATUS" = shutdown ] && shutting_down
-if [ -z "$STATUS" ] || starting "$STATUS"; then
+    : `if [ -z "$STATUS" ] || starting "$STATUS"; then
   STONE_LOCK="$ROOT/.gemdb-stone.lock"
   # mkdir and the pid write are two steps, here and in the extension, so a
   # lock with no pid yet is one being taken right now. It is debris only once
@@ -674,6 +675,8 @@ if [ -z "$STATUS" ] || starting "$STATUS"; then
   # would fail. A minute, as the extension waits.
   wait_for_stone "$STATUS" " See $ROOT/db/log/$STONE.log"
 fi
+`
+}
 
 # The run's temporary files, removed however it ends: bash runs an EXIT trap
 # on a normal exit, and on SIGHUP (a terminal tab closed mid-run) and SIGTERM
