@@ -230,12 +230,13 @@ export const SHUTTING_DOWN_MESSAGE =
  * waiting — is polled until it is past `Startup`. A stone that disappears
  * while we wait failed to start, and one still starting after a minute is not
  * going to soon; both end in an error naming the stone's log, which says why.
- * A stone at `Shutdown` ends the wait at once: it is being stopped.
+ * A stone at `Shutdown` ends the wait at once: it is being stopped. Returns
+ * the last listing, so the caller need not take another.
  */
 export async function waitForStoneReady(
   report?: (message: string) => void,
   wait: { pollMs?: number; timeoutMs?: number } = {},
-): Promise<void> {
+): Promise<EngineProcess[]> {
   const stoneLog = path.join(databaseLogPath(), `${STONE_NAME}.log`);
   const deadline = Date.now() + (wait.timeoutMs ?? STONE_LOCK_TIMEOUT_MS);
   let running = await listProcessesAsync();
@@ -244,7 +245,7 @@ export async function waitForStoneReady(
     switch (stoneState(running)) {
       case 'ready':
       case 'other':
-        return;
+        return running;
       case 'stopping':
         throw new Error(SHUTTING_DOWN_MESSAGE);
       case 'absent':
@@ -323,9 +324,20 @@ export async function ensureProcesses(
   opts: { beforeStoneStart?: () => void; report?: (message: string) => void } = {},
 ): Promise<{ startedStone: boolean; startedNetldi: boolean }> {
   requireOwnDatabase('start');
+  // Every notebook cell lands here, and nearly always both are up: one
+  // listing and no lock then. Never for a stone starting or stopping, which
+  // the lock and the wait below are for.
+  const before = await listProcessesAsync();
+  const stoneUp = ['ready', 'other'].includes(stoneState(before));
+  if (stoneUp && findNetldi(before)) {
+    log('The database is already running.');
+    log('The session listener is already running.');
+    return { startedStone: false, startedNetldi: false };
+  }
   const started = await withStoneLock(
     async () => {
       let startedStone = false;
+      // Listed again: what was true before the lock may not be now.
       const state = stoneState(await listProcessesAsync());
       // Said here, before any wait: a stopping stone's last moments read
       // `Startup` before it disappears (measured), which a wait would report
@@ -340,10 +352,12 @@ export async function ensureProcesses(
       } else {
         log('The database is already running.');
       }
-      await waitForStoneReady(opts.report);
+      // The wait's last listing is recent enough to judge the listener by:
+      // it was taken after the stone, ours or not, finished starting.
+      const running = await waitForStoneReady(opts.report);
 
       let startedNetldi = false;
-      if (!findNetldi(await listProcessesAsync())) {
+      if (!findNetldi(running)) {
         opts.report?.('Starting the session listener…');
         startedNetldi = await startNetldi();
       } else {

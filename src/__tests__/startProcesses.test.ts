@@ -14,10 +14,12 @@ import { __log, __resetSettings, __setSetting } from '../__mocks__/vscode';
  */
 
 let listings: string[] = [];
+let gslistCalls = 0;
 const exitCodes: Record<string, number> = {};
 const spawned: string[] = [];
 
 function gslist(): string {
+  gslistCalls++;
   return listings.length > 1 ? (listings.shift() ?? '') : (listings[0] ?? '');
 }
 
@@ -84,6 +86,7 @@ beforeEach(() => {
   fs.mkdirSync(path.join(expectedEnginePath(), 'bin'), { recursive: true });
   fs.writeFileSync(path.join(expectedEnginePath(), 'bin', 'gslist'), '');
   listings = [];
+  gslistCalls = 0;
   spawned.length = 0;
   satisfied = undefined;
   for (const key of Object.keys(exitCodes)) delete exitCodes[key];
@@ -105,8 +108,47 @@ describe('ensureProcesses', () => {
     expect(beforeStoneStart).not.toHaveBeenCalled();
   });
 
+  it('asks gslist once and takes no lock when both are up, as every cell finds them', async () => {
+    listings = [BOTH_UP];
+
+    await ensureProcesses();
+
+    expect(gslistCalls).toBe(1);
+    expect(satisfied).toBeUndefined();
+  });
+
+  it('takes the lock and waits for a stone that is starting, even with a listener up', async () => {
+    const starting = [STONE_STARTING, LISTENER_UP].join('\n');
+    listings = [starting, starting, starting, BOTH_UP];
+    const report = vi.fn();
+
+    const started = await ensureProcesses({ report });
+
+    expect(started).toEqual({ startedStone: false, startedNetldi: false });
+    expect(satisfied).toBeDefined();
+    expect(report).toHaveBeenCalledWith('Waiting for the database to finish starting…');
+  });
+
+  it('takes the lock for a stone that is shutting down, even with a listener up', async () => {
+    listings = [[row('Shutdown', 'Stone', 'gemdb'), LISTENER_UP].join('\n')];
+
+    await expect(ensureProcesses()).rejects.toThrow('The database is shutting down');
+    expect(spawned).toEqual([]);
+  });
+
+  it('asks gslist no more often than before the fast path on a cold start', async () => {
+    // Before the lock, inside it, and once the stone is up; the listener is
+    // judged from that last one.
+    listings = ['', '', STONE_UP];
+
+    await ensureProcesses();
+
+    expect(gslistCalls).toBe(3);
+  });
+
   it('starts both, guards first, when neither is up', async () => {
-    listings = ['', STONE_UP];
+    // Before the lock, inside it, then the stone after starting it.
+    listings = ['', '', STONE_UP];
     const beforeStoneStart = vi.fn(() => {
       expect(spawned).toEqual([]);
     });
@@ -144,7 +186,7 @@ describe('ensureProcesses', () => {
 
   it('looks for the listener again after starting the stone, not at a list from before', async () => {
     // Another process started the listener while this one started the stone.
-    listings = ['', BOTH_UP];
+    listings = ['', '', BOTH_UP];
 
     const started = await ensureProcesses();
 
@@ -186,7 +228,8 @@ describe('ensureProcesses', () => {
   });
 
   it('stops waiting for the lock only once both are up and answering', async () => {
-    listings = [BOTH_UP];
+    // Anything short of both up takes the lock, which is what records the wait.
+    listings = [STONE_UP];
     await ensureProcesses();
     const check = async (listing: string): Promise<boolean | undefined> => {
       listings = [listing];
@@ -235,7 +278,7 @@ describe('a stone that is still starting', () => {
   });
 
   it('holds back the listener until it is ready', async () => {
-    listings = [STONE_STARTING, STONE_STARTING, STONE_UP];
+    listings = [STONE_STARTING, STONE_STARTING, STONE_STARTING, STONE_UP];
     const report = vi.fn();
 
     const started = await ensureProcesses({ report });
