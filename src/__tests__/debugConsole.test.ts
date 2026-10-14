@@ -525,6 +525,29 @@ describe('a console run through a host (debugConsole)', () => {
     expect(query.mock.calls[0][0]).toMatch(/\(7 between: 1 and: reg size\)/);
     expect(query.mock.calls[0][1]).toMatchObject({ budget: false });
   });
+
+  it('answers a failed watch with the one line that says what went wrong, not the traceback', async () => {
+    const failed =
+      rec('error', 3, '', '') +
+      rec('NameError', "name 'grand_total' is not defined", '', 1, 0, 'x');
+    const con = debugConsole({
+      query: () => Promise.resolve(failed),
+      ownerKey: 'nb',
+      consoles: new Map(),
+    });
+
+    const watched = await con.evaluate!('grand_total', 1, 'watch', new AbortController().signal);
+    const typed = await con.evaluate!('grand_total', 1, 'repl', new AbortController().signal);
+
+    expect(watched).toMatchObject({
+      kind: 'error',
+      traceback: "NameError: name 'grand_total' is not defined",
+    });
+    // The console keeps the whole traceback, ending in that line.
+    expect(typed.kind === 'error' && typed.traceback).toMatch(
+      /Debug Console, line 1[\s\S]*\nNameError: name 'grand_total' is not defined$/,
+    );
+  });
 });
 
 describe('putting a Variables row in the Debug Console', () => {

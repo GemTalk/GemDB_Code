@@ -1784,7 +1784,12 @@ async function evaluateAt(
       return {
         kind: 'error',
         output,
-        traceback: jupyterTraceback(reply.error, placeFrame(host.ownerKey, source)),
+        // A watch row shows one line, and a traceback's first is its rule: a
+        // watch gets the line that says what went wrong instead.
+        traceback:
+          context === 'watch'
+            ? `${reply.error.type}: ${reply.error.message}`
+            : jupyterTraceback(reply.error, placeFrame(host.ownerKey, source)),
       };
     case 'failed':
       return { kind: 'error', output, traceback: reply.message };
