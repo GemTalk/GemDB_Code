@@ -49,7 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Python: `%persist p` adds `p` to Persisted Objects (or `%persist expr as key`), shown there as
   added until the notebook commits; `%commit` commits the notebook; `%names` lists the names you
   have bound in the console at this pause; `%help` lists the commands. Typing `%` suggests them,
-  and `%persist ` suggests your console names. The first pause in a window says so, once.
+  and `%persist ` suggests your console names. The first pause in a window says so, once. `gemdb`
+  is available in the console without an import, so a line copied from Persisted Objects
+  (`gemdb.root["orders"]`) works in any program.
 
 ### Fixed
 

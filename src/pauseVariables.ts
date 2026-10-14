@@ -1077,6 +1077,12 @@ console := (cref between: 1 and: reg size) ifTrue: [reg at: cref] ifFalse: [nil]
   l := (${scope.locals} between: 1 and: reg size) ifTrue: [reg at: ${scope.locals}] ifFalse: [nil].
   (l class == Array and: [l size >= 2 and: [(l at: 1) == #gemdbScope]])
     ifTrue: [(l at: 2) keysAndValuesDo: [:k :x | bind value: k value: x]].
+  "gemdb itself, unless the frame has a name of its own spelled so: a line copied from
+   Persisted Objects (gemdb.root[...]) then works in any program, imported or not."
+  (dict includesKey: #gemdb) ifFalse: [
+    g := [dispatcher evaluateSource: 'import gemdb
+gemdb' usingModuleScope: SymbolDictionary new] on: AbstractException do: [:e | e return: nil].
+    g notNil ifTrue: [dict at: #gemdb put: g]].
   "The names it starts with, so the ones the console binds can be told apart (%names)."
   console := { #gemdbConsole. dict. dict keys copy }.
   reg add: console.
@@ -1133,6 +1139,9 @@ dict at: #'_gemdb_shown' put: o.
  * its locals copied over them, so a local shadows a global as it does in the
  * frame's own code, and a comprehension or lambda sees the locals — with
  * locals in a dict of their own, as debugpy evaluates, it would not.
+ * `gemdb` is bound too when the frame has no name of that spelling, so a line
+ * copied from Persisted Objects (`gemdb.root["orders"]`) runs in a program
+ * that never imported it.
  * Because they are copies, rebinding a name (`x = 5`) stays in the console;
  * the objects are the real ones, so `p.x = 10` changes the program's `p`.
  * A frame's locals are keyed by their Python spelling, but a scope evaluated

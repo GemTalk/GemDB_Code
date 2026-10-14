@@ -957,7 +957,8 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
         seen.persistAs = await said('%persist items[0] as first_item');
         seen.noKey = await said('%persist items[0]');
         seen.names = await said('%names');
-        seen.inRoot = await dap.value('__import__("gemdb").root["p"]');
+        // As Persisted Objects copies it: the program never imported gemdb, and it still works.
+        seen.inRoot = await dap.value('gemdb.root["p"]');
         const complete = async (text: string) =>
           (
             (await dap.request('completions', { text, column: text.length + 1, frameId: 1 })).body
