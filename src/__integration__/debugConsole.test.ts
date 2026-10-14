@@ -13,7 +13,15 @@ import {
 import { PauseDebugAdapter, registerBreakpointDebugger } from '../debugger';
 import { fileOwner } from '../fileOwner';
 import { stageGrail } from '../grail';
-import { abortQuery, needsCommitQuery } from '../pauseVariables';
+import {
+  abortQuery,
+  childrenQuery,
+  commitQuery,
+  needsCommitQuery,
+  parseChildren,
+  parsePausedStack,
+  pausedStackQuery,
+} from '../pauseVariables';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
 import { PyResult, runPython, runPythonFile } from '../pythonQueries';
 import {
@@ -22,7 +30,16 @@ import {
   executeAsync,
   logoutAll,
   sessionForIfOpen,
+  setHaltHandler,
 } from '../session';
+import { savedStackConsole, stackOwner, stackQuery } from '../savedObjects';
+import {
+  SavedFrame,
+  openStackQuery,
+  parseOpenedStack,
+  restoredFrames,
+  saveStackQuery,
+} from '../savedStacks';
 import { createDatabaseWithPython, Fixture, haveTestExtent, makeFixture } from './fixture';
 
 /**
@@ -1061,6 +1078,155 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
       list: '[1, 2]',
       // Persisted names are there to use, not names the user bound here: only kept2 is.
       names: 'kept2: list = [1, 2]\n',
+    });
+  });
+});
+
+describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console on a saved stack', () => {
+  it('evaluates, binds names and changes a stack opened again, and commits only on %commit', async () => {
+    const nb = notebook('dc-saved-stack');
+    const other = notebook('dc-saved-stack-other');
+    const cell = [
+      'class Employee:',
+      '    def __init__(self, name, reports=()):',
+      '        self.name = name',
+      '        self.reports = list(reports)',
+      '    def find(self, name, depth=0):',
+      '        if self.name == name:',
+      '            breakpoint()',
+      '            return self',
+      '        for r in self.reports:',
+      '            found = r.find(name, depth + 1)',
+      '            if found:',
+      '                return found',
+      '        return None',
+      'ceo = Employee("Ada", [Employee("Grace", [Employee("Barbara")])])',
+      'ceo.find("Barbara")',
+    ].join('\n');
+    // Saved at the pause as Add Stack does, then committed by the notebook.
+    setHaltHandler(async (request) => {
+      const { frames } = parsePausedStack(
+        await request.query(pausedStackQuery(request.process, nb.key)),
+      );
+      const savedFrames: SavedFrame[] = frames.map((f) => ({
+        name: f.name,
+        line: f.line,
+        column: f.column + 1,
+        end_column: null,
+        source_name: 'Cell [1]',
+        path: 'vscode-notebook-cell:/gone/dc-saved-stack.ipynb#W0',
+        text: cell,
+      }));
+      await request.query(
+        saveStackQuery(
+          'stack_dc',
+          { label: 'dc-saved-stack.ipynb', notebook: nb.key, saved_at: 'today', description: null },
+          savedFrames,
+          frames.map((f) => f.locals ?? 0),
+          nb.key,
+        ),
+      );
+      return 'continue';
+    });
+    try {
+      await runPython(cell, nb);
+    } finally {
+      setHaltHandler(undefined);
+    }
+    await sessionForIfOpen(nb.key)!.executeAsync(commitQuery());
+    closeSessionFor(nb.key);
+
+    // Opened again, as Restore a Saved Stack does: in a session of its own.
+    const open = async () => {
+      const owner = stackOwner('stack_dc');
+      const query = stackQuery(owner);
+      const opened = parseOpenedStack(await query(openStackQuery('stack_dc'), { budget: false }));
+      const { consoles } = restoredFrames(opened.meta, opened.locals, opened.globals, {
+        fileExists: () => false,
+        openCellLines: () => undefined,
+      });
+      const con = await savedStackConsole(query, owner.key, consoles);
+      const line = async (source: string) => {
+        const answer = await con.evaluate!(source, 1, 'repl', new AbortController().signal);
+        return answer.kind === 'value'
+          ? { value: answer.value, printed: answer.output }
+          : {
+              value: answer.kind === 'error' ? answer.traceback : 'interrupted',
+              printed: answer.output,
+            };
+      };
+      return { owner, query, opened, con, line };
+    };
+    const elsewhere = async () =>
+      (
+        await runPython(
+          'import gemdb\ngemdb.abort()\ngemdb.root["stack_dc"]["frames"][0]["locals"]["self"].name',
+          other,
+        )
+      ).value;
+    const { owner, query, opened, con, line } = await open();
+    const seen: Record<string, unknown> = {};
+    // Plain reads, the first line of each frame among them: nothing to commit, nothing said.
+    seen.name = await line('self.name');
+    seen.local = await line('depth + 1');
+    seen.global = await line('ceo.name');
+    seen.method = await line('self.find("Barbara") is self');
+    seen.bind = await line('typed_here = 5');
+    seen.useBound = await line('typed_here + 1');
+    seen.names = (await con.consoleNames!(1)).map((v) => v.name);
+    seen.error = (await line('nope')).value;
+    // A change to a saved object: kept, and not committed.
+    seen.write = await line('self.name = "Changed"');
+    seen.afterWrite = await line('self.name');
+    seen.writeAgain = await line('self.name = "Changed again"');
+    seen.beforeCommit = await elsewhere();
+    // A Variables row, as Show in Debug Console and Evaluate with self… reach it.
+    const rows = parseChildren(await query(childrenQuery(opened.locals[0], 0, 500)));
+    const row = (name: string) => rows.find((r) => r.name === name)!;
+    const shown = await con.showRow!(row('name').handle, 'name');
+    seen.shown = shown.kind === 'value' ? shown.value : shown.kind;
+    const withSelf = await con.evaluate!(
+      'len(self.reports)',
+      1,
+      'repl',
+      new AbortController().signal,
+      row('self').handle,
+    );
+    seen.withSelf = withSelf.kind === 'value' ? withSelf.value : withSelf.kind;
+    seen.keys = (await con.persistedKeys!()).includes('stack_dc');
+    // %commit, as the adapter sends it: the saved stack now holds the change.
+    seen.committed = await query(commitQuery(), { budget: false });
+    seen.afterCommit = await elsewhere();
+    closeSessionFor(owner.key);
+    // Opened again and changed, then closed without a commit: the change is gone.
+    const again = await open();
+    seen.reopened = await again.line('self.name');
+    await again.line('self.name = "Never committed"');
+    closeSessionFor(again.owner.key);
+    seen.afterDiscard = await elsewhere();
+    closeSessionFor(other.key);
+
+    expect(seen).toEqual({
+      name: { value: "'Barbara'", printed: '' },
+      local: { value: '3', printed: '' },
+      global: { value: "'Ada'", printed: '' },
+      method: { value: 'True', printed: '' },
+      bind: { value: '', printed: '' },
+      useBound: { value: '6', printed: '' },
+      names: ['typed_here'],
+      error: expect.stringMatching(/NameError: name 'nope' is not defined/),
+      write: { value: '', printed: '' },
+      afterWrite: { value: "'Changed'", printed: '' },
+      writeAgain: { value: '', printed: '' },
+      beforeCommit: "'Barbara'",
+      // The frame's own argument `name`, which the change to self.name leaves alone.
+      shown: "'Barbara'",
+      withSelf: '0',
+      keys: true,
+      committed: "'committed'",
+      afterCommit: "'Changed again'",
+      reopened: { value: "'Changed again'", printed: '' },
+      afterDiscard: "'Changed again'",
     });
   });
 });

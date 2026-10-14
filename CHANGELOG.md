@@ -56,6 +56,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   labelled `orders is gemdb.root["orders"]` when typed; `persisted.orders` reaches it whatever
   `orders` means at the pause. Typing a name offers `persisted.orders` in autocomplete for each
   persisted entry it starts, and `persisted.` offers the keys.
+- **The Debug Console on a saved stack.** A stack reopened with **Restore a Saved Stack…** now has a
+  Debug Console, in each frame, on the saved objects: evaluate, call methods, bind names, change
+  objects, `%names`, `%persist`, `%commit`, Show in Debug Console and Evaluate with self…. The stack
+  opens in a database session of its own, so a change waits there uncommitted, as a notebook's
+  does. When the stack opens, the console warns that `%commit` (or ✓ in Persisted Objects) would
+  write a change into the saved stack, which then no longer holds the values it was saved with. Closing the stack
+  with changes pending asks whether to commit them; otherwise they are discarded.
 
 ### Fixed
 
@@ -231,7 +238,7 @@ The engine is unchanged at GemStone 4.0.0.a4, so a database created by GemDB
   Saved Stack…** (a button in Run and Debug, and in the GemDB panel) lists the saved stacks, or
   opens the only one, in Run and Debug again; Persisted Objects can open it from its row too — after
   a restart, and with the notebook or file gone. Each frame shows the copy of its source saved with
-  the stack, marked "(saved <time>)" in its tab and Call Stack row. It is a read-only snapshot: the run itself is not resumed.
+  the stack, marked "(saved <time>)" in its tab and Call Stack row. It is a snapshot: the run itself is not resumed.
 - **A Persisted Objects view** under GemDB, and in Run and Debug while a cell is paused, lists what
   `gemdb.root` has committed, with a check mark, and under each notebook the objects added from the
   debugger that it has not committed yet. Its title bar always has **Commit** and **Abort**, for the

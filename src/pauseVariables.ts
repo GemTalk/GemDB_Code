@@ -1328,7 +1328,9 @@ out contents encodeAsUTF8`;
  * Smalltalk answering the names bound in frame `scope`'s console since it was
  * made — what the user typed, not the frame's own names — one per record, as
  * `name`, field, `type`, field, short repr, in their Python spelling (`self`,
- * not Grail's stand-in). GemDB's own `_gemdb…` names are left out. For
+ * not Grail's stand-in). GemDB's own `_gemdb…` names are left out, and so are
+Grail's own `___…___` ones that stay so spelled (a saved stack's console gains
+`___pyGlobals___` after it is made). For
  * `%names`, and for completing a name after `%persist `.
  */
 export function consoleNamesQuery(scope: ConsoleScope, consoleRef: number): string {
@@ -1342,7 +1344,9 @@ names do: [:k | | v nm tname text |
     ifFalse: [[(nameAst doitScopeNameToPythonName: k) asString] on: Error do: [:e | e return: k asString]].
   "Grail carries Python's _ under a spelling of its own (measured: ___unused___)."
   nm = '___unused___' ifTrue: [nm := '_'].
-  (nm size >= 6 and: [(nm copyFrom: 1 to: 6) = '_gemdb']) ifFalse: [
+  ((nm size >= 6 and: [(nm copyFrom: 1 to: 6) = '_gemdb'])
+    or: [nm size > 6 and: [(nm copyFrom: 1 to: 3) = '___' and: [(nm copyFrom: nm size - 2 to: nm size) = '___']]])
+      ifFalse: [
     v := dict at: k.
     tname := [((v @env1:___pyAttrLoad___: #'__class__') @env1:___pyAttrLoad___: #'__name__') asString]
       on: AbstractException do: [:e | e return: v class name asString].

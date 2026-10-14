@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import { DapFrame, DapScope, Pause, scopesFor } from './debugger';
 import { FIELD } from './haltStack';
 import { runFileOf } from './fileOwner';
-import { MAIN_MODULE, MainModule, REGISTRY } from './pauseVariables';
+import { ConsoleScope, MAIN_MODULE, MainModule, REGISTRY } from './pauseVariables';
 import { escapeString } from './pythonQueries';
 
 /**
@@ -15,8 +15,11 @@ import { escapeString } from './pythonQueries';
  * This is a **snapshot**, not a continuation: each frame's name, position and
  * full source text, its locals as the real objects, and the notebook's
  * globals. Opening it rebuilds the Call Stack and Variables views from those
- * objects, read-only. Nothing is resumed — there is no process to resume —
- * so Continue and Stop just close it.
+ * objects, in a session of the stack's own, with a Debug Console on them
+ * (`savedObjects.ts`). Variables are read-only there; a console line can
+ * change the objects, which a commit then writes into the saved stack. Nothing
+ * is resumed — there is no process to resume — so Continue and Stop just
+ * close it.
  *
  * It is stored as an ordinary dict (`"kind": "gemdb.stack"`), so the
  * Persisted Objects view lists, commits, inspects and removes it like any
@@ -163,9 +166,9 @@ r encodeAsUTF8`;
 }
 
 /**
- * Smalltalk, for the extension's own session, that reads a committed saved
- * stack and registers its frames' locals and its globals for the Variables
- * view. Answers the stack's metadata as JSON, then each frame's locals ref,
+ * Smalltalk, for the session a saved stack is opened in, that reads it and
+ * registers its frames' locals and its globals for the Variables view and the
+ * Debug Console. Answers the stack's metadata as JSON, then each frame's locals ref,
  * then the globals ref (0 for none), separated by the field character.
  */
 export function openStackQuery(key: string): string {
@@ -204,6 +207,15 @@ g := r at: 3.
   ifFalse: [out nextPutAll: '0'].
 out contents encodeAsUTF8`;
 }
+
+/**
+ * What a saved stack's Debug Console says when the stack opens. Its objects
+ * are the stack's own, so a commit of a change made there writes into the
+ * saved stack. It starts with a badge in black on yellow (ANSI codes, which
+ * the Debug Console renders), so a glance tells a saved stack from a live run.
+ */
+export const SAVED_STACK_NOTE =
+  '\u001b[30;43m SAVED STACK \u001b[0m Changes stay uncommitted until %commit, which overwrites what was saved.\n';
 
 /** Parse `openStackQuery`'s answer. */
 export function parseOpenedStack(raw: string): {
@@ -315,15 +327,26 @@ export function restoredSource(
     : undefined;
 }
 
-/** The debugger's view of a saved stack: frames, scopes and the saved texts behind them. */
+/**
+ * The debugger's view of a saved stack: frames, scopes, the saved texts behind
+ * them, and where each frame's Debug Console finds its names — as a live
+ * pause's console does, a frame in an imported module looks that module up by
+ * its file.
+ */
 export function restoredFrames(
   meta: SavedStackMeta,
   locals: number[],
   globals: number,
   world: SourceWorld,
-): { frames: DapFrame[]; scopes: Map<number, DapScope[]>; texts: Map<number, string> } {
+): {
+  frames: DapFrame[];
+  scopes: Map<number, DapScope[]>;
+  texts: Map<number, string>;
+  consoles: Map<number, ConsoleScope>;
+} {
   const scopes = new Map<number, DapScope[]>();
   const texts = new Map<number, string>();
+  const consoles = new Map<number, ConsoleScope>();
   const frames = meta.frames.map((frame, index): DapFrame => {
     const id = index + 1;
     const source = restoredSource(frame, id, world, meta.saved_at);
@@ -334,6 +357,11 @@ export function restoredFrames(
       frame.path.startsWith('vscode-notebook-cell:') ||
       frame.path === runFileOf(meta.notebook);
     scopes.set(id, scopesFor(locals[index] ?? 0, ownFrame ? globals : 0));
+    consoles.set(id, {
+      locals: locals[index] ?? 0,
+      globals: ownFrame ? globals : 0,
+      ...(!ownFrame && frame.path ? { moduleFile: frame.path } : {}),
+    });
     return {
       id,
       name: frame.name,
@@ -343,7 +371,7 @@ export function restoredFrames(
       ...(source ? { source } : { presentationHint: 'subtle' as const }),
     };
   });
-  return { frames, scopes, texts };
+  return { frames, scopes, texts, consoles };
 }
 
 /** The world as it is: the disk, and the notebooks open in this window. */

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { commands, window } from '../__mocks__/vscode';
-import type { ConsoleAnswer, Pause } from '../debugger';
+import type { ConsoleAnswer, ConsoleHost, Pause } from '../debugger';
 import type { HaltHandler, RedDotSource } from '../session';
 
 /**
@@ -16,7 +16,8 @@ vi.mock('../session', () => ({
   setRedDotSource: (_source: RedDotSource | undefined) => {},
 }));
 
-const { PauseDebugAdapter, consoleTip, originLine } = await import('../debugger');
+const { PauseDebugAdapter, consoleTip, debugConsole, originLine, rowHandles } =
+  await import('../debugger');
 const { commitQuery } = await import('../pauseVariables');
 
 /** Let the adapter's promises run. */
@@ -476,10 +477,54 @@ describe('stopping a runaway line', () => {
   });
 });
 
-describe('a saved stack', () => {
-  it.todo(
-    'offers the console on a stack opened from the database read-only, or refuses it with a message — not decided yet',
-  );
+describe('rows a pause lists itself (rowHandles)', () => {
+  const row = (name: string, handle: number) =>
+    ({ name, value: '1', type: 'int', handle }) as Parameters<
+      ReturnType<typeof rowHandles>['remember']
+    >[1][number];
+
+  it('finds a listed row’s handle by its container and name, and nothing for one never listed', () => {
+    const rows = rowHandles();
+
+    rows.remember(4, [row('n', 17), row('m', 18)]);
+    rows.remember(5, [row('n', 30)]);
+
+    expect(rows.handleFor(4, 'n')).toBe(17);
+    expect(rows.handleFor(5, 'n')).toBe(30);
+    expect(rows.handleFor(4, 'x')).toBeUndefined();
+  });
+
+  it('keeps no handle for a row that has none', () => {
+    const rows = rowHandles();
+
+    rows.remember(4, [row('n', 0)]);
+
+    expect(rows.handleFor(4, 'n')).toBeUndefined();
+  });
+});
+
+describe('a console run through a host (debugConsole)', () => {
+  const F = '\u001f';
+  const R = '\u001e';
+  const rec = (...fields: Array<string | number>): string => fields.join(F) + R;
+
+  it('runs a line through its host, in the frame’s console names, and reads the answer', async () => {
+    const query = vi.fn<ConsoleHost['query']>(() =>
+      Promise.resolve(rec('value', 3, 'hi\n', '') + rec('t', '10', 'int', 0, 0, 0, 9)),
+    );
+    const con = debugConsole({
+      query,
+      ownerKey: 'saved-stack:s',
+      consoles: new Map([[2, { locals: 7, globals: 8 }]]),
+    });
+
+    const answer = await con.evaluate!('t', 2, 'repl', new AbortController().signal);
+
+    expect(answer).toMatchObject({ kind: 'value', value: '10', output: 'hi\n' });
+    // The frame's locals and globals, by registry position, and no time budget for a console line.
+    expect(query.mock.calls[0][0]).toMatch(/\(7 between: 1 and: reg size\)/);
+    expect(query.mock.calls[0][1]).toMatchObject({ budget: false });
+  });
 });
 
 describe('putting a Variables row in the Debug Console', () => {
@@ -674,7 +719,7 @@ describe('putting a Variables row in the Debug Console', () => {
     expect(c.responseTo(seq)?.body).toBeUndefined();
   });
 
-  it('refuses where the pause has no rows to show, such as a saved stack', async () => {
+  it('refuses where the pause has no console to show rows in', async () => {
     const { request, responseTo } = started(undefined);
 
     const seq = request('gemdbShowRow', { handle: 7, name: 'p' });
@@ -777,6 +822,23 @@ describe('GemDB’s % commands in the console', () => {
     expect(reply?.success).toBe(true);
   });
 
+  it('commits a saved stack’s own session on %commit, as a notebook’s', async () => {
+    vi.spyOn(commands, 'executeCommand').mockReturnValue(Promise.resolve());
+    const query = vi.fn((code: string) =>
+      Promise.resolve(code.includes('commit') ? "'committed'" : ''),
+    );
+
+    const { reply, said } = await command('%commit', {
+      saved: true,
+      query,
+      label: 'Saved stack: a.ipynb (today)',
+    });
+
+    expect(query).toHaveBeenCalledWith(commitQuery());
+    expect(said).toMatch(/Committed Saved stack: a\.ipynb \(today\)/);
+    expect(reply?.success).toBe(true);
+  });
+
   it('lists what the console has bound on %names', async () => {
     const consoleNames = vi
       .fn()
@@ -835,7 +897,22 @@ describe('GemDB’s % commands in the console', () => {
     expect(tip(second)).toEqual([]);
   });
 
-  it('shows no tip on a saved stack, where the console does not run', () => {
+  it('says a pause’s opening note when it opens, after the tip, every time', () => {
+    consoleTip.shown = false;
+    const said = (c: ReturnType<typeof started>) =>
+      c.events('output').map((e) => (e.body as { output: string }).output);
+
+    const first = started(vi.fn(), undefined, { openingNote: 'careful\n' });
+    const second = started(vi.fn(), undefined, { openingNote: 'careful\n' });
+
+    expect(said(first)).toEqual([
+      expect.stringMatching(/type % in the Debug Console/),
+      'careful\n',
+    ]);
+    expect(said(second)).toEqual(['careful\n']);
+  });
+
+  it('shows no tip where the pause has no console', () => {
     consoleTip.shown = false;
     const saved = started(undefined);
 

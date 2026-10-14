@@ -85,7 +85,7 @@ const SESSION_LIMIT_ERRORS = new Set([4039, 4041, 4050]);
 const GCI_LOGIN_QUIET = 0x10;
 
 /** What kind of user interface a session belongs to. */
-export type SessionKind = 'notebook' | 'file' | 'shell' | 'extension';
+export type SessionKind = 'notebook' | 'file' | 'shell' | 'extension' | 'stack';
 
 /**
  * Who a session is for.
@@ -138,6 +138,7 @@ const CACHE_NAME_TAGS: Record<SessionKind, string> = {
   file: 'GemDB py',
   shell: 'GemDB Shell',
   extension: 'GemDB Code',
+  stack: 'GemDB stack',
 };
 
 /**
@@ -501,7 +502,7 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * then how often it is broken again. A Variables row runs the user's own
  * `__repr__`, and one that never returns must not wedge the pause.
  */
-const PAUSED_QUERY_BUDGET_MS = 2000;
+export const PAUSED_QUERY_BUDGET_MS = 2000;
 
 /**
  * One logged-in session.

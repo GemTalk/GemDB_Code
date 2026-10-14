@@ -444,7 +444,11 @@ database, select that kernel from the kernel picker at the top right.
   goes in `gemdb.root` under the key you give (one is suggested) and is written at the notebook's
   next commit. The **Persisted Objects** view, under GemDB and in Run and Debug, lists what `gemdb.root`
   holds; its title bar always has **Commit** and **Abort** for the notebook you are working in. **Add Stack to Persisted Objects…** on the Call Stack saves the whole paused stack the same
-  way; once committed, Persisted Objects reopens it in the debugger, even after a restart.
+  way; once committed, Persisted Objects reopens it in the debugger, even after a restart. Its
+  Debug Console works on the saved objects: call a method, bind a name, change an object,
+  `%persist` one. A change waits uncommitted; the console says when the stack opens that `%commit`
+  (or ✓) would write it into the saved stack, and closing the stack asks whether to commit or
+  discard what is pending.
   **Debug Python File in GemDB** does the same for a `.py` file (see above). In the GemDB Shell
   and in **Run Python File in GemDB**, `breakpoint()` prints where it was and the code carries on.
 - Each notebook has its own session and its own transaction, so a commit in one notebook never
