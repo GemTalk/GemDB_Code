@@ -250,8 +250,9 @@ something GemDB could do on a user's behalf. The guard reads the repository's
 version with
 `copydbf -i` and refuses, naming both versions and the directory to delete.
 Checked in two places, and both are needed: `prepareFiles`, which is the
-first-install path, and `startProcesses` before the stone starts, because an
-extension update reaches that line without preparing anything — engine
+first-install path, and `assertSafeToStart` before the stone starts (the
+`beforeStoneStart` that `ensureProcesses` runs inside the stone lock), because
+an extension update reaches that line without preparing anything — engine
 downloaded, database present, Grail staged, so `isInstalled()` is true.
 
 **Below its free-space threshold the stone stops collecting garbage.** GemDB

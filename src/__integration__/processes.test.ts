@@ -3,7 +3,8 @@ import * as esbuild from 'esbuild';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { execFile } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
+import { NETLDI_NAME } from '../config';
 import { createDatabase } from '../database';
 import { isSharedMemoryConfigured } from '../osConfig';
 import { isListening, isRunning, listProcesses, stopNetldi, stopStone } from '../processes';
@@ -138,6 +139,24 @@ async function race(
     .map((line) => JSON.parse(line) as Report);
 }
 
+/**
+ * How many `netldid` processes are serving this fixture's listener. gslist
+ * cannot answer that: it keys rows by name and shows one row for two
+ * listeners, and two `startnetldi` run at once can both exit 0 and leave two.
+ * The fixture's root path is in each one's `-l` log argument, which keeps a
+ * developer's own `gemdbldi` out of the count.
+ */
+function netldidProcesses(): number {
+  const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = `netldid ${escape(NETLDI_NAME)} .*${escape(fixture!.root)}/`;
+  try {
+    return execFileSync('pgrep', ['-f', pattern], { encoding: 'utf8' }).split('\n').filter(Boolean)
+      .length;
+  } catch {
+    return 0; // pgrep exits 1 when nothing matches
+  }
+}
+
 /** What `gslist` lists, reduced to what the end state is judged on. */
 function listed(): { type: string; status: string }[] {
   return listProcesses().map((p) => ({ type: p.type, status: p.status }));
@@ -150,6 +169,8 @@ describe.skipIf(!canMakeFixture())('starting the database from two processes at 
     expect(reports.filter((r) => r.error)).toEqual([]);
     expect(reports).toHaveLength(2);
     expect(reports.filter((r) => r.startedStone)).toHaveLength(1);
+    expect(reports.filter((r) => r.startedNetldi)).toHaveLength(1);
+    expect(netldidProcesses()).toBe(1);
     expect(listed()).toEqual(
       expect.arrayContaining([
         { type: 'stone', status: 'OK' },
