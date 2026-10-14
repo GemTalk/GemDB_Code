@@ -15,11 +15,14 @@ import { __log, __resetSettings, __setSetting } from '../__mocks__/vscode';
 
 let listings: string[] = [];
 let gslistCalls = 0;
+/** When set, what gslist lists at a given time, instead of `listings`. */
+let listingAt: ((now: number) => string) | undefined;
 const exitCodes: Record<string, number> = {};
 const spawned: string[] = [];
 
 function gslist(): string {
   gslistCalls++;
+  if (listingAt) return listingAt(Date.now());
   return listings.length > 1 ? (listings.shift() ?? '') : (listings[0] ?? '');
 }
 
@@ -64,6 +67,7 @@ vi.mock('../lock', async (importOriginal) => {
 });
 
 const { expectedEnginePath } = await import('../paths');
+const { STONE_LOCK_NAME } = await import('../lock');
 const { ensureListener, ensureProcesses, stoneReady, stoneState, waitForStoneReady } =
   await import('../processes');
 const { parseGslist } = await import('../gslist');
@@ -87,12 +91,14 @@ beforeEach(() => {
   fs.writeFileSync(path.join(expectedEnginePath(), 'bin', 'gslist'), '');
   listings = [];
   gslistCalls = 0;
+  listingAt = undefined;
   spawned.length = 0;
   satisfied = undefined;
   for (const key of Object.keys(exitCodes)) delete exitCodes[key];
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -369,5 +375,84 @@ describe('putting the listener back after a declined force-stop', () => {
 
     expect(await ensureListener()).toBe(false);
     expect(spawned).toEqual([]);
+  });
+});
+
+/**
+ * Queued behind a start that holds the stone lock for longer than a minute,
+ * which the holder can: guards, startstone, a minute's wait for the stone and
+ * startnetldi, all inside the lock. The holder here is another live process.
+ */
+describe('waiting for the stone lock', () => {
+  /** Hold the lock as `pid` would, from now until `releaseAfterMs`, if given. */
+  function holdLock(pid: number, releaseAfterMs?: number): void {
+    const lock = path.join(root, STONE_LOCK_NAME);
+    fs.mkdirSync(lock);
+    fs.writeFileSync(path.join(lock, 'pid'), `${pid}\n`);
+    if (releaseAfterMs !== undefined) {
+      setTimeout(() => fs.rmSync(lock, { recursive: true, force: true }), releaseAfterMs);
+    }
+  }
+
+  /** Settle `promise` while fake time runs `ms`, so a rejection is never left unhandled. */
+  async function after<T>(
+    promise: Promise<T>,
+    ms: number,
+  ): Promise<{ value?: T; error?: Error; settled: boolean }> {
+    const outcome: { value?: T; error?: Error; settled: boolean } = { settled: false };
+    promise.then(
+      (value) => Object.assign(outcome, { value, settled: true }),
+      (error: Error) => Object.assign(outcome, { error, settled: true }),
+    );
+    await vi.advanceTimersByTimeAsync(ms);
+    return outcome;
+  }
+
+  it('outlasts a minute while the holder is visibly starting the stone', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    const t0 = Date.now();
+    // startstone for 20 s, then 50 s at Startup, then both up.
+    listingAt = (now) => (now - t0 < 20_000 ? '' : now - t0 < 70_000 ? STONE_STARTING : BOTH_UP);
+    holdLock(process.ppid, 70_000);
+
+    const outcome = await after(ensureProcesses(), 75_000);
+
+    expect(outcome.error).toBeUndefined();
+    expect(outcome.value).toEqual({ startedStone: false, startedNetldi: false });
+    expect(spawned).toEqual([]);
+  });
+
+  it('still gives up after a minute on a holder that shows nothing', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    listingAt = () => '';
+    holdLock(process.ppid);
+
+    const start = ensureProcesses();
+    expect((await after(start, 59_000)).settled).toBe(false);
+    const outcome = await after(start, 2_000);
+
+    expect(outcome.error?.message).toMatch(/Another process has been starting the database/);
+  });
+
+  it('gives up on a stone that never finishes starting, past the holder’s worst case', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    listingAt = () => STONE_STARTING;
+    holdLock(process.ppid);
+
+    const start = ensureProcesses();
+    expect((await after(start, 140_000)).settled).toBe(false);
+    const outcome = await after(start, 15_000);
+
+    expect(outcome.error?.message).toMatch(/Another process has been starting the database/);
+  });
+
+  it('says it is this window that is starting the database when it is', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    listingAt = () => '';
+    holdLock(process.pid);
+
+    const outcome = await after(ensureProcesses(), 65_000);
+
+    expect(outcome.error?.message).toMatch(/^This window has been starting the database/);
   });
 });

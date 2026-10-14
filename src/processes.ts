@@ -334,6 +334,7 @@ export async function ensureProcesses(
     log('The session listener is already running.');
     return { startedStone: false, startedNetldi: false };
   }
+  let seen = before;
   const started = await withStoneLock(
     async () => {
       let startedStone = false;
@@ -367,9 +368,12 @@ export async function ensureProcesses(
     },
     {
       satisfied: async () => {
-        const running = await listProcessesAsync();
-        return stoneReady(running) && listenerReady(running);
+        seen = await listProcessesAsync();
+        return stoneReady(seen) && listenerReady(seen);
       },
+      // A stone listed and not going down means whoever holds the lock is past
+      // startstone: waiting on it, or starting the listener beside it.
+      progressing: () => ['starting', 'ready', 'other'].includes(stoneState(seen)),
     },
   );
   return started ?? { startedStone: false, startedNetldi: false };

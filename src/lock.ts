@@ -504,6 +504,17 @@ export const STONE_LOCK_POLL_MS = 200;
 export const STONE_LOCK_TIMEOUT_MS = 60_000;
 
 /**
+ * How long past {@link STONE_LOCK_TIMEOUT_MS} a holder that is visibly
+ * getting somewhere keeps a waiter waiting. The holder keeps the lock through
+ * the pre-start guards (`copydbf -i` alone can take 30 s), `startstone`, up to
+ * a minute's wait for the stone and `startnetldi`, so a minute is not its
+ * worst case; this ceiling is above it. Progress counts for
+ * {@link STONE_LOCK_IDLE_MS} after it was last seen.
+ */
+export const STONE_LOCK_CEILING_MS = 150_000;
+export const STONE_LOCK_IDLE_MS = 30_000;
+
+/**
  * Run `work` while holding the stone lock, waiting for another process to
  * release it first.
  *
@@ -516,31 +527,54 @@ export const STONE_LOCK_TIMEOUT_MS = 60_000;
  * Waiting is the point: a caller that stepped aside used to carry on as if
  * the stone were up — to the listener and the Grail file-in — while the
  * wrapper was still starting it. `satisfied` is asked between polls, and true
- * ends the wait with undefined and `work` not run: for `startStone`, the stone
- * came up while we waited, which is what we were waiting for. A lock still
- * held after a minute is an error naming it, since only a person can say
- * whether whatever holds it is really still working.
+ * ends the wait with undefined and `work` not run: whoever held the lock
+ * brought up what we wanted, which is what we were waiting for. `progressing`
+ * is asked right after it, so it may judge by what `satisfied` just looked
+ * at: true means the holder is visibly getting somewhere, which keeps the wait
+ * going past the minute, up to {@link STONE_LOCK_CEILING_MS}. A lock still
+ * held after that is an error naming it, since only a person can say whether
+ * whatever holds it is really still working.
  */
 export async function withStoneLock<T>(
   work: () => Promise<T>,
-  wait: { satisfied?: () => boolean | Promise<boolean>; pollMs?: number; timeoutMs?: number } = {},
+  wait: {
+    satisfied?: () => boolean | Promise<boolean>;
+    progressing?: () => boolean;
+    pollMs?: number;
+    timeoutMs?: number;
+  } = {},
 ): Promise<T | undefined> {
   const lock = stoneLockPath();
   ensureRootPath();
-  const deadline = Date.now() + (wait.timeoutMs ?? STONE_LOCK_TIMEOUT_MS);
+  const start = Date.now();
+  const timeoutMs = wait.timeoutMs ?? STONE_LOCK_TIMEOUT_MS;
+  let lastProgress = -Infinity;
   let logged = false;
 
   while (!claimStoneLock(lock)) {
+    // Two starts in this one process wait on each other too, and "another
+    // process" would send the user looking for one that does not exist.
+    const ours = readStoneLockPid(lock) === String(process.pid);
     if (!logged) {
       logged = true;
-      log('Another process is starting the database; waiting for it.');
+      log(
+        ours
+          ? 'This window is already starting the database; waiting for it.'
+          : 'Another process is starting the database; waiting for it.',
+      );
     }
     await sleep(wait.pollMs ?? STONE_LOCK_POLL_MS);
     if (await wait.satisfied?.()) return undefined;
-    if (Date.now() > deadline) {
+    const now = Date.now();
+    if (wait.progressing?.()) lastProgress = now;
+    const stalled = now - start > timeoutMs && now - lastProgress > STONE_LOCK_IDLE_MS;
+    if (stalled || now - start > STONE_LOCK_CEILING_MS) {
       throw new Error(
-        `Another process has been starting the database for over a minute. ` +
-          `If nothing is, remove ${lock} and try again.`,
+        ours
+          ? 'This window has been starting the database for over a minute and has not ' +
+              'finished. See the GemDB log for what it is waiting on.'
+          : 'Another process has been starting the database for over a minute. ' +
+              `If nothing is, remove ${lock} and try again.`,
       );
     }
   }
