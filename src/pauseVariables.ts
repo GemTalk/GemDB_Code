@@ -33,6 +33,15 @@ import { escapeString } from './pythonQueries';
 export const REGISTRY = 'GemDbPauseRefs';
 
 /**
+ * SessionTemps key of the Persisted Objects view's registry: the objects its
+ * rows open, kept apart from the pause's because that one is dropped at every
+ * resume, and this view is read with nothing paused. It is started afresh by
+ * every reading of the view (`rootListingQuery`, `persistedRowsQuery`), so it
+ * holds no more than the rows the view has shown since.
+ */
+export const PERSISTED_REGISTRY = 'GemDbPersistedRefs';
+
+/**
  * The most rows one `variables` request answers. VS Code pages indexed
  * children by itself, so a container with more children than this reports
  * them as indexed — a dict too — and a scope, which VS Code never pages, ends
@@ -564,7 +573,8 @@ const LIST_CHILDREN = `
 
 /**
  * Smalltalk that lists the children of registry entry `ref`, `count` of them
- * from `start` (0-based), registering the expandable ones.
+ * from `start` (0-based), registering the expandable ones. `registry` is the
+ * pause's by default, or `PERSISTED_REGISTRY` for the Persisted Objects view.
  *
  * Names follow what a Python user reads: a dict entry by its key's repr (so
  * `'1'` and `1` differ), a list item by `[i]`, an attribute by its name.
@@ -576,13 +586,18 @@ const LIST_CHILDREN = `
  * they are noise. A key that merely starts with `__` is kept, and an ordinary
  * dict shows every entry, dunder keys included.
  */
-export function childrenQuery(ref: number, start: number, count: number): string {
+export function childrenQuery(
+  ref: number,
+  start: number,
+  count: number,
+  registry: string = REGISTRY,
+): string {
   return `| reg obj kids out field record none saved describe childrenOf start count last isDunder nameOf reprOf late clean isLeaf ro typeNameOf roIn groupOf emitGrouped withGroups moduleClass broke classCounts classData isMethodType tooLong |
 ${PREAMBLE}
 start := ${start}.
 count := ${count}.
 withGroups := true.
-reg := SessionTemps current at: #'${REGISTRY}' otherwise: nil.
+reg := SessionTemps current at: #'${registry}' otherwise: nil.
 obj := (reg notNil and: [${ref} between: 1 and: reg size]) ifTrue: [reg at: ${ref}] ifFalse: [nil].
 ${HELPERS}
 ${CHILDREN_OF}
@@ -930,11 +945,16 @@ export const ROOT_LISTING_LIMIT = 200;
  * are shown with the same bounded repr as the debugger's rows. `gemdb.root`
  * is a Python object (`_Root`), not a Smalltalk dictionary, so its entries
  * come from its own `items()`.
+ *
+ * Each entry is registered in a fresh `PERSISTED_REGISTRY`, so a row that has
+ * children opens with `childrenQuery(ref, …, PERSISTED_REGISTRY)` in the same
+ * session, against the view this listing took.
  */
 export function rootListingQuery(): string {
   return `| reg obj out field record none saved describe childrenOf reprOf late clean isLeaf dispatcher root ro isDunder typeNameOf broke classCounts classData isMethodType tooLong |
 ${PREAMBLE}
 reg := OrderedCollection new.
+SessionTemps current at: #'${PERSISTED_REGISTRY}' put: reg.
 ${HELPERS}
 ${CHILDREN_OF}
 ${DESCRIBE}
@@ -947,6 +967,35 @@ ${withQuietConsole(`
     key := pair at: 1.
     describe value: (key isString ifTrue: [key] ifFalse: [(reprOf value: key) ifNil: [key printString]])
       value: (pair at: 2)]`)}
+out contents encodeAsUTF8`;
+}
+
+/**
+ * Smalltalk, for a notebook's own session, that describes what `keys` hold
+ * in its `gemdb.root` — additions not committed yet, which only that session
+ * can see — one row each, named by its key, in `childrenQuery`'s format. Each
+ * is registered in a fresh `PERSISTED_REGISTRY`, as `rootListingQuery` does
+ * for what is committed, so its row opens in that session. A key no longer
+ * there is left out. No fresh view: the notebook's uncommitted work is the very
+ * thing being read.
+ */
+export function persistedRowsQuery(keys: string[]): string {
+  return `| reg obj out field record none saved describe childrenOf reprOf late clean isLeaf dispatcher pairs ro isDunder typeNameOf broke classCounts classData isMethodType tooLong |
+${PREAMBLE}
+reg := OrderedCollection new.
+SessionTemps current at: #'${PERSISTED_REGISTRY}' put: reg.
+${HELPERS}
+${CHILDREN_OF}
+${DESCRIBE}
+dispatcher := System myUserProfile symbolList objectNamed: #'ModuleAst'.
+pairs := dispatcher evaluateSource: '${escapeString(
+    [
+      'import gemdb',
+      `[(_k, gemdb.root[_k]) for _k in [${keys.map(pythonString).join(', ')}] if _k in gemdb.root]`,
+    ].join('\n'),
+  )}' usingModuleScope: SymbolDictionary new.
+${withQuietConsole(`
+  pairs do: [:pair | describe value: (pair at: 1) value: (pair at: 2)]`)}
 out contents encodeAsUTF8`;
 }
 

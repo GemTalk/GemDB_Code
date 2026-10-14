@@ -46,6 +46,20 @@ class FakeGem {
   /** Committed saved stacks, by key: what the snapshot answers when opened. */
   stacks = new Map<string, string>();
 
+  /**
+   * Objects that open, as the Persisted Objects registry holds them: an
+   * entry's key (or a field's name) to its position there, and each
+   * position's children, as `childrenQuery` answers them.
+   */
+  refs = new Map<string, number>();
+  fields = new Map<number, string>();
+
+  /** An entry's row as a listing writes it: with a registry position when it opens. */
+  private entryRow(key: string, type: string): string {
+    const ref = this.refs.get(key) ?? 0;
+    return row(key, `<${type}>`, type, ref, 0, ref ? 2 : 0, 1);
+  }
+
   run(session: string, code: string): string {
     this.queries.push({ session, code });
     const additions = this.additions(session);
@@ -62,8 +76,16 @@ class FakeGem {
     const openStack = /_s = gemdb\.root\["([^"]+)"\]/.exec(code);
     if (openStack) return this.stacks.get(openStack[1]) ?? 'Error: KeyError - ' + openStack[1];
     if (code.includes('list(gemdb.root.items())')) {
-      return [...this.committed]
-        .map(([key, type]) => row(key, `<${type}>`, type, 0, 0, 0, 1))
+      return [...this.committed].map(([key, type]) => this.entryRow(key, type)).join('');
+    }
+    const opened =
+      /GemDbPersistedRefs' otherwise: nil\.\nobj := \(reg notNil and: \[(\d+) between/.exec(code);
+    if (opened) return this.fields.get(Number(opened[1])) ?? '';
+    const keys = /for _k in \[(.*?)\] if _k in gemdb\.root/.exec(code);
+    if (keys) {
+      return (JSON.parse(`[${keys[1]}]`) as string[])
+        .filter((key) => additions.has(key))
+        .map((key) => this.entryRow(key, additions.get(key)!))
         .join('');
     }
     if (code.includes('System needsCommit')) return additions.size > 0 ? 'true' : 'false';
@@ -283,7 +305,7 @@ describe('the Persisted Objects view', () => {
     const { view } = setUp();
 
     const [root] = await topOf(view);
-    const entries = view.getChildren(root);
+    const entries = await view.getChildren(root);
 
     expect(item(view, root)).toMatchObject({
       label: 'gemdb.root',
@@ -320,7 +342,7 @@ describe('adding an object from the debugger', () => {
     });
     expect(gem.committed.size).toBe(0);
     const notebook = rows.find((r) => r.kind === 'notebook')!;
-    const [waiting] = view.getChildren(notebook);
+    const [waiting] = await view.getChildren(notebook);
     expect(item(view, waiting)).toMatchObject({
       label: 'employee_barbara',
       description: 'Employee · added, not persisted yet',
@@ -348,7 +370,7 @@ describe('adding an object from the debugger', () => {
     const rows = await topOf(view);
 
     const notebook = rows.find((r) => r.kind === 'notebook')!;
-    const [waiting] = view.getChildren(notebook);
+    const [waiting] = await view.getChildren(notebook);
     expect(item(view, waiting)).toMatchObject({
       label: 'p',
       description: 'list · added, not persisted yet',
@@ -470,7 +492,9 @@ describe('committing and aborting', () => {
     expect(gem.queries.some((q) => q.session === NB && q.code.includes('"committed"'))).toBe(true);
     expect(told).toHaveBeenCalledWith('Committed breakpoint.ipynb.');
     expect(rows.map((r) => r.kind)).toEqual(['root']);
-    expect(view.getChildren(rows[0]).map((e) => item(view, e).label)).toEqual(['employee_barbara']);
+    expect((await view.getChildren(rows[0])).map((e) => item(view, e).label)).toEqual([
+      'employee_barbara',
+    ]);
   });
 
   it('keeps the notebook an addition came from once it is committed, across a restart', async () => {
@@ -480,7 +504,7 @@ describe('committing and aborting', () => {
     await command('gemdb.savedObjects.commitNotebook')();
     const [root] = await topOf(view);
 
-    const [entry] = view.getChildren(root);
+    const [entry] = await view.getChildren(root);
     expect(item(view, entry).description).toBe('from breakpoint.ipynb · Employee = <Employee>');
     expect(store.values.get('gemdb.persistedObjectOrigins')).toMatchObject({
       employee_barbara: { notebook: 'breakpoint.ipynb', type: 'Employee' },
@@ -530,7 +554,7 @@ describe('committing and aborting', () => {
   it('commits from an added object’s row the notebook it waits in', async () => {
     const { view } = await withOneAddition();
     const rows = await topOf(view);
-    const [waiting] = view.getChildren(rows.find((r) => r.kind === 'notebook')!);
+    const [waiting] = await view.getChildren(rows.find((r) => r.kind === 'notebook')!);
 
     await command('gemdb.savedObjects.commit')(waiting);
 
@@ -546,7 +570,7 @@ describe('removing objects', () => {
     vi.spyOn(window, 'showInputBox').mockResolvedValue('draft');
     await command('gemdb.saveVariable')(variable('self', 5));
     const rows = await topOf(view);
-    const [waiting] = view.getChildren(rows.find((r) => r.kind === 'notebook')!);
+    const [waiting] = await view.getChildren(rows.find((r) => r.kind === 'notebook')!);
     const warned = vi.spyOn(window, 'showWarningMessage');
 
     await command('gemdb.savedObjects.remove')(waiting);
@@ -561,7 +585,7 @@ describe('removing objects', () => {
     gem.committed.set('a', 'Employee').set('b', 'Employee').set('c', 'Employee');
     const { view } = setUp();
     const [root] = await topOf(view);
-    const [a, , c] = view.getChildren(root);
+    const [a, , c] = await view.getChildren(root);
     const warned = vi.spyOn(window, 'showWarningMessage').mockResolvedValue('Remove' as never);
 
     await command('gemdb.savedObjects.remove')(a, [a, c]);
@@ -580,7 +604,7 @@ describe('removing objects', () => {
     const [root] = await topOf(view);
     vi.spyOn(window, 'showWarningMessage').mockResolvedValue(undefined as never);
 
-    await command('gemdb.savedObjects.remove')(view.getChildren(root)[0]);
+    await command('gemdb.savedObjects.remove')((await view.getChildren(root))[0]);
 
     expect(gem.committed.has('a')).toBe(true);
   });
@@ -589,7 +613,7 @@ describe('removing objects', () => {
     gem.committed.set('a', 'Employee').set('b', 'Employee');
     const { view } = setUp();
     const [root] = await topOf(view);
-    const [a, b] = view.getChildren(root);
+    const [a, b] = await view.getChildren(root);
     vi.spyOn(window, 'showWarningMessage').mockResolvedValue('Remove' as never);
 
     await command('gemdb.savedObjects.remove')(b, [a]);
@@ -624,7 +648,7 @@ describe('saved stacks', () => {
     const { view } = setUp();
 
     const [root] = await topOf(view);
-    const [entry] = view.getChildren(root);
+    const [entry] = await view.getChildren(root);
 
     expect(item(view, entry)).toMatchObject({
       label: 'stack_bp',
@@ -640,7 +664,7 @@ describe('saved stacks', () => {
     const { view } = setUp();
     const [root] = await topOf(view);
 
-    await command('gemdb.savedObjects.openStack')(view.getChildren(root)[0]);
+    await command('gemdb.savedObjects.openStack')((await view.getChildren(root))[0]);
 
     const [pause] = opened;
     expect(pause).toMatchObject({
@@ -714,7 +738,7 @@ describe('saved stacks', () => {
     const { view } = setUp();
     const [root] = await topOf(view);
 
-    await command('gemdb.savedObjects.openStack')(view.getChildren(root)[0]);
+    await command('gemdb.savedObjects.openStack')((await view.getChildren(root))[0]);
     const [pause] = opened;
     const warned = vi.spyOn(window, 'showWarningMessage');
     pause.answer('stop');
@@ -734,7 +758,7 @@ describe('saved stacks', () => {
     closedSessions.length = 0;
     const { view } = setUp();
     const [root] = await topOf(view);
-    await command('gemdb.savedObjects.openStack')(view.getChildren(root)[0]);
+    await command('gemdb.savedObjects.openStack')((await view.getChildren(root))[0]);
     const warned = vi.spyOn(window, 'showWarningMessage').mockResolvedValue('Commit' as never);
     // A console line changed something in the stack's session.
     gem.pending.set('saved-stack:stack_bp', new Map([['changed', 'Employee']]));
@@ -755,7 +779,7 @@ describe('saved stacks', () => {
     closedSessions.length = 0;
     const { view } = setUp();
     const [root] = await topOf(view);
-    await command('gemdb.savedObjects.openStack')(view.getChildren(root)[0]);
+    await command('gemdb.savedObjects.openStack')((await view.getChildren(root))[0]);
     vi.spyOn(window, 'showWarningMessage').mockResolvedValue(undefined as never);
     gem.pending.set('saved-stack:stack_bp', new Map([['changed', 'Employee']]));
 
@@ -772,7 +796,7 @@ describe('saved stacks', () => {
     const { view } = setUp();
     const [root] = await topOf(view);
     const told = vi.spyOn(window, 'showInformationMessage');
-    const entry = view.getChildren(root)[0];
+    const entry = (await view.getChildren(root))[0];
 
     await command('gemdb.savedObjects.openStack')(entry);
     await command('gemdb.savedObjects.openStack')(entry);
@@ -814,7 +838,9 @@ describe('saved stacks', () => {
       /^Added this stack to Persisted Objects as gemdb\.root\["stack_bp"\]/,
     );
     const notebook = rows.find((r) => r.kind === 'notebook')!;
-    expect(view.getChildren(notebook).map((r) => item(view, r).label)).toEqual(['stack_bp']);
+    expect((await view.getChildren(notebook)).map((r) => item(view, r).label)).toEqual([
+      'stack_bp',
+    ]);
     debug.activeDebugSession = undefined;
   });
 });
@@ -824,7 +850,7 @@ describe('the other row and title-bar actions', () => {
     gem.committed.set('a', 'Employee').set('b', 'Employee');
     const { view } = setUp();
     const [root] = await topOf(view);
-    const [a, b] = view.getChildren(root);
+    const [a, b] = await view.getChildren(root);
 
     await command('gemdb.savedObjects.copyAccess')(a, [a, b]);
 
@@ -847,7 +873,7 @@ describe('the other row and title-bar actions', () => {
     gem.committed.set('employee_barbara', 'Employee');
     const { view } = setUp();
     const [root] = await topOf(view);
-    const [entry] = view.getChildren(root);
+    const [entry] = await view.getChildren(root);
 
     const resolved = (await view.resolveTreeItem(item(view, entry) as never, entry)) as TreeItem;
 
@@ -864,12 +890,180 @@ describe('the other row and title-bar actions', () => {
     vi.spyOn(window, 'showInputBox').mockResolvedValue('draft');
     await command('gemdb.saveVariable')(variable('self', 5));
     const rows = await topOf(view);
-    const [waiting] = view.getChildren(rows.find((r) => r.kind === 'notebook')!);
+    const [waiting] = await view.getChildren(rows.find((r) => r.kind === 'notebook')!);
 
     await view.resolveTreeItem(item(view, waiting) as never, waiting);
 
     const hover = gem.queries.find((q) => q.code.includes('count := 12.'))!;
     expect(hover.session).toBe(NB);
     expect(hover.code).not.toContain('System abortTransaction.');
+  });
+});
+
+describe('opening a persisted object in the view', () => {
+  const COLLAPSED = 1;
+  const LEAF = 0;
+
+  /** gemdb.root holding `ceo`, an Employee whose `boss` opens in turn. */
+  function withCeo(): void {
+    gem.committed.set('ceo', 'Employee');
+    gem.refs.set('ceo', 1);
+    gem.fields.set(
+      1,
+      row('special variables', '', '', 2, 0, 3, 0, -1, 1) +
+        row('boss', '<Employee>', 'Employee', 3, 0, 1, 3, -1, 0, 'obj') +
+        row('name', "'Ada'", 'str', 0, 0, 0, 4, -1, 0),
+    );
+    gem.fields.set(3, row('name', "'Grace'", 'str', 0, 0, 0, 5, -1, 0));
+  }
+
+  const labels = (view: ReturnType<typeof setUp>['view'], rows: SavedRow[]) =>
+    rows.map((r) => [item(view, r).label, item(view, r).description]);
+
+  it('opens a committed entry with nothing paused, through GemDB’s own session', async () => {
+    withCeo();
+    const { view } = setUp();
+    const [root] = await topOf(view);
+    const [ceo] = await view.getChildren(root);
+
+    expect(item(view, ceo).collapsibleState).toBe(COLLAPSED);
+    const fields = await view.getChildren(ceo);
+
+    expect(labels(view, fields)).toEqual([
+      ['special variables', ''],
+      ['boss', '<Employee>'],
+      ['name', "'Ada'"],
+    ]);
+    const read = gem.queries.find((q) => q.code.includes("GemDbPersistedRefs' otherwise: nil"))!;
+    expect(read.session).toBe('extension');
+    // Not the pause's registry, which is dropped at every resume.
+    expect(read.code).not.toContain('GemDbPauseRefs');
+  });
+
+  it('opens a field that has children of its own, and leaves a plain value a leaf', async () => {
+    withCeo();
+    const { view } = setUp();
+    const [root] = await topOf(view);
+    const [ceo] = await view.getChildren(root);
+    const [, boss, name] = await view.getChildren(ceo);
+
+    expect(item(view, boss).collapsibleState).toBe(COLLAPSED);
+    expect(item(view, name).collapsibleState).toBe(LEAF);
+    expect(labels(view, await view.getChildren(boss))).toEqual([['name', "'Grace'"]]);
+    expect(view.getParent(boss)).toBe(ceo);
+  });
+
+  it('reads an opened object once, until the view is read again', async () => {
+    withCeo();
+    const { view } = setUp();
+    const [root] = await topOf(view);
+    const [ceo] = await view.getChildren(root);
+    const opens = () => gem.queries.filter((q) => q.code.includes("GemDbPersistedRefs' otherwise"));
+
+    const first = await view.getChildren(ceo);
+    const again = await view.getChildren(ceo);
+
+    expect(again).toBe(first);
+    expect(opens()).toHaveLength(1);
+  });
+
+  it('reads nothing for a row from before the view was read again, whose position no longer holds', async () => {
+    withCeo();
+    const { view } = setUp();
+    const [root] = await topOf(view);
+    const [ceo] = await view.getChildren(root);
+
+    await topOf(view);
+
+    expect(await view.getChildren(ceo)).toEqual([]);
+    expect(gem.queries.some((q) => q.code.includes("GemDbPersistedRefs' otherwise"))).toBe(false);
+  });
+
+  it('leaves an entry with no children, and a saved stack, closed', async () => {
+    gem.committed.set('count', 'int').set('stack_bp', 'dict');
+    gem.refs.set('stack_bp', 2);
+    gem.stacks.set('stack_bp', '');
+    const { view } = setUp();
+    const [root] = await topOf(view);
+    const [count, stack] = await view.getChildren(root);
+
+    expect(item(view, count).collapsibleState).toBe(LEAF);
+    // A saved stack opens in the debugger, from its own button.
+    expect(item(view, stack).collapsibleState).toBe(LEAF);
+  });
+
+  it('opens an addition not committed yet in its own notebook, where alone it exists', async () => {
+    pauseIn(NB);
+    connected.push({ key: NB, label: 'breakpoint.ipynb' });
+    gem.refs.set('draft', 1);
+    gem.fields.set(1, row('name', "'Barbara'", 'str', 0, 0, 0, 2, -1, 0));
+    const { view } = setUp();
+    vi.spyOn(window, 'showInputBox').mockResolvedValue('draft');
+    await command('gemdb.saveVariable')(variable('self', 5));
+    const rows = await topOf(view);
+    const [waiting] = await view.getChildren(rows.find((r) => r.kind === 'notebook')!);
+
+    expect(item(view, waiting).collapsibleState).toBe(COLLAPSED);
+    expect(labels(view, await view.getChildren(waiting))).toEqual([['name', "'Barbara'"]]);
+    // Both what it holds and what it opens to are read where it is, with no fresh view.
+    const listed = gem.queries.filter((q) => q.code.includes('if _k in gemdb.root'));
+    const opened = gem.queries.filter((q) => q.code.includes("GemDbPersistedRefs' otherwise"));
+    expect(new Set([...listed, ...opened].map((q) => q.session))).toEqual(new Set([NB]));
+    expect(opened).toHaveLength(1);
+    expect([...listed, ...opened].some((q) => q.code.includes('System abortTransaction.'))).toBe(
+      false,
+    );
+  });
+
+  it('says why an object could not be read, and tries again when opened again', async () => {
+    withCeo();
+    const { view } = setUp();
+    const [root] = await topOf(view);
+    const [ceo] = await view.getChildren(root);
+    gem.fields.set(1, 'Error: the gem is busy');
+
+    const [failed] = await view.getChildren(ceo);
+    gem.fields.set(1, row('name', "'Ada'", 'str', 0, 0, 0, 4, -1, 0));
+
+    expect(item(view, failed).label).toBe('Could not read it: the gem is busy');
+    expect(labels(view, await view.getChildren(ceo))).toEqual([['name', "'Ada'"]]);
+  });
+});
+
+describe('the rows under an opened object', () => {
+  const parent: SavedRow = { kind: 'message', text: 'parent' };
+  const child = (name: string) => ({
+    name,
+    value: '1',
+    type: 'int',
+    ref: 0,
+    indexed: 0,
+    named: 0,
+    handle: 1,
+    size: -1,
+    readOnly: false,
+  });
+
+  it('ends a list longer than a page with how many more there are', async () => {
+    const { PAGE } = await import('../pauseVariables');
+    const { fieldRows } = await import('../savedObjects');
+    const page = Array.from({ length: PAGE }, (_, i) => child(`[${i}]`));
+
+    const rows = fieldRows(parent, { session: 'extension' }, page, PAGE + 250);
+
+    expect(rows).toHaveLength(PAGE + 1);
+    expect(rows.at(-1)).toMatchObject({ kind: 'message', text: '… 250 more not shown' });
+  });
+
+  it('adds nothing when the rows already say so, or when they all fit', async () => {
+    const { PAGE } = await import('../pauseVariables');
+    const { fieldRows } = await import('../savedObjects');
+    const page = [...Array.from({ length: PAGE }, (_, i) => child(`a${i}`)), child('...')];
+
+    expect(fieldRows(parent, { session: 'extension' }, page, PAGE + 9)).toHaveLength(PAGE + 1);
+    // An object counts only its own attributes; the rows its dir() gives can outnumber them.
+    expect(fieldRows(parent, { session: 'extension' }, [child('a'), child('b')], 5)).toHaveLength(
+      2,
+    );
   });
 });

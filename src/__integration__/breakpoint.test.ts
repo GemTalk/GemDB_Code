@@ -5,6 +5,8 @@ import { stageGrail } from '../grail';
 import { PythonFrame, parsePythonStack, pythonStackQuery } from '../haltStack';
 import {
   MAIN_MODULE,
+  PAGE,
+  PERSISTED_REGISTRY,
   PauseVariable,
   abortQuery,
   childrenQuery,
@@ -17,6 +19,7 @@ import {
   parsePausedStack,
   parseSaveSuggestion,
   pausedStackQuery,
+  persistedRowsQuery,
   removeCommittedQuery,
   removeSavedQuery,
   rootListingQuery,
@@ -846,6 +849,51 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
     expect(failed).toBe(true);
     expect(printed.join('')).toBe('still printing\n');
     expect(result.value).toBe("'done'");
+  });
+
+  it('opens a persisted object with nothing paused: an addition in its notebook, then committed, in GemDB’s own', async () => {
+    const nb = notebook('bp-open-persisted');
+    await runPython(
+      [
+        'import gemdb',
+        'class P:',
+        '    def __init__(self, name, report=None):',
+        '        self.name = name',
+        '        self.report = report',
+        '        self.items = list(range(600))',
+        'gemdb.root["po_draft"] = P("Ada", P("Grace"))',
+      ].join('\n'),
+      nb,
+    );
+    const inNb = (code: string) => sessionForIfOpen(nb.key)!.executeAsync(code);
+    const byName = (rows: PauseVariable[], name: string) => rows.find((r) => r.name === name)!;
+    const open = async (run: (code: string) => Promise<string>, ref: number) =>
+      parseChildren(await run(childrenQuery(ref, 0, PAGE, PERSISTED_REGISTRY)));
+
+    // Not committed: only the notebook's own session sees it, and opens it there.
+    const pending = parseChildren(await inNb(persistedRowsQuery(['po_draft', 'po_not_there'])));
+    const draft = await open(inNb, pending[0].ref);
+    const report = await open(inNb, byName(draft, 'report').ref);
+
+    const commit = unquote(await inNb(commitQuery()));
+    const listed = byName(parseChildren(await executeAsync(rootListingQuery())), 'po_draft');
+    const committed = await open(executeAsync, listed.ref);
+    const items = await open(executeAsync, byName(committed, 'items').ref);
+    await executeAsync(removeCommittedQuery(['po_draft']));
+    // The database allows only so many sessions, and later tests need theirs.
+    closeSessionFor(nb.key);
+
+    expect(commit).toBe('committed');
+    expect(pending.map((r) => [r.name, r.type])).toEqual([['po_draft', 'P']]);
+    expect(pending[0].ref).toBeGreaterThan(0);
+    expect(byName(draft, 'name').value).toBe("'Ada'");
+    expect(byName(report, 'name').value).toBe("'Grace'");
+    expect(listed.ref).toBeGreaterThan(0);
+    expect(byName(committed, 'name').value).toBe("'Ada'");
+    // A list longer than a page reads its first page; the view says how many more.
+    expect(byName(committed, 'items')).toMatchObject({ indexed: 600, size: 600 });
+    expect(items).toHaveLength(PAGE);
+    expect(items[0]).toMatchObject({ name: '[0]', value: '0' });
   });
 
   it('saves a paused object under gemdb.root, for other sessions once the notebook commits', async () => {

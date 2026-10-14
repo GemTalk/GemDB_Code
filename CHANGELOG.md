@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Open a persisted object in the Persisted Objects view, with nothing paused.** Each entry under
+  `gemdb.root` opens like a Variables row, with its type badges and its special, class and function
+  variables folded, and what is inside it opens in turn. A committed entry is read by GemDB's own
+  session, so it opens any time, in a new window, after a restart; one added and not committed yet
+  is read by its notebook's session, while that notebook is not running a cell. A slow `__repr__`
+  is cut off at two seconds, as in Variables, and a list or dict longer than 500 items shows its first 500
+  and says how many more there are. A saved stack still opens in the debugger instead.
 - **The Debug Console and Watch work at a `breakpoint()` or red dot.** Type Python into the Debug
   Console and it runs in the frame selected in the Call Stack: its locals, closed-over names, its
   module's globals (an imported module's own, not the notebook's) and the builtins, as the paused

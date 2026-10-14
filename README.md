@@ -443,7 +443,11 @@ database, select that kernel from the kernel picker at the top right.
   dots in a cell (they work in `.py` files; see above). Right-click a Variables row and choose **Add to Persisted Objects…** to keep that object: it
   goes in `gemdb.root` under the key you give (one is suggested) and is written at the notebook's
   next commit. The **Persisted Objects** view, under GemDB and in Run and Debug, lists what `gemdb.root`
-  holds; its title bar always has **Commit** and **Abort** for the notebook you are working in. **Add Stack to Persisted Objects…** on the Call Stack saves the whole paused stack the same
+  holds. Each entry opens like a Variables row, with its type badges and groups, and you can keep
+  opening what is inside it, with nothing paused: a committed entry is read by GemDB's own session,
+  any time, even after a restart; one added and not committed yet is read by its notebook's, while
+  that notebook is not running a cell. A list or dict longer than 500 items shows its first 500. The view's
+  title bar always has **Commit** and **Abort** for the notebook you are working in. **Add Stack to Persisted Objects…** on the Call Stack saves the whole paused stack the same
   way; once committed, Persisted Objects reopens it in the debugger, even after a restart. Its
   Debug Console works on the saved objects: call a method, bind a name, change an object,
   `%persist` one. A change waits uncommitted; the console says when the stack opens that `%commit`

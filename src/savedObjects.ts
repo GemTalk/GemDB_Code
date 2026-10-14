@@ -15,6 +15,8 @@ import { runFileOf } from './fileOwner';
 import {
   ConsoleScope,
   MAIN_MODULE,
+  PAGE,
+  PERSISTED_REGISTRY,
   PauseVariable,
   ROOT_LISTING_LIMIT,
   abortQuery,
@@ -26,6 +28,7 @@ import {
   needsCommitQuery,
   parseChildren,
   parseSaveSuggestion,
+  persistedRowsQuery,
   removeCommittedQuery,
   removeSavedQuery,
   rootListingQuery,
@@ -49,6 +52,7 @@ import {
   stackKeyFor,
 } from './savedStacks';
 import {
+  EXTENSION_OWNER,
   PAUSED_QUERY_BUDGET_MS,
   SessionOwner,
   closeSessionFor,
@@ -60,13 +64,24 @@ import {
 } from './session';
 
 /**
- * Run Smalltalk in the extension's own session, one query at a time. The
- * view's reads and a saved stack's Variables share that session, and a
- * session runs one evaluation at a time.
+ * Run Smalltalk in the extension's own session, one query at a time: the
+ * view's reads share that session, and a session runs one evaluation at a
+ * time. With `budget`, the query is soft-broken every
+ * `PAUSED_QUERY_BUDGET_MS`, as a paused query is, so a slow `__repr__` in a
+ * row being opened cuts that row short rather than holding the session.
  */
 let extensionChain: Promise<unknown> = Promise.resolve();
-function extensionQuery(code: string): Promise<string> {
-  const run = extensionChain.then(() => executeAsync(code));
+function extensionQuery(code: string, { budget = false } = {}): Promise<string> {
+  const run = extensionChain.then(async () => {
+    const timer = budget
+      ? setInterval(() => interruptSessionFor(EXTENSION_OWNER.key), PAUSED_QUERY_BUDGET_MS)
+      : undefined;
+    try {
+      return await executeAsync(code);
+    } finally {
+      clearInterval(timer);
+    }
+  });
   extensionChain = run.catch(() => undefined);
   return run;
 }
@@ -92,9 +107,14 @@ function extensionQuery(code: string): Promise<string> {
  *
  * The view groups by notebook because a transaction belongs to a session and
  * each notebook has its own: its Commit and Abort act on that notebook alone.
- * Below the notebooks, `gemdb.root` lists what is committed, read by the
+ * Above the notebooks, `gemdb.root` lists what is committed, read by the
  * extension's own session after a fresh view, so it shows what every other
  * session will see.
+ *
+ * Every entry opens like a Variables row, with nothing paused, read in the
+ * session that holds it (`ReadIn`): the extension's for what is committed, the
+ * notebook's for an addition. The objects the rows open are kept in that
+ * session's `PERSISTED_REGISTRY`, which each reading of the view starts afresh.
  */
 
 /** The view under GemDB Code in the activity bar. */
@@ -180,14 +200,85 @@ export interface RootEntry {
   value: string;
   /** A stack saved from the debugger, which can be opened in it again. */
   stack?: boolean;
+  /** Its position in the extension session's `PERSISTED_REGISTRY` when it has children; else 0. */
+  ref?: number;
+  /** How many children it has, when it has a `ref`. */
+  children?: number;
 }
 
+/**
+ * The session a row's object is read in: the extension's own for what is
+ * committed, or the notebook's whose addition it is, since an object not
+ * committed yet exists only there.
+ */
+export type ReadIn = { session: 'extension' } | { session: 'notebook'; ownerKey: string };
+
 export type SavedRow =
-  | { kind: 'notebook'; notebook: NotebookState; saves: PendingSave[] }
-  | { kind: 'pending'; save: PendingSave }
+  | {
+      kind: 'notebook';
+      notebook: NotebookState;
+      saves: PendingSave[];
+      /** Each addition's row as its notebook read it, by key; absent while it runs a cell. */
+      read?: Map<string, PauseVariable>;
+    }
+  | { kind: 'pending'; save: PendingSave; ref?: number; children?: number }
   | { kind: 'root'; entries: RootEntry[] }
   | { kind: 'entry'; entry: RootEntry }
-  | { kind: 'message'; text: string };
+  /** One of an opened object's attributes, items or entries, or a group of them. */
+  | { kind: 'field'; field: PauseVariable; readIn: ReadIn; parent: SavedRow }
+  | { kind: 'message'; text: string; parent?: SavedRow };
+
+/**
+ * Where an expandable row's object is: the session to read it in, its
+ * registry position, and how many children it has. Undefined for a row that
+ * does not open. A saved stack does not: it opens in the debugger instead.
+ */
+export function openable(
+  row: SavedRow,
+): { readIn: ReadIn; ref: number; total: number } | undefined {
+  switch (row.kind) {
+    case 'entry':
+      return row.entry.ref && !row.entry.stack
+        ? { readIn: { session: 'extension' }, ref: row.entry.ref, total: row.entry.children ?? 0 }
+        : undefined;
+    case 'pending':
+      return row.ref
+        ? {
+            readIn: { session: 'notebook', ownerKey: row.save.ownerKey },
+            ref: row.ref,
+            total: row.children ?? 0,
+          }
+        : undefined;
+    case 'field':
+      return row.field.ref
+        ? { readIn: row.readIn, ref: row.field.ref, total: row.field.indexed + row.field.named }
+        : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * The rows under an opened object, from `childrenQuery`'s answer for its
+ * first `PAGE`. The view has no paging, so a container longer than that ends
+ * with a row saying how many more there are, as a scope does in the
+ * Variables. An object's rows say so themselves (`childrenQuery` writes a
+ * `...` row), and its count is only its own attributes, not the rows its
+ * `dir()` gives, so only a full page is taken as cut short.
+ */
+export function fieldRows(
+  parent: SavedRow,
+  readIn: ReadIn,
+  children: PauseVariable[],
+  total: number,
+): SavedRow[] {
+  const rows: SavedRow[] = children.map((field) => ({ kind: 'field', field, readIn, parent }));
+  const cut = children.length >= PAGE && total > children.length;
+  if (cut && !children.some((c) => c.name === '...')) {
+    rows.push({ kind: 'message', text: `… ${total - children.length} more not shown`, parent });
+  }
+  return rows;
+}
 
 /** Names that say nothing about the object: `self`, a loop variable, a temp. */
 const GENERIC_NAMES = new Set([
@@ -398,13 +489,29 @@ export function chooseNotebook(
   );
 }
 
-/** Run Smalltalk in a notebook's session: through its pause if it is paused, else directly. */
-async function inNotebook(ownerKey: string, code: string): Promise<string> {
+/**
+ * Run Smalltalk in a notebook's session: through its pause if it is paused,
+ * else directly. With `budget`, a direct run is soft-broken every
+ * `PAUSED_QUERY_BUDGET_MS`, as a paused query always is, for a read that runs
+ * the user's `__repr__`.
+ */
+async function inNotebook(
+  ownerKey: string,
+  code: string,
+  { budget = false } = {},
+): Promise<string> {
   const pause = pauseForOwner(ownerKey);
   if (pause?.query) return pause.query(code);
   const session = sessionForIfOpen(ownerKey);
   if (!session) throw new Error('That notebook has no database session.');
-  return session.executeAsync(code);
+  const timer = budget
+    ? setInterval(() => interruptSessionFor(ownerKey), PAUSED_QUERY_BUDGET_MS)
+    : undefined;
+  try {
+    return await session.executeAsync(code);
+  } finally {
+    clearInterval(timer);
+  }
 }
 
 /** A Python-side answer that is an `Error: …` line, as an exception. */
@@ -414,7 +521,13 @@ function orThrow(answer: string): string {
 }
 
 function toEntry(row: PauseVariable): RootEntry {
-  return { key: row.name, type: row.type, value: row.value };
+  return {
+    key: row.name,
+    type: row.type,
+    value: row.value,
+    ref: row.ref,
+    children: row.indexed + row.named,
+  };
 }
 
 /** Where the origins of committed additions are kept (global state). */
@@ -497,7 +610,8 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
   }
 
   getTreeItem(row: SavedRow): vscode.TreeItem {
-    const { Expanded, None } = vscode.TreeItemCollapsibleState;
+    const { Collapsed, Expanded, None } = vscode.TreeItemCollapsibleState;
+    const opens = openable(row) ? Collapsed : None;
     switch (row.kind) {
       case 'notebook': {
         const { notebook } = row;
@@ -514,7 +628,7 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
         return item;
       }
       case 'pending': {
-        const item = new vscode.TreeItem(row.save.key, None);
+        const item = new vscode.TreeItem(row.save.key, opens);
         item.description = `${row.save.type} · added, not persisted yet`;
         item.iconPath = new vscode.ThemeIcon(
           'circle-outline',
@@ -537,7 +651,7 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
         return item;
       }
       case 'entry': {
-        const item = new vscode.TreeItem(row.entry.key, None);
+        const item = new vscode.TreeItem(row.entry.key, opens);
         const origin = originOf(row.entry, this.origins);
         item.description = row.entry.stack
           ? (origin ? `from ${origin.notebook} · ` : '') + 'saved stack: open it in the debugger'
@@ -549,6 +663,15 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
           new vscode.ThemeColor('charts.green'),
         );
         item.contextValue = row.entry.stack ? 'gemdbSavedStack' : 'gemdbSavedObject';
+        return item;
+      }
+      case 'field': {
+        const { field } = row;
+        const item = new vscode.TreeItem(field.name, opens);
+        // As the Variables show it: the type badge first, and a big container's size in place of its text.
+        item.description = toDapVariable(field).value;
+        if (field.type) item.tooltip = `${field.type}: ${field.value}`;
+        item.contextValue = 'gemdbPersistedField';
         return item;
       }
       case 'message':
@@ -591,25 +714,79 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
     return item;
   }
 
-  getChildren(row?: SavedRow): SavedRow[] {
-    if (row?.kind === 'notebook' || row?.kind === 'root') {
-      let rows = this.children.get(row);
-      if (!rows) {
-        rows =
-          row.kind === 'notebook'
-            ? row.saves.map((save): SavedRow => ({ kind: 'pending', save }))
-            : row.entries.map((entry): SavedRow => ({ kind: 'entry', entry }));
-        this.children.set(row, rows);
-      }
-      return rows;
-    }
-    if (row) return [];
+  /** The top rows, and a notebook's or `gemdb.root`'s, are answered at once; an opened object's are read. */
+  getChildren(row?: SavedRow & { kind: 'notebook' | 'root' }): SavedRow[];
+  getChildren(row: SavedRow): SavedRow[] | Promise<SavedRow[]>;
+  getChildren(row?: SavedRow): SavedRow[] | Promise<SavedRow[]> {
+    if (row?.kind === 'notebook' || row?.kind === 'root') return this.listed(row);
+    if (row) return this.opened(row);
     if (this.rows) return this.rows;
     void this.load();
     return [{ kind: 'message', text: 'Reading gemdb.root…' }];
   }
 
+  /** A notebook's additions, or what is committed: rows made once per load, so `reveal` finds them. */
+  private listed(row: SavedRow & { kind: 'notebook' | 'root' }): SavedRow[] {
+    let rows = this.children.get(row);
+    if (!rows) {
+      rows =
+        row.kind === 'notebook'
+          ? row.saves.map((save): SavedRow => {
+              const read = row.read?.get(save.key);
+              return read?.ref
+                ? { kind: 'pending', save, ref: read.ref, children: read.indexed + read.named }
+                : { kind: 'pending', save };
+            })
+          : row.entries.map((entry): SavedRow => ({ kind: 'entry', entry }));
+      this.children.set(row, rows);
+    }
+    return rows;
+  }
+
+  /**
+   * An opened object's attributes, items or entries, read in the session that
+   * holds it and kept until the next load. Its registry position is only good
+   * until then — each load starts the registry afresh — so a row from an
+   * earlier load reads nothing. A failure, such as a notebook busy running a
+   * cell, is shown and not kept, so opening the row again tries again.
+   */
+  private async opened(row: SavedRow): Promise<SavedRow[]> {
+    const where = openable(row);
+    if (!where || !this.isCurrent(row)) return [];
+    const kept = this.children.get(row);
+    if (kept) return kept;
+    const query = childrenQuery(where.ref, 0, PAGE, PERSISTED_REGISTRY);
+    try {
+      const raw =
+        where.readIn.session === 'extension'
+          ? await extensionQuery(query, { budget: true })
+          : await inNotebook(where.readIn.ownerKey, query, { budget: true });
+      const rows = fieldRows(row, where.readIn, parseChildren(orThrow(raw)), where.total);
+      if (this.isCurrent(row)) this.children.set(row, rows);
+      return rows;
+    } catch (e) {
+      const busy = where.readIn.session === 'notebook' && !pauseForOwner(where.readIn.ownerKey);
+      return [
+        {
+          kind: 'message',
+          text: busy
+            ? `Could not read it: ${errorMessage(e)}. If its notebook is running a cell, open it again once the cell finishes.`
+            : `Could not read it: ${errorMessage(e)}`,
+          parent: row,
+        },
+      ];
+    }
+  }
+
+  /** Whether a row belongs to the rows shown now, so its registry position still holds. */
+  private isCurrent(row: SavedRow): boolean {
+    let at: SavedRow | undefined = row;
+    while (at?.kind === 'field') at = at.parent;
+    return at !== undefined && this.getParent(at) !== undefined;
+  }
+
   getParent(row: SavedRow): SavedRow | undefined {
+    if (row.kind === 'field' || (row.kind === 'message' && row.parent)) return row.parent;
     return this.rows?.find((top) => this.children.get(top)?.includes(row));
   }
 
@@ -624,7 +801,7 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
       await this.load();
       for (const top of this.rows ?? []) {
         if (top.kind !== 'notebook') continue;
-        const row = this.getChildren(top).find((r) => r.kind === 'pending' && r.save.key === key);
+        const row = this.listed(top).find((r) => r.kind === 'pending' && r.save.key === key);
         if (row) {
           await treeView.reveal(row, { select: true, focus: false, expand: true });
           return;
@@ -668,6 +845,27 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
           return { key: info.owner.key, label: info.owner.label, dirty };
         }),
     );
+    // What each notebook's additions hold, read where they are, so their rows can open.
+    const read = new Map<string, Map<string, PauseVariable>>();
+    await Promise.all(
+      notebooks
+        .filter((notebook) => notebook.dirty !== undefined)
+        .map(async (notebook) => {
+          const keys = this.pending.filter((save) => save.ownerKey === notebook.key);
+          try {
+            const rows = parseChildren(
+              orThrow(
+                await inNotebook(notebook.key, persistedRowsQuery(keys.map((k) => k.key)), {
+                  budget: true,
+                }),
+              ),
+            );
+            read.set(notebook.key, new Map(rows.map((row) => [row.name, row])));
+          } catch (e) {
+            log(`Could not read ${notebook.label}'s additions: ${errorMessage(e)}`);
+          }
+        }),
+    );
     let root: RootEntry[] | string;
     try {
       root = parseChildren(await extensionQuery(rootListingQuery())).map(toEntry);
@@ -690,7 +888,11 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
       const committed = new Set(root.map((entry) => entry.key));
       this.setOrigins(settleOrigins(before, this.pending, committed, this.origins));
     }
-    this.rows = topRows(true, notebooks, this.pending, root);
+    this.rows = topRows(true, notebooks, this.pending, root).map((row) =>
+      row.kind === 'notebook' && read.has(row.notebook.key)
+        ? { ...row, read: read.get(row.notebook.key) }
+        : row,
+    );
   }
 }
 
