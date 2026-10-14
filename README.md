@@ -370,9 +370,6 @@ The command needs no environment setup, and it starts the database if the databa
 Exit codes work the way scripts expect: 0 on success, 1 on an uncaught exception (with the error
 message on stderr), 2 for a missing file, and `sys.exit()` behaves as in CPython.
 
-One thing differs from `python3`: the script's directory is not included in `sys.path`, so the
-script cannot import a file next to it until it updates `sys.path` to include its directory.
-
 `input()` works in scripts, the GemDB Shell, and notebooks. A script reads stdin, and the GemDB
 Shell reads its own prompt line, where Ctrl+C raises `KeyboardInterrupt` and Ctrl+D raises
 `EOFError`. `print()` streams, so output appears while the code is still running.

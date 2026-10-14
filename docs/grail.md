@@ -264,9 +264,6 @@ issue rather than rediscovered:
   the process, by way of a catchable `KeyError` from `%(key)s` formatting and a
   real root logger. Both are upstream's claims and have not been re-measured
   here.
-- **`gemdb file.py` does not put the script's directory on `sys.path`** the way
-  `python3 file.py` does, and `sys.path` is otherwise empty, so a script cannot
-  import the file next to it until it inserts its own directory. (Grail #847.)
 - **A second application cannot reuse a module name the first one deployed.**
   From `beef473` on, importing a different file with different source under a
   module name already deployed raises `ImportError` instead of replacing it,
