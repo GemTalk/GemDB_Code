@@ -116,6 +116,9 @@ export function helpText(): string {
     "GemDB's Debug Console commands (Python still works as usual):",
     ...CONSOLE_COMMANDS.map((c) => `  ${c.usage.padEnd(width)}   ${c.summary}`),
     '',
+    'What Persisted Objects holds is here by name (o for gemdb.root["o"]), and always as',
+    'persisted.o, even when o means something else at this pause. Type persisted to list it.',
+    '',
   ].join('\n');
 }
 

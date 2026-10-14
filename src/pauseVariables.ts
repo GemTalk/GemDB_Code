@@ -1025,9 +1025,16 @@ export interface ConsoleError {
   frames: TracebackFrame[];
 }
 
+/**
+ * For a console line that is a bare name: `persisted` when its value is the
+ * Persisted Objects entry of that key, rather than a name of the paused code's
+ * own or one the console bound.
+ */
+export type NameOrigin = 'persisted';
+
 /** What `consoleQuery` answered. */
 export type ConsoleReply = { consoleRef: number; output: string } & (
-  | { kind: 'value'; row: PauseVariable }
+  | { kind: 'value'; row: PauseVariable; origin?: NameOrigin }
   | { kind: 'none' }
   | { kind: 'error'; error: ConsoleError }
   | { kind: 'interrupted' }
@@ -1067,7 +1074,9 @@ bind := [:k :x | | nm |
   nameAst notNil ifTrue: [nm := [nameAst doitScopeNameFor: nm] on: Error do: [:e | e return: nm]].
   dict at: nm put: x].
 console := (cref between: 1 and: reg size) ifTrue: [reg at: cref] ifFalse: [nil].
-(console class == Array and: [console size = 3 and: [(console at: 1) == #gemdbConsole]]) ifFalse: [
+(console class == Array and: [console size = 4 and: [(console at: 1) == #gemdbConsole]]) ifFalse: [| persisted |
+  "Which names came from Persisted Objects, so a bare name typed later can say so."
+  persisted := SymbolDictionary new.
   dict := SymbolDictionary new.
   g := (${scope.globals} between: 1 and: reg size) ifTrue: [reg at: ${scope.globals}] ifFalse: [nil].
   (g class == Array and: [g size >= 2 and: [(g at: 1) == #gemdbScope]])
@@ -1083,6 +1092,29 @@ console := (cref between: 1 and: reg size) ifTrue: [reg at: cref] ifFalse: [nil]
     g := [dispatcher evaluateSource: 'import gemdb
 gemdb' usingModuleScope: SymbolDictionary new] on: AbstractException do: [:e | e return: nil].
     g notNil ifTrue: [dict at: #gemdb put: g]].
+  "persisted, the same entries by attribute (persisted.o), there even when o means something else.
+   Made once a session: its class is compiled on first use, and that is a write."
+  (dict includesKey: #persisted) ifFalse: [
+    g := SessionTemps current at: #'GemDbPersistedView' otherwise: nil.
+    g isNil ifTrue: [
+      g := [dispatcher evaluateSource: 'import gemdb
+class PersistedObjects:
+    """What Persisted Objects holds, by name: persisted.o is gemdb.root["o"]."""
+    def __getattr__(self, name):
+        try:
+            return gemdb.root[name]
+        except KeyError:
+            raise AttributeError(f"Persisted Objects has no {name!r}") from None
+    def __getitem__(self, key):
+        return gemdb.root[key]
+    def __dir__(self):
+        return sorted(k for k in gemdb.root.keys() if isinstance(k, str))
+    def __repr__(self):
+        return "Persisted Objects: " + (", ".join(self.__dir__()) or "nothing yet")
+PersistedObjects()' usingModuleScope: SymbolDictionary new]
+        on: AbstractException do: [:e | e return: nil].
+      g notNil ifTrue: [SessionTemps current at: #'GemDbPersistedView' put: g]].
+    g notNil ifTrue: [dict at: #persisted put: g]].
   "Then what Persisted Objects holds, each under its key: o for gemdb.root['o']. Never over a
    name the frame has, nor over a builtin (list, print), and only keys that are Python names."
   g := [dispatcher evaluateSource: 'import gemdb, builtins, keyword
@@ -1091,9 +1123,9 @@ gemdb' usingModuleScope: SymbolDictionary new] on: AbstractException do: [:e | e
   g do: [:pair | | nm |
     nm := (pair at: 1) asString asSymbol.
     nameAst notNil ifTrue: [nm := [nameAst doitScopeNameFor: nm] on: Error do: [:e | e return: nm]].
-    (dict includesKey: nm) ifFalse: [dict at: nm put: (pair at: 2)]].
+    (dict includesKey: nm) ifFalse: [dict at: nm put: (pair at: 2). persisted at: nm put: (pair at: 2)]].
   "The names it starts with, so the ones the console binds can be told apart (%names)."
-  console := { #gemdbConsole. dict. dict keys copy }.
+  console := { #gemdbConsole. dict. dict keys copy. persisted }.
   reg add: console.
   cref := reg size].
 `;
@@ -1141,7 +1173,7 @@ dict at: #'_gemdb_shown' put: o.
  * console scope and answers what came of it (`parseConsoleReply`).
  *
  * The scope is made on a frame's first line and kept in the pause's registry
- * as `{#gemdbConsole. dict. startingNames}`, at `consoleRef` once made, so a name the
+ * as `{#gemdbConsole. dict. startingNames. persisted}`, at `consoleRef` once made, so a name the
  * console binds (`y = 5`, `import json`, a `def`) is there for the next line
  * and gone with the registry at resume, as under debugpy. It is one
  * SymbolDictionary run as a module scope: the frame's globals, copied, with
@@ -1152,7 +1184,9 @@ dict at: #'_gemdb_shown' put: o.
  * copied from Persisted Objects (`gemdb.root["orders"]`) runs in a program
  * that never imported it; and so is each entry of `gemdb.root` under its key
  * (`orders`), below the frame's own names and never over a builtin, so what a
- * user persisted is there by name at every later pause.
+ * user persisted is there by name at every later pause. `persisted` reaches
+ * the same entries by attribute (`persisted.o`), so a persisted object stays
+ * reachable by a short name when `o` means something else here.
  * Because they are copies, rebinding a name (`x = 5`) stays in the console;
  * the objects are the real ones, so `p.x = 10` changes the program's `p`.
  * A frame's locals are keyed by their Python spelling, but a scope evaluated
@@ -1180,8 +1214,16 @@ export function consoleQuery(
   consoleRef: number,
   source: string,
   selfHandle = 0,
+  bareName = '',
 ): string {
-  return `| reg out field record none saved describe childrenOf reprOf late clean isLeaf dispatcher cref console dict g l r kind exc captured bind nameAst target ${ROW_TEMPS} |
+  const origin = bareName
+    ? `kind == #value ifTrue: [| key |
+  key := '${escapeString(bareName)}' asSymbol.
+  nameAst notNil ifTrue: [key := [nameAst doitScopeNameFor: key] on: Error do: [:e | e return: key]].
+  (((console at: 4) includesKey: key) and: [((console at: 4) at: key) == r])
+    ifTrue: [origin := 'persisted']].`
+    : '';
+  return `| reg out field record none saved describe childrenOf reprOf late clean isLeaf dispatcher cref console dict g l r kind exc captured bind nameAst target origin ${ROW_TEMPS} |
 ${PREAMBLE}
 ${HELPERS}
 ${CHILDREN_OF}
@@ -1212,7 +1254,10 @@ SessionTemps current at: #'GrailConsole' put: (Array with: captured).
       ifTrue: [SessionTemps current removeKey: #'GrailConsole' ifAbsent: []]
       ifFalse: [SessionTemps current at: #'GrailConsole' put: saved]].
 (kind == #value and: [r == none or: [r isNil]]) ifTrue: [kind := #none].
-out nextPutAll: kind; nextPut: field; print: cref; nextPut: field; nextPutAll: (clean value: captured contents); nextPut: record.
+origin := ''.
+${origin}
+out nextPutAll: kind; nextPut: field; print: cref; nextPut: field; nextPutAll: (clean value: captured contents);
+  nextPut: field; nextPutAll: origin; nextPut: record.
 kind == #value ifTrue: [
   "The result's own row, as the Variables pane would write it, with its __repr__ quiet."
   SessionTemps current at: #'GrailConsole' put: (Array with: (WriteStream on: Unicode7 new)).
@@ -1333,13 +1378,21 @@ export function parseConsoleReply(raw: string): ConsoleReply {
     return { consoleRef: 0, output: '', kind: 'failed', message: raw.slice('Error: '.length) };
   }
   const [head = '', ...rest] = raw.split(RECORD);
-  const [kind, ref, printed] = head.split(FIELD);
+  const [kind, ref, printed, origin] = head.split(FIELD);
   const consoleRef = Number.parseInt(ref ?? '', 10) || 0;
   const output = (printed ?? '').replace(/\r\n?/g, '\n');
   const records = rest.filter((r) => r.length > 0);
   if (kind === 'value') {
     const [row] = parseChildren(records.join(RECORD) + RECORD);
-    if (row) return { consoleRef, output, kind, row };
+    if (row) {
+      return {
+        consoleRef,
+        output,
+        kind,
+        row,
+        ...(origin === 'persisted' ? { origin } : {}),
+      };
+    }
     return { consoleRef, output, kind: 'failed', message: 'The result could not be read.' };
   }
   if (kind === 'none' || kind === 'interrupted') return { consoleRef, output, kind };

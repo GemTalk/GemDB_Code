@@ -1009,10 +1009,22 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
       'import gemdb\ngemdb.root["kept"] = [1, 2]\ngemdb.root["n"] = "persisted n"\ngemdb.root["list"] = "not the builtin"\ngemdb.root["two words"] = 2\ngemdb.commit()',
       nb,
     );
-    const seen: Record<string, string> = {};
+    const seen: Record<string, unknown> = {};
 
     await inCell(nb, 'def go(n):\n    breakpoint()\ngo("the local n")', async (dap) => {
       seen.kept = await dap.value('kept');
+      // Said above a persisted value; nothing said for the paused code's own name.
+      seen.keptSaid = (await dap.evaluate('kept')).printed;
+      seen.nSaid = (await dap.evaluate('n')).printed;
+      await dap.value('kept2 = kept');
+      seen.rebound = (await dap.evaluate('kept2')).printed;
+      // Rebind kept in the console: persisted.kept still reaches the persisted one.
+      await dap.value('kept = "mine now"');
+      seen.keptMine = await dap.value('kept');
+      seen.persistedKept = await dap.value('persisted.kept');
+      seen.persistedN = await dap.value('persisted.n');
+      seen.persistedList = await dap.value('persisted');
+      seen.persistedNope = await dap.raises('persisted.nope');
       // The frame's own name wins over a persisted one of the same name.
       seen.n = await dap.value('n');
       // A builtin is never hidden.
@@ -1023,10 +1035,22 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
 
     expect(seen).toEqual({
       kept: '[1, 2]',
+      keptSaid: 'kept is gemdb.root["kept"], from Persisted Objects (also persisted.kept)\n',
+      keptMine: "'mine now'",
+      persistedKept: '[1, 2]',
+      persistedN: "'persisted n'",
+      // Earlier tests in this file commit their own entries too.
+      persistedList: expect.stringMatching(
+        /^Persisted Objects: (.*, )?kept, list, n, (.*, )?two words$/,
+      ),
+      persistedNope: "AttributeError: Persisted Objects has no 'nope'",
+      nSaid: '',
+      // A name the user bound is theirs: nothing said.
+      rebound: '',
       n: "'the local n'",
       list: '[1, 2]',
-      // Persisted names are there to use, not names the user bound here.
-      names: 'Nothing bound in the Debug Console yet at this pause. Try p = …, then %names.\n',
+      // Persisted names are there to use, not names the user bound here: only kept2 is.
+      names: 'kept2: list = [1, 2]\n',
     });
   });
 });

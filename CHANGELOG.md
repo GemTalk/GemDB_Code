@@ -52,7 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `%persist ` suggests your console names. The first pause in a window says so, once. `gemdb`
   is available in the console without an import, so a line copied from Persisted Objects
   (`gemdb.root["orders"]`) works in any program, and each persisted entry is there by its key
-  (`orders`) at every pause, unless the paused code has a name of its own spelled so.
+  (`orders`) at every pause, unless the paused code has a name of its own spelled so, and is
+  labelled `orders is gemdb.root["orders"]` when typed; `persisted.orders` reaches it whatever
+  `orders` means at the pause.
 
 ### Fixed
 

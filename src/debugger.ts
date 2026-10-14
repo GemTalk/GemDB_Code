@@ -16,6 +16,7 @@ import { PlacedFrame, jupyterTraceback } from './consoleTraceback';
 import {
   ChildKind,
   ConsoleScope,
+  NameOrigin,
   MAIN_MODULE,
   PAGE,
   PauseVariable,
@@ -127,6 +128,8 @@ export type ConsoleAnswer =
       namedVariables?: number;
       /** How its children are read: a container's items, or an object's attributes. */
       children?: ChildKind;
+      /** For a bare name that is a Persisted Objects entry, `persisted` (`NameOrigin`). */
+      origin?: NameOrigin;
     }
   | { kind: 'error'; output: string; traceback: string }
   | { kind: 'interrupted'; output: string };
@@ -947,6 +950,10 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
       (answer) => {
         finish();
         if (answer.output) this.event('output', { category: 'stdout', output: answer.output });
+        // A bare name that is a Persisted Objects entry: say where it comes from.
+        if (answer.kind === 'value' && answer.origin === 'persisted') {
+          this.event('output', { category: 'console', output: originLine(source.trim()) });
+        }
         if (answer.kind === 'value') {
           this.respond(request, {
             result: answer.value,
@@ -1530,6 +1537,15 @@ function placeFrame(
   };
 }
 
+/**
+ * The line the console prints above a bare name's value when it is a Persisted
+ * Objects entry, so it is not mistaken for a name of the paused code's own. A
+ * name of the code's own gets no line: it is what a bare name always means.
+ */
+export function originLine(name: string): string {
+  return `${name} is gemdb.root[${JSON.stringify(name)}], from Persisted Objects (also persisted.${name})\n`;
+}
+
 /** A Python identifier, which a console line can use as a name. */
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const KEYWORDS = new Set([
@@ -1650,11 +1666,20 @@ async function evaluateAt(
 ): Promise<ConsoleAnswer> {
   const scope = view.consoles.get(frameId) ?? { locals: 0, globals: 0 };
   const reply = parseConsoleReply(
-    await request.query(consoleQuery(scope, consoleRefs.get(frameId) ?? 0, source, selfHandle), {
-      budget: context === 'watch',
-      signal,
-      passHalts: true,
-    }),
+    await request.query(
+      consoleQuery(
+        scope,
+        consoleRefs.get(frameId) ?? 0,
+        source,
+        selfHandle,
+        context === 'repl' && IDENTIFIER.test(source.trim()) ? source.trim() : '',
+      ),
+      {
+        budget: context === 'watch',
+        signal,
+        passHalts: true,
+      },
+    ),
   );
   if (reply.consoleRef > 0) consoleRefs.set(frameId, reply.consoleRef);
   const output = reply.output;
@@ -1672,6 +1697,7 @@ async function evaluateAt(
         ...(row.indexedVariables ? { indexedVariables: row.indexedVariables } : {}),
         ...(row.namedVariables ? { namedVariables: row.namedVariables } : {}),
         ...(reply.row.kind ? { children: reply.row.kind } : {}),
+        ...(reply.origin ? { origin: reply.origin } : {}),
       };
     }
     case 'none':
