@@ -1002,4 +1002,31 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
     });
     expect(seen.elsewhere).toContain("'B400'");
   });
+  it('makes what Persisted Objects holds available by its key at a later pause', async () => {
+    const nb = notebook('dc-persisted-names');
+    // Persisted earlier, as %persist would leave it after %commit.
+    await runPython(
+      'import gemdb\ngemdb.root["kept"] = [1, 2]\ngemdb.root["n"] = "persisted n"\ngemdb.root["list"] = "not the builtin"\ngemdb.root["two words"] = 2\ngemdb.commit()',
+      nb,
+    );
+    const seen: Record<string, string> = {};
+
+    await inCell(nb, 'def go(n):\n    breakpoint()\ngo("the local n")', async (dap) => {
+      seen.kept = await dap.value('kept');
+      // The frame's own name wins over a persisted one of the same name.
+      seen.n = await dap.value('n');
+      // A builtin is never hidden.
+      seen.list = await dap.value('list((1, 2))');
+      seen.names = (await dap.evaluate('%names')).printed;
+    });
+    closeSessionFor(nb.key);
+
+    expect(seen).toEqual({
+      kept: '[1, 2]',
+      n: "'the local n'",
+      list: '[1, 2]',
+      // Persisted names are there to use, not names the user bound here.
+      names: 'Nothing bound in the Debug Console yet at this pause. Try p = …, then %names.\n',
+    });
+  });
 });

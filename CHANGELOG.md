@@ -51,7 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have bound in the console at this pause; `%help` lists the commands. Typing `%` suggests them,
   and `%persist ` suggests your console names. The first pause in a window says so, once. `gemdb`
   is available in the console without an import, so a line copied from Persisted Objects
-  (`gemdb.root["orders"]`) works in any program.
+  (`gemdb.root["orders"]`) works in any program, and each persisted entry is there by its key
+  (`orders`) at every pause, unless the paused code has a name of its own spelled so.
 
 ### Fixed
 

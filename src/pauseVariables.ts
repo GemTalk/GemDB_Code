@@ -1083,6 +1083,15 @@ console := (cref between: 1 and: reg size) ifTrue: [reg at: cref] ifFalse: [nil]
     g := [dispatcher evaluateSource: 'import gemdb
 gemdb' usingModuleScope: SymbolDictionary new] on: AbstractException do: [:e | e return: nil].
     g notNil ifTrue: [dict at: #gemdb put: g]].
+  "Then what Persisted Objects holds, each under its key: o for gemdb.root['o']. Never over a
+   name the frame has, nor over a builtin (list, print), and only keys that are Python names."
+  g := [dispatcher evaluateSource: 'import gemdb, builtins, keyword
+[(k, v) for k, v in gemdb.root.items() if isinstance(k, str) and k.isidentifier() and not keyword.iskeyword(k) and not hasattr(builtins, k)]' usingModuleScope: SymbolDictionary new]
+    on: AbstractException do: [:e | e return: #()].
+  g do: [:pair | | nm |
+    nm := (pair at: 1) asString asSymbol.
+    nameAst notNil ifTrue: [nm := [nameAst doitScopeNameFor: nm] on: Error do: [:e | e return: nm]].
+    (dict includesKey: nm) ifFalse: [dict at: nm put: (pair at: 2)]].
   "The names it starts with, so the ones the console binds can be told apart (%names)."
   console := { #gemdbConsole. dict. dict keys copy }.
   reg add: console.
@@ -1141,7 +1150,9 @@ dict at: #'_gemdb_shown' put: o.
  * locals in a dict of their own, as debugpy evaluates, it would not.
  * `gemdb` is bound too when the frame has no name of that spelling, so a line
  * copied from Persisted Objects (`gemdb.root["orders"]`) runs in a program
- * that never imported it.
+ * that never imported it; and so is each entry of `gemdb.root` under its key
+ * (`orders`), below the frame's own names and never over a builtin, so what a
+ * user persisted is there by name at every later pause.
  * Because they are copies, rebinding a name (`x = 5`) stays in the console;
  * the objects are the real ones, so `p.x = 10` changes the program's `p`.
  * A frame's locals are keyed by their Python spelling, but a scope evaluated

@@ -436,7 +436,8 @@ database, select that kernel from the kernel picker at the top right.
   Persisted Objects (`%persist expr as key` for anything else), `%commit` commits the notebook,
   `%names` lists what you have bound in the console, and `%help` lists them all. Type `%` and the
   console suggests them. `gemdb` is always available in the console, so a line copied from Persisted
-  Objects, such as `gemdb.root["orders"]`, works even if the program never imported it. Stepping is not supported yet, and neither are red
+  Objects, such as `gemdb.root["orders"]`, works even if the program never imported it. What Persisted Objects holds is available by its
+  key too (`o` for `gemdb.root["o"]`), unless the paused code has its own name `o`. Stepping is not supported yet, and neither are red
   dots in a cell (they work in `.py` files; see above). Right-click a Variables row and choose **Add to Persisted Objects…** to keep that object: it
   goes in `gemdb.root` under the key you give (one is suggested) and is written at the notebook's
   next commit. The **Persisted Objects** view, under GemDB and in Run and Debug, lists what `gemdb.root`
