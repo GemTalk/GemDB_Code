@@ -716,3 +716,5 @@ server, all from GemTalk Systems, plus the koffi library. See [NOTICE](NOTICE) f
 Code downloads the database engine during setup, and the engine has its own license terms.
 
 To build GemDB Code from source, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+<img referrerpolicy="no-referrer-when-downgrade" src="https://static.scarf.sh/a.png?x-pxid=66a85084-141a-4772-80ed-69d29c88f7ad" />
