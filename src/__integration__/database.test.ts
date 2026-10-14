@@ -11,13 +11,12 @@ import {
   isListening,
   isRunning,
   listProcesses,
-  startStone,
   stopNetldi,
   stopStone,
 } from '../processes';
 import { execute, isConnected, logout } from '../session';
 import { ensureStatmonitor, recordedFiles } from '../statmonitor';
-import { Fixture, TEST_CAP_MB, limitTestDatabase, makeFixture } from './fixture';
+import { Fixture, TEST_CAP_MB, limitTestDatabase, makeFixture, startStoneAlone } from './fixture';
 
 /**
  * The parts of GemDB that are only interesting against a real database.
@@ -162,7 +161,7 @@ describe.skipIf(!makeFixtureIsPossible())('a real database', () => {
 
   it('stops cleanly once nothing is logged in', async () => {
     logout();
-    await startStone();
+    await startStoneAlone();
     expect(isRunning()).toBe(true);
 
     await stopStone(false);

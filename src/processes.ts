@@ -405,32 +405,6 @@ export async function ensureListener(): Promise<boolean> {
 }
 
 /**
- * Start the stone alone, for what needs no session listener: the `gemdb`
- * wrapper's file runs are linked sessions, and so are the tests that use this.
- * Under the same lock as {@link ensureProcesses}.
- */
-export async function startStone(): Promise<void> {
-  requireOwnDatabase('start');
-  // Under the lock the generated `gemdb` wrapper also takes, because both
-  // doors start the same stone and nothing downstream refuses a second one.
-  // The re-check inside the lock is the point: whoever we queued behind was
-  // most likely starting it, and without this we would start another. For the
-  // same reason, a stone that comes up while we wait ends the wait.
-  await withStoneLock(
-    async () => {
-      if (isRunning()) {
-        log('The database is already running; nothing to start.');
-      } else {
-        logStep(`Starting the database`);
-        await runStartstone();
-      }
-      await waitForStoneReady();
-    },
-    { satisfied: async () => stoneReady(await listProcessesAsync()) },
-  );
-}
-
-/**
  * Run `startstone`, turning the two refusals the stone explains only in its
  * log into errors that say what to do. The caller holds the stone lock.
  */

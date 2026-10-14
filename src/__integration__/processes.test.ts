@@ -6,15 +6,8 @@ import * as path from 'path';
 import { execFile } from 'child_process';
 import { createDatabase } from '../database';
 import { isSharedMemoryConfigured } from '../osConfig';
-import {
-  isListening,
-  isRunning,
-  listProcesses,
-  startStone,
-  stopNetldi,
-  stopStone,
-} from '../processes';
-import { Fixture, limitTestDatabase, makeFixture } from './fixture';
+import { isListening, isRunning, listProcesses, stopNetldi, stopStone } from '../processes';
+import { Fixture, limitTestDatabase, makeFixture, startStoneAlone } from './fixture';
 
 /**
  * Two processes starting one database at the same moment.
@@ -168,7 +161,7 @@ describe.skipIf(!canMakeFixture())('starting the database from two processes at 
 
   it('does not fail when a release that takes no lock starts the session listener alongside', async () => {
     if (isListening()) await stopNetldi();
-    await startStone();
+    await startStoneAlone();
     expect(isListening()).toBe(false);
 
     const reports = await race(['raw-netldi', 'ensure'], { rawWaitsForRival: true });
