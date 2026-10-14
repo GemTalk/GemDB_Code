@@ -521,30 +521,64 @@ fi
 # mkdir is the primitive: it creates or fails, with no window between the test
 # and the claim, and it is there on a stock macOS where flock is not.
 #
-# Two questions, kept apart. Whether a stone is LISTED decides whether to start
-# one: a stone still at Startup -- recovering from a crash, or another
-# process's start not finished -- is listed, and a second startstone beside it
-# is the two-stones case above. Whether it is READY (status OK) decides whether
-# a login can go ahead, so that is what the waiting is for. A two-word status
-# such as "exe deleted" does not start with OK, so it is not ready either.
-stone_is_listed() {
-  "$GEMSTONE/bin/gslist" 2>/dev/null | awk -v s="$STONE" '$(NF-1) == "Stone" && $NF == s { found = 1 } END { exit !found }'
+# What the stone's status says decides what to do. Not listed: start one. A
+# stone still at Startup -- recovering from a crash, or another process's start
+# not finished -- is listed, and a second startstone beside it is the
+# two-stones case above, so it is waited for until it is past Startup, since a
+# login now would fail. One at Shutdown is being stopped, and saying so beats
+# waiting a minute for it. Anything else goes on to the login, which judges it:
+# a stone left running when the engine tree was replaced reads "exe deleted"
+# and takes logins.
+#
+# The status as gslist -cvl lists it, lowercased (the engine prints "OK",
+# "Startup", "frozen"), or nothing when the stone is not listed. One call per
+# question: -v asks the stone itself, which takes about five seconds when it is
+# frozen (measured). A row is status, version, owner, pid, port, three date
+# fields, type and name, and "exe deleted" is the one two-word status. A row of
+# any other shape is still this stone, so it answers something: nothing would
+# mean "start one".
+stone_status() {
+  "$GEMSTONE/bin/gslist" -cvl 2>/dev/null | awk -v s="$STONE" '$(NF-1) == "Stone" && $NF == s { print tolower(NF == 10 ? $1 : NF == 11 ? $1 " " $2 : "listed"); exit }'
 }
-stone_is_ready() {
-  "$GEMSTONE/bin/gslist" -cvl 2>/dev/null | awk -v s="$STONE" '$1 == "OK" && $(NF-1) == "Stone" && $NF == s { found = 1 } END { exit !found }'
+starting() { case "$1" in startup|recovery) return 0 ;; *) return 1 ;; esac; }
+shutting_down() {
+  echo "gemdb: the database is shutting down. Run this again once it has stopped." >&2
+  exit 1
+}
+# Wait while the stone is starting, from the status last seen ($1). $2 is where
+# to look when it fails.
+wait_for_stone() {
+  local st="$1" tries=0
+  while starting "$st"; do
+    if [ "$tries" -ge 600 ]; then
+      echo "gemdb: the database has been starting for over a minute.$2" >&2
+      exit 1
+    fi
+    [ "$tries" -eq 0 ] && echo "gemdb: waiting for the database to finish starting…" >&2
+    sleep 0.1
+    tries=$((tries + 1))
+    st=$(stone_status)
+  done
+  [ "$st" = shutdown ] && shutting_down
+  if [ -z "$st" ]; then
+    echo "gemdb: the database stopped while it was starting.$2" >&2
+    exit 1
+  fi
 }
 
+STATUS=$(stone_status)
 ${
   external
     ? `# This machine's administrator runs the database, so a stopped stone is theirs
 # to start: starting it here would run it as this user.
-if ! stone_is_listed; then
+if [ -z "$STATUS" ]; then
   echo "gemdb: the database (stone $STONE) is not running. It is run by this machine's administrator." >&2
   exit 1
 fi
 `
     : ''
-}if ! stone_is_ready; then
+}[ "$STATUS" = shutdown ] && shutting_down
+if [ -z "$STATUS" ] || starting "$STATUS"; then
   STONE_LOCK="$ROOT/.gemdb-stone.lock"
   # mkdir and the pid write are two steps, here and in the extension, so a
   # lock with no pid yet is one being taken right now. It is debris only once
@@ -609,7 +643,8 @@ fi
         continue
       fi
     fi
-    stone_is_ready && break
+    STATUS=$(stone_status)
+    [ -n "$STATUS" ] && ! starting "$STATUS" && break
     sleep 0.1
     tries=$((tries + 1))
   done
@@ -619,37 +654,26 @@ fi
     # we queued behind may have started it -- which is the case the bare
     # check-then-act got wrong. Listed, not ready: one still starting is
     # waited for below, never started again.
-    if ! stone_is_listed; then
+    STATUS=$(stone_status)
+    if [ -z "$STATUS" ]; then
       echo "gemdb: starting the database…" >&2
       if ! "$GEMSTONE/bin/startstone" -l "$ROOT/db/log/$STONE.log" "$STONE" >/dev/null 2>&1; then
         release_stone_lock
         echo "gemdb: the database at $ROOT could not be started. See $ROOT/db/log/$STONE.log" >&2
         exit 1
       fi
+      STATUS=$(stone_status)
     fi
     release_stone_lock
-  elif ! stone_is_listed; then
+  elif [ -z "$STATUS" ]; then
     echo "gemdb: the database is not running and another process has been starting it for" >&2
     echo "gemdb: ten seconds. See $ROOT/db/log/$STONE.log, or remove $STONE_LOCK if nothing is." >&2
     exit 1
   fi
 
-  # Listed but not yet ready: ours or someone else's, it is still starting, and
-  # a login now would fail. A minute, as the extension waits.
-  ready_tries=0
-  until stone_is_ready; do
-    if ! stone_is_listed; then
-      echo "gemdb: the database stopped while it was starting. See $ROOT/db/log/$STONE.log" >&2
-      exit 1
-    fi
-    if [ "$ready_tries" -ge 600 ]; then
-      echo "gemdb: the database has been starting for over a minute. See $ROOT/db/log/$STONE.log" >&2
-      exit 1
-    fi
-    [ "$ready_tries" -eq 0 ] && echo "gemdb: waiting for the database to finish starting…" >&2
-    sleep 0.1
-    ready_tries=$((ready_tries + 1))
-  done
+  # Ours or someone else's, a stone still starting is waited for: a login now
+  # would fail. A minute, as the extension waits.
+  wait_for_stone "$STATUS" " See $ROOT/db/log/$STONE.log"
 fi
 
 # The run's temporary files, removed however it ends: bash runs an EXIT trap

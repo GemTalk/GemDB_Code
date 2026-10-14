@@ -62,7 +62,7 @@ vi.mock('../lock', async (importOriginal) => {
 });
 
 const { expectedEnginePath } = await import('../paths');
-const { ensureProcesses, stoneReady, waitForStoneReady } = await import('../processes');
+const { ensureProcesses, stoneReady, stoneState, waitForStoneReady } = await import('../processes');
 const { parseGslist } = await import('../gslist');
 
 function row(status: string, type: 'Stone' | 'Netldi', name: string): string {
@@ -244,5 +244,56 @@ describe('a stone that is still starting', () => {
       'Waiting for the database to finish starting…',
       'Starting the session listener…',
     ]);
+  });
+});
+
+describe('what the stone’s status means', () => {
+  const stateOf = (status: string): string =>
+    stoneState(parseGslist(row(status, 'Stone', 'gemdb')));
+
+  it('reads the statuses the engine prints, whatever their case', () => {
+    expect(stateOf('OK')).toBe('ready');
+    expect(stateOf('Startup')).toBe('starting');
+    expect(stateOf('recovery')).toBe('starting');
+    expect(stateOf('Shutdown')).toBe('stopping');
+    expect(stoneState([])).toBe('absent');
+  });
+
+  it('leaves every other listed status to the login, as before GemDB waited for OK', () => {
+    for (const status of ['exe deleted', 'frozen', 'full', 'killed', 'exists', 'restoreBkup']) {
+      expect(stateOf(status)).toBe('other');
+    }
+  });
+
+  it('does not wait on a stone that is listed but neither OK nor starting', async () => {
+    listings = [row('exe deleted', 'Stone', 'gemdb')];
+
+    await waitForStoneReady(undefined, { pollMs: 1, timeoutMs: 20 });
+  });
+
+  it('says a stone at Shutdown is shutting down, without waiting on it', async () => {
+    listings = [row('Shutdown', 'Stone', 'gemdb')];
+
+    await expect(waitForStoneReady(undefined, { pollMs: 1, timeoutMs: 1000 })).rejects.toThrow(
+      'The database is shutting down',
+    );
+  });
+
+  it('starts nothing beside a stone that is shutting down', async () => {
+    listings = [row('Shutdown', 'Stone', 'gemdb')];
+
+    await expect(ensureProcesses()).rejects.toThrow('The database is shutting down');
+    expect(spawned).toEqual([]);
+  });
+
+  it('brings the listener up beside a stone in any other listed state', async () => {
+    listings = [row('exe deleted', 'Stone', 'gemdb')];
+    const beforeStoneStart = vi.fn();
+
+    const started = await ensureProcesses({ beforeStoneStart });
+
+    expect(started).toEqual({ startedStone: false, startedNetldi: true });
+    expect(spawned).toEqual(['startnetldi']);
+    expect(beforeStoneStart).not.toHaveBeenCalled();
   });
 });

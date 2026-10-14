@@ -180,42 +180,88 @@ export function isListening(processes = listProcesses()): boolean {
  * whether there is a stone at all, keep asking that.
  */
 export function stoneReady(processes: EngineProcess[]): boolean {
-  return findStone(processes)?.status === 'OK';
+  return findStone(processes)?.responding === true;
 }
 
 /** True when the listener is up and answering, the listener's half of {@link stoneReady}. */
 export function listenerReady(processes: EngineProcess[]): boolean {
-  return findNetldi(processes)?.status === 'OK';
+  return findNetldi(processes)?.responding === true;
 }
+
+/**
+ * What to do about the stone, from its gslist status.
+ *
+ * The engine prints statuses in mixed case — `OK`, `Startup`, `Shutdown`,
+ * `frozen`, `killed`, `exists`, `exe deleted` were all seen — and `gslist -h`
+ * also lists `recovery`, `full`, `restoreBkup`, `restoreLogs` and
+ * `contRestore`, so they are compared without case. Only a stone that is
+ * starting is worth waiting for. One shutting down is said to be, rather than
+ * waited on for a minute. Anything else that is listed goes on to the login,
+ * which judges it, as it did before GemDB waited for `OK`: a stone left
+ * running when the engine tree was replaced reads `exe deleted` and takes
+ * logins, and refusing it would stop a working database.
+ */
+export type StoneState = 'absent' | 'ready' | 'starting' | 'stopping' | 'other';
+
+export function stoneState(processes: EngineProcess[]): StoneState {
+  const stone = findStone(processes);
+  if (!stone) return 'absent';
+  if (stone.responding) return 'ready';
+  switch (stone.status.toLowerCase()) {
+    case 'startup':
+    case 'recovery':
+      return 'starting';
+    case 'shutdown':
+      return 'stopping';
+    default:
+      return 'other';
+  }
+}
+
+/** What to say about a stone that is on its way down, wherever it is met. */
+export const SHUTTING_DOWN_MESSAGE =
+  'The database is shutting down. Start it again once it has stopped.';
 
 /**
  * Wait for a listed stone to finish starting.
  *
- * Returns at once for a stone that is ready. One this process did not start —
- * a crash being recovered, or one an older GemDB started without waiting — is
- * polled until it reports `OK`. A stone that disappears while we wait failed
- * to start, and one still starting after a minute is not going to soon; both
- * end in an error naming the stone's log, which says why.
+ * Returns at once for a stone that is not starting. One this process did not
+ * start — a crash being recovered, or one an older GemDB started without
+ * waiting — is polled until it is past `Startup`. A stone that disappears
+ * while we wait failed to start, and one still starting after a minute is not
+ * going to soon; both end in an error naming the stone's log, which says why.
+ * A stone at `Shutdown` ends the wait at once: it is being stopped.
  */
 export async function waitForStoneReady(
   report?: (message: string) => void,
   wait: { pollMs?: number; timeoutMs?: number } = {},
 ): Promise<void> {
-  if (stoneReady(await listProcessesAsync())) return;
-  report?.('Waiting for the database to finish starting…');
-  log('The database is still starting; waiting for it.');
   const stoneLog = path.join(databaseLogPath(), `${STONE_NAME}.log`);
   const deadline = Date.now() + (wait.timeoutMs ?? STONE_LOCK_TIMEOUT_MS);
+  let running = await listProcessesAsync();
+  let waiting = false;
   for (;;) {
-    await new Promise((resolve) => setTimeout(resolve, wait.pollMs ?? STONE_LOCK_POLL_MS));
-    const running = await listProcessesAsync();
-    if (stoneReady(running)) return;
-    if (!findStone(running)) {
-      throw new Error(`The database stopped while it was starting. See ${stoneLog}.`);
+    switch (stoneState(running)) {
+      case 'ready':
+      case 'other':
+        return;
+      case 'stopping':
+        throw new Error(SHUTTING_DOWN_MESSAGE);
+      case 'absent':
+        throw new Error(`The database stopped while it was starting. See ${stoneLog}.`);
+      case 'starting':
+        break;
+    }
+    if (!waiting) {
+      waiting = true;
+      report?.('Waiting for the database to finish starting…');
+      log('The database is still starting; waiting for it.');
     }
     if (Date.now() > deadline) {
       throw new Error(`The database has been starting for over a minute. See ${stoneLog}.`);
     }
+    await new Promise((resolve) => setTimeout(resolve, wait.pollMs ?? STONE_LOCK_POLL_MS));
+    running = await listProcessesAsync();
   }
 }
 
@@ -280,7 +326,12 @@ export async function ensureProcesses(
   const started = await withStoneLock(
     async () => {
       let startedStone = false;
-      if (!findStone(await listProcessesAsync())) {
+      const state = stoneState(await listProcessesAsync());
+      // Said here, before any wait: a stopping stone's last moments read
+      // `Startup` before it disappears (measured), which a wait would report
+      // as a start that failed.
+      if (state === 'stopping') throw new Error(SHUTTING_DOWN_MESSAGE);
+      if (state === 'absent') {
         opts.beforeStoneStart?.();
         opts.report?.('Starting the database…');
         logStep('Starting the database');

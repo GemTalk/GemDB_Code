@@ -348,7 +348,7 @@ describe('putCliOnPath', () => {
  * path. `startstone` records that it ran and leaves a marker holding the
  * stone's status; `gslist` reports a stone, with that status, only once the
  * marker exists, so a wrapper that re-checks after taking the lock sees what
- * a real one would.
+ * a real one would. Each `gslist` call is counted in `gslist.calls`.
  */
 describe('starting the database', () => {
   function installEngineStubs(): { starts: string } {
@@ -358,11 +358,13 @@ describe('starting the database', () => {
     const starts = path.join(root, 'starts.log');
     const countdown = path.join(root, 'stone.countdown');
     const next = path.join(root, 'stone.next');
+    const calls = path.join(root, 'gslist.calls');
 
     fs.writeFileSync(
       path.join(bin, 'gslist'),
       [
         '#!/bin/sh',
+        `echo "$*" >> '${calls}'`,
         // A stone that changes state on its own: see stoneBecomes.
         `if [ -f '${countdown}' ]; then`,
         `  n=$(cat '${countdown}')`,
@@ -371,7 +373,8 @@ describe('starting the database', () => {
         `    if [ -f '${next}' ]; then mv '${next}' '${marker}'; else rm -f '${marker}'; fi`,
         `  else echo $((n - 1)) > '${countdown}'; fi`,
         'fi',
-        `[ -f '${marker}' ] && echo "$(cat '${marker}') 4.0.0 me 1 1 x Stone gemdb"`,
+        // The shape of a real -cvl row: status, version, owner, pid, port, date, type, name.
+        `[ -f '${marker}' ] && echo "$(cat '${marker}')  4.0.0.a4  me  1 1 Oct 13 15:57 Stone   gemdb"`,
         'exit 0',
         '',
       ].join('\n'),
@@ -394,6 +397,13 @@ describe('starting the database', () => {
     fs.writeFileSync(path.join(root, 'stone.up'), status);
     if (then !== undefined) fs.writeFileSync(path.join(root, 'stone.next'), then);
     fs.writeFileSync(path.join(root, 'stone.countdown'), String(calls));
+  }
+
+  function gslistCalls(): number {
+    const calls = path.join(root, 'gslist.calls');
+    return fs.existsSync(calls)
+      ? fs.readFileSync(calls, 'utf8').split('\n').filter(Boolean).length
+      : 0;
   }
 
   /** Run the wrapper on a path that does not exist: it exits after the
@@ -554,5 +564,35 @@ describe('starting the database', () => {
 
     expect(fs.existsSync(starts)).toBe(false);
     expect(stderr).toMatch(/stopped while it was starting\. See .*gemdb\.log/);
+  });
+
+  // Statuses the engine prints that are neither OK nor starting. They went on
+  // to the login before GemDB waited for OK, and still do: "exe deleted" is a
+  // stone left running when the engine tree was replaced, and it takes logins.
+  for (const status of ['exe deleted', 'frozen', 'full']) {
+    it(`goes on to the login for a stone that reads "${status}", asking once`, async () => {
+      writeCliScripts(ext);
+      const { starts } = installEngineStubs();
+      fs.writeFileSync(path.join(root, 'stone.up'), status);
+
+      const stderr = await runWrapper();
+
+      expect(fs.existsSync(starts)).toBe(false);
+      expect(gslistCalls()).toBe(1);
+      expect(stderr).toContain("can't open file");
+    });
+  }
+
+  it('says a stone at Shutdown is shutting down, at once, rather than waiting on it', async () => {
+    writeCliScripts(ext);
+    const { starts } = installEngineStubs();
+    fs.writeFileSync(path.join(root, 'stone.up'), 'Shutdown');
+
+    const stderr = await runWrapper();
+
+    expect(fs.existsSync(starts)).toBe(false);
+    expect(gslistCalls()).toBe(1);
+    expect(stderr).toContain('the database is shutting down');
+    expect(stderr).not.toContain("can't open file");
   });
 });

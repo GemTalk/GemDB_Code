@@ -59,6 +59,10 @@ Below it, the processes themselves start only through `ensureProcesses` in
 `processes.ts`, which checks and starts under the stone lock (NetLDI cannot be
 started any other way), and "ready" means gslist status `OK`, not "listed": a
 stone at `Startup` is listed and refuses logins, so wait on it, never start it.
+`stoneState` reads the rest, case-insensitively since the engine prints mixed
+case: `Shutdown` fails at once, and any other listed status (`exe deleted`,
+`frozen`, ...) goes on to the login as it always did. The wrapper in `cli.ts`
+makes the same calls in shell; change both together.
 
 ## CI
 
