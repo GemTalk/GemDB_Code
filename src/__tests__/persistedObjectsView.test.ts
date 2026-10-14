@@ -316,6 +316,35 @@ describe('adding an object from the debugger', () => {
     );
   });
 
+  it('shows a %persist from the Debug Console as waiting under its notebook, and reveals it', async () => {
+    pauseIn(NB);
+    connected.push({ key: NB, label: 'breakpoint.ipynb' });
+    const { view } = setUp();
+    // What %persist p did in the paused session, before telling the view.
+    gem.pending.set(NB, new Map([['p', 'list']]));
+
+    await command('gemdb.savedObjects.notePersisted')({
+      key: 'p',
+      type: 'list',
+      ownerKey: NB,
+      notebook: 'breakpoint.ipynb',
+    });
+    await vi.waitFor(() => expect(__treeViews.get(DEBUG_VIEW_ID)!.reveals).toHaveLength(1));
+    const rows = await topOf(view);
+
+    const notebook = rows.find((r) => r.kind === 'notebook')!;
+    const [waiting] = view.getChildren(notebook);
+    expect(item(view, waiting)).toMatchObject({
+      label: 'p',
+      description: 'list · added, not persisted yet',
+      contextValue: 'gemdbSavedPending',
+    });
+    expect(__treeViews.get(DEBUG_VIEW_ID)!.reveals[0].element).toMatchObject({
+      kind: 'pending',
+      save: { key: 'p' },
+    });
+  });
+
   it('opens Persisted Objects in Run and Debug on the new row, leaving focus in Variables', async () => {
     pauseIn(NB);
     connected.push({ key: NB, label: 'breakpoint.ipynb' });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DebugStackFrame, commands, debug, window } from '../__mocks__/vscode';
+import { DebugStackFrame, __commands, commands, debug, window } from '../__mocks__/vscode';
 import type { Pause } from '../debugger';
 
 /**
@@ -16,7 +16,13 @@ vi.mock('../debugger', () => ({
   pauseForDebugSession: (id: string | undefined) => (id === 's1' ? pause : undefined),
 }));
 
-const { evaluateWithSelf, showInDebugConsole } = await import('../variableCommands');
+const {
+  EVALUATE_WITH_SELF,
+  SHOW_IN_CONSOLE,
+  evaluateWithSelf,
+  registerVariableCommands,
+  showInDebugConsole,
+} = await import('../variableCommands');
 
 type CustomRequest = (command: string, args?: unknown) => Promise<unknown>;
 
@@ -184,5 +190,28 @@ describe('Evaluate with self…', () => {
 
     expect(customRequest).not.toHaveBeenCalled();
     expect(seen).toEqual([]);
+  });
+});
+
+describe('registering the commands', () => {
+  it('registers both under the ids package.json puts on the Variables menu, and removes them on dispose', async () => {
+    const registration = registerVariableCommands();
+    const { default: manifest } = (await import('../../package.json')) as unknown as {
+      default: {
+        contributes: { menus: Record<string, Array<{ command: string; when?: string }>> };
+      };
+    };
+
+    expect(__commands.has(SHOW_IN_CONSOLE)).toBe(true);
+    expect(__commands.has(EVALUATE_WITH_SELF)).toBe(true);
+    const onVariables = manifest.contributes.menus['debug/variables/context'];
+    expect(onVariables).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ command: SHOW_IN_CONSOLE, when: 'debugType == gemdb' }),
+        expect.objectContaining({ command: EVALUATE_WITH_SELF, when: 'debugType == gemdb' }),
+      ]),
+    );
+    registration.dispose();
+    expect(__commands.has(SHOW_IN_CONSOLE)).toBe(false);
   });
 });

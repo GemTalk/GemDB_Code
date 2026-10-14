@@ -16,7 +16,7 @@ vi.mock('../session', () => ({
   setRedDotSource: (_source: RedDotSource | undefined) => {},
 }));
 
-const { PauseDebugAdapter, consoleTip } = await import('../debugger');
+const { PauseDebugAdapter, consoleTip, originLine } = await import('../debugger');
 const { commitQuery } = await import('../pauseVariables');
 
 /** Let the adapter's promises run. */
@@ -871,5 +871,22 @@ describe('GemDB’s % commands in the console', () => {
     // Once a pause, not once a keystroke; again after a line that may have changed them.
     expect(readsBefore).toBe(1);
     expect(persistedKeys).toHaveBeenCalledTimes(2);
+  });
+
+  it('still answers %persist when Persisted Objects cannot be told about it', async () => {
+    vi.spyOn(commands, 'executeCommand').mockReturnValue(Promise.reject(new Error('no view')));
+    const evaluate = vi.fn<Evaluate>().mockResolvedValue(value("(False, None, 'list')"));
+
+    const { reply, said } = await command('%persist p', { ownerKey: 'nb' }, evaluate);
+    await settle();
+
+    expect(reply?.success).toBe(true);
+    expect(said).toMatch(/^Added p to Persisted Objects/);
+  });
+
+  it('labels a persisted name with where it comes from', () => {
+    expect(originLine('o')).toBe(
+      'o is gemdb.root["o"], from Persisted Objects (also persisted.o)\n',
+    );
   });
 });
