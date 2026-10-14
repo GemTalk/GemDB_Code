@@ -153,8 +153,15 @@ Memory** while shared memory was still too low, or when they ran **GemDB: Keep
 the Database Running After Logout** while RemoveIPC was unset. The dialog comes
 back every time the database is needed until the user agrees, but a failure is
 sent once for each trigger, outcome and `missing` until setup works or the
-database next starts. Running either command is not deduped: every run is
-sent.
+database next starts. That rule does not apply to either command: every run
+made while the setting was still unchanged is sent. A request that arrives
+while the dialog, or the shared-memory setup it started, is already under way
+in the same window waits for it and sends nothing, so one dialog is one event,
+carrying the trigger of whatever opened it. The command is not such a request:
+run during the dialog's setup, **GemDB: Configure Shared Memory** shares its
+terminal but sends its own event, and a dialog that comes up while the
+command's setup is running is shown and sent as usual, its "Configure" joining
+that terminal rather than opening a second one.
 
 | Property  | Values                                                                        |
 | --------- | ----------------------------------------------------------------------------- |
@@ -167,7 +174,11 @@ sent.
 The database was brought up, or failed to come up. Sent only when something
 actually happened. Running a cell when the database is already up sends
 nothing, and a failure is sent once for each trigger until the database next
-starts.
+starts. A request that arrives while a start is already under way in the same
+window waits for it and sends nothing, so one start is one event, carrying the
+trigger of whatever began it. The exception is a request that arrives after
+the user stopped the database during that start: it waits for the stop and
+then asks again, so the start that follows is an event of its own.
 
 | Property / measure | Values                                                                                                                              |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |

@@ -70,6 +70,7 @@ import { isOnNfs } from './networkFileSystem';
 import { logoutAll } from './session';
 import { ensureStatmonitor } from './statmonitor';
 import { allowAutoStart } from './autoStart';
+import { singleFlight } from './singleFlight';
 import { readUnattendedSetupMarker, writeUnattendedSetupMarker } from './unattendedSetupMarker';
 import {
   DATABASE_OUTCOME,
@@ -227,20 +228,18 @@ function paused(): void {
  * say so instead of offering a Set Up GemDB button that would only join it.
  */
 export function runSetup(extensionPath: string, trigger: Trigger): Promise<SetupOutcome> {
-  if (setupInFlight) {
-    log('Setup is already under way; waiting for it to finish.');
-    return setupInFlight;
-  }
-  setContext('gemdb.settingUp', true);
-  const run = runSetupOnce(extensionPath, trigger).finally(() => {
-    setupInFlight = undefined;
-    setContext('gemdb.settingUp', false);
-  });
-  setupInFlight = run;
-  return run;
+  return setupFlight.run(
+    () => {
+      setContext('gemdb.settingUp', true);
+      return runSetupOnce(extensionPath, trigger).finally(() => {
+        setContext('gemdb.settingUp', false);
+      });
+    },
+    () => log('Setup is already under way; waiting for it to finish.'),
+  );
 }
 
-let setupInFlight: Promise<SetupOutcome> | undefined;
+const setupFlight = singleFlight<SetupOutcome>();
 
 async function runSetupOnce(extensionPath: string, trigger: Trigger): Promise<SetupOutcome> {
   reportSetupStarted(trigger);
@@ -504,19 +503,68 @@ export async function start(extensionPath: string): Promise<void> {
  * pointed at a new root path — and here the prompt is justified because the
  * user has asked for something that cannot happen without it.
  *
+ * At most one runs at a time in this window. Auto-start and a cell, two
+ * notebooks, or a cell and Start would otherwise each run the whole bring-up
+ * at once — two stone starts, two Grail file-ins, two MCP servers. A caller
+ * arriving while one is in progress joins it, from the shared-memory prompt to
+ * the last step, and gets its result. A joiner reports nothing:
+ * `databaseStarted` is sent once, by the caller that started the call, under
+ * that caller's trigger.
+ *
+ * Except after a Stop: a caller other than auto-start that arrives once Stop
+ * has been pressed on the bring-up under way is asking for the database back, so it waits for that
+ * bring-up and the Stop to finish and then starts again, rather than taking a
+ * result that described a database Stop has since taken down. A Stop pressed
+ * after the caller joined wins: it was pressed later, so it is the latest word.
+ *
  * Returns true when the database is up and Python will run.
  */
 export async function ensureRunning(extensionPath: string, trigger: Trigger): Promise<boolean> {
+  // Asking for a running database is the clearest possible retraction of an
+  // earlier "stop it". Running a cell counts: `ensureRunning` is the one path
+  // to a running database, so it is the one place this belongs — here rather
+  // than in the bring-up, so that a caller who joins one counts too. Auto-start
+  // is GemDB's own doing, not a request from anybody, so it retracts nothing.
+  if (trigger !== TRIGGER.autoStart) allowAutoStart();
+  let stoppedBeforeJoining = false;
+  const running = await bringUp.run(
+    () => {
+      stopsWhenBringUpBegan = stopsBegun;
+      return ensureRunningOnce(extensionPath, trigger);
+    },
+    () => {
+      stoppedBeforeJoining = stopsBegun !== stopsWhenBringUpBegan;
+      log('GemDB is already starting; waiting for it.');
+    },
+  );
+  // Whatever the shared result, true or false, it predates this caller's
+  // request. Each rerun needs another Stop to have begun, so this cannot loop.
+  // Auto-start asks for nothing, so it takes the result and lets the Stop stand.
+  if (!stoppedBeforeJoining || trigger === TRIGGER.autoStart) return running;
+  await stopInFlight;
+  log('GemDB was stopped while it was starting; starting it again.');
+  return ensureRunning(extensionPath, trigger);
+}
+
+const bringUp = singleFlight<boolean>();
+/**
+ * How many times `stop` has begun in this window, and that count when the
+ * bring-up in flight began. Counted rather than asked of the processes:
+ * `isRunning` blocks the extension host, and a stone that is up says nothing
+ * about whether a Stop is on its way to it.
+ */
+let stopsBegun = 0;
+let stopsWhenBringUpBegan = 0;
+/** The Stop under way, if any, so a caller starting again goes after it. */
+let stopInFlight: Promise<void> | undefined;
+
+async function ensureRunningOnce(extensionPath: string, trigger: Trigger): Promise<boolean> {
   const stopwatch = Stopwatch.start();
   const failed = (outcome: Exclude<DatabaseOutcome, typeof DATABASE_OUTCOME.started>): false => {
     reportDatabaseStarted(trigger, outcome, FILED_GRAIL.no, stopwatch.elapsedMs(), false);
     return false;
   };
 
-  // Asking for a running database is the clearest possible retraction of an
-  // earlier "stop it". Running a cell counts: `ensureRunning` is the one path
-  // to a running database, so it is the one place this belongs.
-  allowAutoStart();
   if (!requireSupportedPlatform()) return failed(DATABASE_OUTCOME.unsupportedPlatform);
   if (!requireGrailPayload(extensionPath)) return failed(DATABASE_OUTCOME.missingPayload);
 
@@ -640,6 +688,12 @@ function grailFileInDue(extensionPath: string): boolean {
  * Installing is separate from running, as with Grail: the classes are filed
  * into the database once per payload build, and the router is forked whenever
  * one is not already listening.
+ *
+ * At most one runs at a time in this window. `ensureRunning` and activation's
+ * `resumeMcpServing` both come here, and two at once would install the
+ * classes twice and race to fork two routers onto one port. A caller arriving
+ * while one is in progress waits for it and gets its result; its progress
+ * notification says nothing about the MCP server meanwhile.
  */
 async function ensureMcpServing(
   extensionPath: string,
@@ -652,7 +706,18 @@ async function ensureMcpServing(
     log('This build of GemDB ships no MCP server payload, so there is none to run.');
     return false;
   }
+  return mcpServing.run(
+    () => ensureMcpServingOnce(extensionPath, progress),
+    () => log('The MCP server is already starting; waiting for it.'),
+  );
+}
 
+const mcpServing = singleFlight<boolean>();
+
+async function ensureMcpServingOnce(
+  extensionPath: string,
+  progress?: vscode.Progress<{ message?: string }>,
+): Promise<boolean> {
   try {
     if (mcpNeedsUpdate(extensionPath)) {
       const stamp = bundledMcpStamp(extensionPath);
@@ -887,6 +952,17 @@ export async function stop(): Promise<void> {
     );
     return;
   }
+  stopsBegun++;
+  const stopping = stopOnce();
+  stopInFlight = stopping;
+  try {
+    await stopping;
+  } finally {
+    if (stopInFlight === stopping) stopInFlight = undefined;
+  }
+}
+
+async function stopOnce(): Promise<void> {
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: 'Stopping GemDB' },
     async () => {

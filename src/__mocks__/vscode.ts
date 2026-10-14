@@ -251,7 +251,16 @@ export const window = {
     dispose(): void;
   } {
     __terminals.push(nameOrOptions as FakeTerminalOptions);
-    return { show: () => {}, sendText: () => {}, dispose: () => {} };
+    const terminal = { show: () => {}, sendText: () => {}, dispose: () => {} };
+    __openTerminals.push(terminal);
+    return terminal;
+  },
+  /** Fires when a test calls `__closeTerminal`, as the editor does when the user closes one. */
+  onDidCloseTerminal(listener: (terminal: unknown) => void): Disposable {
+    __closeTerminalListeners.push(listener);
+    return new Disposable(() => {
+      __closeTerminalListeners.splice(__closeTerminalListeners.indexOf(listener), 1);
+    });
   },
   /**
    * Progress is a pass-through here: run the callback and return its result.
@@ -489,6 +498,20 @@ export interface FakeTerminalOptions {
   };
 }
 export const __terminals: FakeTerminalOptions[] = [];
+/** The terminal objects `createTerminal` handed back, oldest first. */
+export const __openTerminals: object[] = [];
+const __closeTerminalListeners: Array<(terminal: unknown) => void> = [];
+/** Close a terminal the way the editor reports it to `onDidCloseTerminal`. */
+export function __closeTerminal(terminal: object): void {
+  for (const listener of [...__closeTerminalListeners]) listener(terminal);
+}
+/**
+ * Close every terminal still open, so a test that failed half way does not
+ * leave a setup script waiting for the next test to finish it.
+ */
+export function __closeAllTerminals(): void {
+  for (const terminal of __openTerminals.splice(0)) __closeTerminal(terminal);
+}
 
 export const workspace = {
   notebookDocuments: [] as unknown[],
