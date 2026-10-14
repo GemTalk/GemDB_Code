@@ -45,6 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   continues with it. What Python refuses is refused with Python's reason, such as a property with
   no setter. A method's receiver (`self`, or whatever the def calls it), a tuple's items, group
   rows and a saved stack's values cannot be changed, and VS Code does not offer Set Value on them.
+- **GemDB commands in the Debug Console.** A line starting with `%` is a GemDB command rather than
+  Python: `%persist p` adds `p` to Persisted Objects (or `%persist expr as key`), shown there as
+  added until the notebook commits; `%commit` commits the notebook; `%names` lists the names you
+  have bound in the console at this pause; `%help` lists the commands. Typing `%` suggests them,
+  and `%persist ` suggests your console names. The first pause in a window says so, once.
 
 ### Fixed
 

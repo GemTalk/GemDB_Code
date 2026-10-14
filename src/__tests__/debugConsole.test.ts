@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { window } from '../__mocks__/vscode';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { commands, window } from '../__mocks__/vscode';
 import type { ConsoleAnswer, Pause } from '../debugger';
 import type { HaltHandler, RedDotSource } from '../session';
 
@@ -16,7 +16,8 @@ vi.mock('../session', () => ({
   setRedDotSource: (_source: RedDotSource | undefined) => {},
 }));
 
-const { PauseDebugAdapter } = await import('../debugger');
+const { PauseDebugAdapter, consoleTip } = await import('../debugger');
+const { commitQuery } = await import('../pauseVariables');
 
 /** Let the adapter's promises run. */
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
@@ -68,6 +69,11 @@ function started(
   c.request('configurationDone');
   return c;
 }
+
+// The one-line tip about the % commands is tested on its own below; elsewhere it is already shown.
+beforeEach(() => {
+  consoleTip.shown = true;
+});
 
 afterEach(() => {
   vi.useRealTimers();
@@ -675,5 +681,165 @@ describe('putting a Variables row in the Debug Console', () => {
     await settle();
 
     expect(responseTo(seq)).toMatchObject({ success: false });
+  });
+});
+
+describe('GemDB’s % commands in the console', () => {
+  /** Run a % line and answer what came back. */
+  async function command(line: string, more: Partial<Pause> = {}, evaluate?: Evaluate) {
+    const evaluated = evaluate ?? vi.fn<Evaluate>();
+    const c = started(evaluated, undefined, more);
+    const seq = c.request('evaluate', { expression: line, frameId: 2, context: 'repl' });
+    await settle();
+    await settle();
+    return {
+      ...c,
+      reply: c.responseTo(seq),
+      said: c
+        .events('output')
+        .map((e) => (e.body as { output: string }).output)
+        .join(''),
+      evaluated,
+    };
+  }
+
+  it('answers %help with the commands, running nothing in the database', async () => {
+    const { reply, said, evaluated } = await command('%help');
+
+    expect(reply?.success).toBe(true);
+    expect(said).toMatch(/%persist p {3}or {3}%persist p as key/);
+    expect(evaluated).not.toHaveBeenCalled();
+  });
+
+  it('persists p by setting gemdb.root["p"] in the console’s own names, and shows it pending', async () => {
+    const executed = vi.spyOn(commands, 'executeCommand').mockReturnValue(Promise.resolve());
+    const evaluate = vi.fn<Evaluate>().mockResolvedValue(value("(False, None, 'list')"));
+
+    const { reply, said } = await command(
+      '%persist p',
+      { ownerKey: 'nb', label: 'a.ipynb' },
+      evaluate,
+    );
+
+    const [source, frameId, context] = evaluate.mock.calls[0];
+    expect(frameId).toBe(2);
+    expect(context).toBe('repl');
+    expect(source).toContain('__import__("gemdb").root, "p", (p)');
+    expect(executed).toHaveBeenCalledWith('gemdb.savedObjects.notePersisted', {
+      key: 'p',
+      type: 'list',
+      ownerKey: 'nb',
+      notebook: 'a.ipynb',
+    });
+    expect(said).toMatch(
+      /Added p to Persisted Objects as gemdb.root\["p"\]\. It is saved when a\.ipynb commits/,
+    );
+    expect(reply?.success).toBe(true);
+  });
+
+  it('says so when %persist replaces what was there', async () => {
+    vi.spyOn(commands, 'executeCommand').mockReturnValue(Promise.resolve());
+    const evaluate = vi.fn<Evaluate>().mockResolvedValue(value("(True, None, 'int')"));
+
+    const { said } = await command('%persist p as total', { ownerKey: 'nb' }, evaluate);
+
+    expect(said).toMatch(/as gemdb.root\["total"\], replacing what was there/);
+  });
+
+  it('shows the traceback when what is persisted does not exist', async () => {
+    const executed = vi.spyOn(commands, 'executeCommand');
+    const evaluate = vi.fn<Evaluate>().mockResolvedValue({
+      kind: 'error',
+      output: '',
+      traceback: "NameError: name 'q' is not defined",
+    } as ConsoleAnswer);
+
+    const { reply } = await command('%persist q', {}, evaluate);
+
+    expect(reply).toMatchObject({ success: false, message: "NameError: name 'q' is not defined" });
+    expect(executed).not.toHaveBeenCalledWith(
+      'gemdb.savedObjects.notePersisted',
+      expect.anything(),
+    );
+  });
+
+  it('commits the notebook on %commit, as ✓ in Persisted Objects does', async () => {
+    const executed = vi.spyOn(commands, 'executeCommand').mockReturnValue(Promise.resolve());
+    const query = vi.fn((code: string) =>
+      Promise.resolve(code.includes('commit') ? "'committed'" : ''),
+    );
+
+    const { reply, said } = await command('%commit', { query, label: 'a.ipynb' });
+
+    expect(query).toHaveBeenCalledWith(commitQuery());
+    expect(executed).toHaveBeenCalledWith('gemdb.savedObjects.refresh');
+    expect(said).toMatch(/Committed a\.ipynb/);
+    expect(reply?.success).toBe(true);
+  });
+
+  it('lists what the console has bound on %names', async () => {
+    const consoleNames = vi
+      .fn()
+      .mockResolvedValue([{ name: 'p', type: 'list', repr: "[('B400', '2', 'str')]" }]);
+
+    const { said } = await command('%names', { consoleNames });
+
+    expect(consoleNames).toHaveBeenCalledWith(2);
+    expect(said).toBe("p: list = [('B400', '2', 'str')]\n");
+  });
+
+  it('fails a mistyped command in the console’s error colour, with the commands named', async () => {
+    const { reply } = await command('%persit p');
+
+    expect(reply).toMatchObject({ success: false });
+    expect((reply as { message: string }).message).toMatch(/%persit is not a GemDB command/);
+  });
+
+  it('claims completions, triggered by %, and offers the commands and then the console’s names', async () => {
+    const consoleNames = vi.fn().mockResolvedValue([{ name: 'p', type: 'list', repr: '[]' }]);
+    const c = started(vi.fn(), undefined, { consoleNames });
+    const init = c.request('initialize', { adapterID: 'gemdb' });
+    const commandsListed = c.request('completions', { text: '%pe', column: 4, frameId: 1 });
+    const namesListed = c.request('completions', { text: '%persist ', column: 10, frameId: 1 });
+    const python = c.request('completions', { text: 'len(', column: 5, frameId: 1 });
+    await settle();
+    await settle();
+
+    expect(c.responseTo(init)?.body).toMatchObject({
+      supportsCompletionsRequest: true,
+      completionTriggerCharacters: ['%'],
+    });
+    expect(
+      (c.responseTo(commandsListed)?.body as { targets: Array<{ label: string }> }).targets.map(
+        (t) => t.label,
+      ),
+    ).toEqual(['%persist']);
+    expect(
+      (c.responseTo(namesListed)?.body as { targets: Array<{ label: string }> }).targets.map(
+        (t) => t.label,
+      ),
+    ).toEqual(['p']);
+    expect(c.responseTo(python)?.body).toEqual({ targets: [] });
+    // Typing Python asks the database nothing.
+    expect(consoleNames).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the one-line tip about the commands at the first stop of a window, and only then', () => {
+    consoleTip.shown = false;
+    const first = started(vi.fn());
+    const second = started(vi.fn());
+
+    const tip = (c: ReturnType<typeof started>) =>
+      c.events('output').map((e) => (e.body as { output: string }).output);
+    expect(tip(first)).toEqual([expect.stringMatching(/type % in the Debug Console/)]);
+    expect(tip(second)).toEqual([]);
+  });
+
+  it('shows no tip on a saved stack, where the console does not run', () => {
+    consoleTip.shown = false;
+    const saved = started(undefined);
+
+    expect(saved.events('output')).toEqual([]);
+    consoleTip.shown = true;
   });
 });

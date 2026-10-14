@@ -1159,6 +1159,20 @@ export function registerSavedObjects(context: vscode.ExtensionContext): SavedObj
       saveVariable(view, treeViews, ctx),
     ),
     vscode.commands.registerCommand('gemdb.savedObjects.refresh', () => view.refresh()),
+    // Internal, for `%persist` in the Debug Console (`debugger.ts`): show the
+    // save as pending, as Add to Persisted Objects does.
+    vscode.commands.registerCommand(
+      'gemdb.savedObjects.notePersisted',
+      (save: Omit<PendingSave, 'at'>) => {
+        view.notePending({ ...save, at: new Date().toISOString() });
+        const shown = treeViews.get(DEBUG_VIEW_ID);
+        if (shown) {
+          view
+            .revealSaved(shown, save.key)
+            .catch((e: unknown) => log(`Could not show ${save.key}: ${errorMessage(e)}`));
+        }
+      },
+    ),
     vscode.commands.registerCommand('gemdb.saveStack', () => saveStack(view, treeViews)),
     vscode.commands.registerCommand('gemdb.restoreStack', () => restoreStack()),
     vscode.commands.registerCommand('gemdb.savedObjects.openStack', (row: SavedRow) =>

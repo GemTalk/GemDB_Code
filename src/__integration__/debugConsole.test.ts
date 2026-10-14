@@ -16,7 +16,13 @@ import { stageGrail } from '../grail';
 import { abortQuery, needsCommitQuery } from '../pauseVariables';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
 import { PyResult, runPython, runPythonFile } from '../pythonQueries';
-import { SessionOwner, closeSessionFor, logoutAll, sessionForIfOpen } from '../session';
+import {
+  SessionOwner,
+  closeSessionFor,
+  executeAsync,
+  logoutAll,
+  sessionForIfOpen,
+} from '../session';
 import { createDatabaseWithPython, Fixture, haveTestExtent, makeFixture } from './fixture';
 
 /**
@@ -917,5 +923,82 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
       ok: true,
       out: [{ category: 'stderr', output: expect.stringMatching(/not an object of its own/) }],
     });
+  });
+  it('runs GemDB’s % commands: %persist, %names, %commit, and completes them', async () => {
+    const nb = notebook('dc-commands');
+    const seen: Record<string, unknown> = {};
+
+    await inCell(
+      nb,
+      [
+        'class Item:',
+        '    def __init__(self, sku, qty):',
+        '        self.sku, self.qty = sku, qty',
+        'def go(items):',
+        '    breakpoint()',
+        'go([Item("B400", "2"), Item("A200", 1)])',
+      ].join('\n'),
+      async (dap) => {
+        await dap.value('p = [(i.sku, i.qty, type(i.qty).__name__) for i in items]');
+        const said = async (line: string) => {
+          const from = dap.sent.length;
+          const r = await dap.evaluate(line);
+          return {
+            ok: r.ok,
+            message: r.message,
+            text: dap.sent
+              .slice(from)
+              .filter((m) => m.event === 'output')
+              .map((m) => String(m.body?.output ?? ''))
+              .join(''),
+          };
+        };
+        seen.persist = await said('%persist p');
+        seen.persistAs = await said('%persist items[0] as first_item');
+        seen.noKey = await said('%persist items[0]');
+        seen.names = await said('%names');
+        seen.inRoot = await dap.value('__import__("gemdb").root["p"]');
+        const complete = async (text: string) =>
+          (
+            (await dap.request('completions', { text, column: text.length + 1, frameId: 1 })).body
+              ?.targets as Array<{ label: string }>
+          ).map((t) => t.label);
+        seen.completeCommands = await complete('%');
+        seen.completeNames = await complete('%persist ');
+        seen.commit = await said('%commit');
+      },
+    );
+    // Committed: another session sees it.
+    seen.elsewhere = await executeAsync(
+      `System abortTransaction. ((System myUserProfile symbolList objectNamed: #'ModuleAst') evaluateSource: 'import gemdb\n(gemdb.root["p"], gemdb.root["first_item"].sku)' usingModuleScope: SymbolDictionary new) printString encodeAsUTF8`,
+    );
+    closeSessionFor(nb.key);
+
+    expect(seen.persist).toMatchObject({
+      ok: true,
+      text: expect.stringMatching(
+        /^Added p to Persisted Objects as gemdb.root\["p"\]\. It is saved when dc-commands\.ipynb commits/,
+      ),
+    });
+    expect(seen.persistAs).toMatchObject({
+      ok: true,
+      text: expect.stringContaining('gemdb.root["first_item"]'),
+    });
+    expect(seen.noKey).toMatchObject({
+      ok: false,
+      message: 'Give it a key: %persist items[0] as some_key',
+    });
+    expect(seen.names).toMatchObject({
+      ok: true,
+      text: "p: list = [('B400', '2', 'str'), ('A200', 1, 'int')]\n",
+    });
+    expect(seen.inRoot).toBe("[('B400', '2', 'str'), ('A200', 1, 'int')]");
+    expect(seen.completeCommands).toEqual(['%persist', '%commit', '%names', '%help']);
+    expect(seen.completeNames).toEqual(['p']);
+    expect(seen.commit).toMatchObject({
+      ok: true,
+      text: expect.stringMatching(/^Committed dc-commands\.ipynb/),
+    });
+    expect(seen.elsewhere).toContain("'B400'");
   });
 });

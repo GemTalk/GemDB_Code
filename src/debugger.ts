@@ -4,6 +4,14 @@ import * as vscode from 'vscode';
 import { runFileOf } from './fileOwner';
 import { CellText, PythonFrame, firstLineOf, locateCell } from './haltStack';
 import { errorMessage, log } from './log';
+import {
+  CONSOLE_TIP,
+  commandCompletions,
+  helpText,
+  isConsoleCommand,
+  parseConsoleCommand,
+  wantsCommandCompletions,
+} from './consoleCommands';
 import { PlacedFrame, jupyterTraceback } from './consoleTraceback';
 import {
   ChildKind,
@@ -14,10 +22,13 @@ import {
   TracebackFrame,
   childrenQuery,
   clearRegistryQuery,
+  commitQuery,
   consoleNameQuery,
+  consoleNamesQuery,
   consoleQuery,
   describeRowQuery,
   parseChildren,
+  parseConsoleNames,
   parseConsoleReply,
   parsePausedStack,
   pausedStackQuery,
@@ -166,6 +177,8 @@ export interface Pause {
    * `_`, which it is then bound to (`consoleNameQuery`).
    */
   consoleName?(frameId: number, name: string, handle: number): Promise<string>;
+  /** The names bound in frame `frameId`'s console so far (`consoleNamesQuery`). */
+  consoleNames?(frameId: number): Promise<Array<{ name: string; type: string; repr: string }>>;
   /** Each frame's whole cell or file, by frame index, so the stack can be saved. */
   texts?: Array<string[] | undefined>;
   /** The saved source behind a frame's `sourceReference`, for a stack opened from the database. */
@@ -262,6 +275,23 @@ export function toDapVariable(v: PauseVariable): DapVariable {
     ...(v.readOnly ? { presentationHint: { attributes: ['readOnly'] } } : {}),
   };
 }
+
+/**
+ * Tell the Persisted Objects view (`savedObjects.ts`) about a `%` command's
+ * effect, through its command, so neither file imports the other. Never fails
+ * the command it reports on: the view's refresh is a courtesy.
+ */
+function tellView(command: string, ...args: unknown[]): void {
+  Promise.resolve(vscode.commands.executeCommand(command, ...args)).catch((e: unknown) =>
+    log(`Could not update Persisted Objects: ${errorMessage(e)}`),
+  );
+}
+
+/**
+ * Whether this window has shown the console's one-line tip about GemDB's `%`
+ * commands. A test resets it.
+ */
+export const consoleTip = { shown: false };
 
 /** Pauses by id, so a launch request can find the one it was started for. */
 const pauses = new Map<string, Pause>();
@@ -663,6 +693,9 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
           supportsClipboardContext: true,
           // A console line can run for as long as the user's code does.
           supportsCancelRequest: true,
+          // For GemDB's own `%` commands only: typing `%` lists them.
+          supportsCompletionsRequest: true,
+          completionTriggerCharacters: ['%'],
           // Claimed so Restart arrives as a request this adapter can decline.
           // Unclaimed, VS Code restarts by disconnecting — which stops the
           // cell — and relaunching at a pause that no longer exists.
@@ -809,6 +842,9 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
       case 'gemdbShowRow':
         this.showRow(request);
         return;
+      case 'completions':
+        void this.complete(request);
+        return;
       case 'cancel': {
         const id = Number(request.arguments?.requestId ?? 0);
         this.running.get(id)?.abort();
@@ -902,6 +938,10 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
     }
     const kind: ConsoleContext = context;
     const frameId = Number(request.arguments?.frameId ?? pause.frames[0]?.id ?? 1);
+    if (kind === 'repl' && isConsoleCommand(source)) {
+      void this.runCommand(request, source, frameId);
+      return;
+    }
     const { controller, finish } = this.track(request, kind === 'repl');
     pause.evaluate(source, frameId, kind, controller.signal).then(
       (answer) => {
@@ -1096,6 +1136,116 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
     return ref;
   }
 
+  /**
+   * Run one of GemDB's `%` commands (`consoleCommands.ts`), typed in the
+   * Debug Console. Its answer goes to the console as text, and a mistake in
+   * the command fails the request, so it reads in the console's error colour.
+   */
+  private async runCommand(request: DapRequest, line: string, frameId: number): Promise<void> {
+    const pause = this.pause;
+    const command = parseConsoleCommand(line);
+    const say = (text: string): void =>
+      this.event('output', {
+        category: 'console',
+        output: text.endsWith('\n') ? text : `${text}\n`,
+      });
+    const done = (): void => this.respond(request, { result: '', variablesReference: 0 });
+    if (!pause || !command) {
+      this.fail(request, NOT_HERE, false);
+      return;
+    }
+    try {
+      switch (command.kind) {
+        case 'invalid':
+          this.fail(request, command.message, false);
+          return;
+        case 'help':
+          say(helpText());
+          done();
+          return;
+        case 'names': {
+          const names = pause.consoleNames ? await pause.consoleNames(frameId) : [];
+          say(
+            names.length === 0
+              ? 'Nothing bound in the Debug Console yet at this pause. Try p = …, then %names.'
+              : names.map((n) => `${n.name}: ${n.type} = ${n.repr}`).join('\n'),
+          );
+          done();
+          return;
+        }
+        case 'commit': {
+          if (!pause.query || pause.saved) throw new Error('There is nothing to commit here.');
+          const answer = await pause.query(commitQuery());
+          if (answer.startsWith('Error: ')) throw new Error(answer.slice('Error: '.length));
+          tellView('gemdb.savedObjects.refresh');
+          say(`Committed ${pause.label}: its changes are saved in the database.`);
+          done();
+          return;
+        }
+        case 'persist': {
+          if (!pause.evaluate || pause.saved)
+            throw new Error('Nothing can be persisted from here.');
+          // The expression is run once, in the console's own names, so p means what it means here.
+          const source =
+            `(lambda _gemdb_r, _gemdb_k, _gemdb_v: (_gemdb_k in _gemdb_r, ` +
+            `_gemdb_r.__setitem__(_gemdb_k, _gemdb_v), type(_gemdb_v).__name__))` +
+            `(__import__("gemdb").root, ${JSON.stringify(command.key)}, (${command.expression}))`;
+          const answer = await pause.evaluate(
+            source,
+            frameId,
+            'repl',
+            new AbortController().signal,
+          );
+          if (answer.output) this.event('output', { category: 'stdout', output: answer.output });
+          if (answer.kind !== 'value') {
+            this.fail(request, answer.kind === 'error' ? answer.traceback : INTERRUPTED, false);
+            return;
+          }
+          const replaced = answer.value.startsWith('(True');
+          const type = /'([^']*)'\)$/.exec(answer.value)?.[1] ?? '';
+          tellView('gemdb.savedObjects.notePersisted', {
+            key: command.key,
+            type,
+            ownerKey: pause.ownerKey,
+            notebook: pause.label,
+          });
+          say(
+            `Added ${command.expression} to Persisted Objects as gemdb.root[${JSON.stringify(command.key)}]` +
+              `${replaced ? ', replacing what was there' : ''}. It is saved when ${pause.label} commits: ` +
+              'type %commit, or click ✓ in Persisted Objects.',
+          );
+          if (this.clientInvalidates) this.event('invalidated', { areas: ['variables'] });
+          done();
+          return;
+        }
+      }
+    } catch (e) {
+      this.fail(request, errorMessage(e), false);
+    }
+  }
+
+  /**
+   * Autocomplete for GemDB's `%` commands, and for a name after `%persist `.
+   * Python is not completed here: any line that is not a `%` command answers
+   * nothing, without asking the database.
+   */
+  private async complete(request: DapRequest): Promise<void> {
+    const text = String(request.arguments?.text ?? '');
+    const column = Number(request.arguments?.column ?? text.length + 1);
+    const before = text.slice(0, Math.max(0, column - 1));
+    const pause = this.pause;
+    if (!pause || !wantsCommandCompletions(before)) {
+      this.respond(request, { targets: [] });
+      return;
+    }
+    const frameId = Number(request.arguments?.frameId ?? pause.frames[0]?.id ?? 1);
+    const names =
+      /^\s*%persist\s+/.test(before) && pause.consoleNames
+        ? (await pause.consoleNames(frameId).catch(() => [])).map((n) => n.name)
+        : [];
+    this.respond(request, { targets: commandCompletions(before, names) });
+  }
+
   dispose(): void {
     for (const controller of this.running.values()) controller.abort();
     // The session went away without Continue or Stop — a closed window, say.
@@ -1114,6 +1264,11 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
       threadId: THREAD_ID,
       allThreadsStopped: true,
     });
+    // Once a window: where a developer will look next, say that GemDB's commands exist.
+    if (!consoleTip.shown && this.pause?.evaluate) {
+      consoleTip.shown = true;
+      this.event('output', { category: 'console', output: CONSOLE_TIP });
+    }
   }
 
   /** The first of Continue, Stop or disposal decides; the rest are echoes. */
@@ -1415,6 +1570,21 @@ const KEYWORDS = new Set([
   'yield',
 ]);
 
+/** The names bound in one frame's console so far (`Pause.consoleNames`). */
+async function consoleNamesAt(
+  request: HaltRequest,
+  view: PauseView,
+  consoleRefs: Map<number, number>,
+  frameId: number,
+): Promise<Array<{ name: string; type: string; repr: string }>> {
+  const scope = view.consoles.get(frameId) ?? { locals: 0, globals: 0 };
+  const { consoleRef, names } = parseConsoleNames(
+    await request.query(consoleNamesQuery(scope, consoleRefs.get(frameId) ?? 0)),
+  );
+  if (consoleRef > 0) consoleRefs.set(frameId, consoleRef);
+  return names;
+}
+
 /** What to type to reach a shown row's object in one frame's console (`Pause.consoleName`). */
 async function consoleNameAt(
   request: HaltRequest,
@@ -1609,6 +1779,7 @@ export function registerBreakpointDebugger(): vscode.Disposable {
             showRow: (handle, name) => showRowAt(request, handle, name),
             consoleName: (frameId, name, handle) =>
               consoleNameAt(request, view, consoleRefs, frameId, name, handle),
+            consoleNames: (frameId) => consoleNamesAt(request, view, consoleRefs, frameId),
             rearm: (dots) => request.rearm(dots),
             armedDots: request.armedDots,
             reason: request.reason,

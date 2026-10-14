@@ -1067,7 +1067,7 @@ bind := [:k :x | | nm |
   nameAst notNil ifTrue: [nm := [nameAst doitScopeNameFor: nm] on: Error do: [:e | e return: nm]].
   dict at: nm put: x].
 console := (cref between: 1 and: reg size) ifTrue: [reg at: cref] ifFalse: [nil].
-(console class == Array and: [console size = 2 and: [(console at: 1) == #gemdbConsole]]) ifFalse: [
+(console class == Array and: [console size = 3 and: [(console at: 1) == #gemdbConsole]]) ifFalse: [
   dict := SymbolDictionary new.
   g := (${scope.globals} between: 1 and: reg size) ifTrue: [reg at: ${scope.globals}] ifFalse: [nil].
   (g class == Array and: [g size >= 2 and: [(g at: 1) == #gemdbScope]])
@@ -1077,7 +1077,8 @@ console := (cref between: 1 and: reg size) ifTrue: [reg at: cref] ifFalse: [nil]
   l := (${scope.locals} between: 1 and: reg size) ifTrue: [reg at: ${scope.locals}] ifFalse: [nil].
   (l class == Array and: [l size >= 2 and: [(l at: 1) == #gemdbScope]])
     ifTrue: [(l at: 2) keysAndValuesDo: [:k :x | bind value: k value: x]].
-  console := { #gemdbConsole. dict }.
+  "The names it starts with, so the ones the console binds can be told apart (%names)."
+  console := { #gemdbConsole. dict. dict keys copy }.
   reg add: console.
   cref := reg size].
 `;
@@ -1125,7 +1126,7 @@ dict at: #'_gemdb_shown' put: o.
  * console scope and answers what came of it (`parseConsoleReply`).
  *
  * The scope is made on a frame's first line and kept in the pause's registry
- * as `{#gemdbConsole. dict}`, at `consoleRef` once made, so a name the
+ * as `{#gemdbConsole. dict. startingNames}`, at `consoleRef` once made, so a name the
  * console binds (`y = 5`, `import json`, a `def`) is there for the next line
  * and gone with the registry at resume, as under debugpy. It is one
  * SymbolDictionary run as a module scope: the frame's globals, copied, with
@@ -1256,6 +1257,54 @@ ${CHILDREN_OF}
 ${DESCRIBE}
 ${withQuietConsole(`describe value: '${escapeString(name)}' value: obj`)}
 out contents encodeAsUTF8`;
+}
+
+/**
+ * Smalltalk answering the names bound in frame `scope`'s console since it was
+ * made — what the user typed, not the frame's own names — one per record, as
+ * `name`, field, `type`, field, short repr, in their Python spelling (`self`,
+ * not Grail's stand-in). GemDB's own `_gemdb…` names are left out. For
+ * `%names`, and for completing a name after `%persist `.
+ */
+export function consoleNamesQuery(scope: ConsoleScope, consoleRef: number): string {
+  return `| reg dispatcher cref console dict g l bind nameAst none field record out names |
+${PREAMBLE}
+${consoleScopeSetup(scope, consoleRef)}
+dict := console at: 2.
+names := (dict keys reject: [:k | (console at: 3) includes: k]) asSortedCollection: [:a :b | a <= b].
+names do: [:k | | v nm tname text |
+  nm := nameAst isNil ifTrue: [k asString]
+    ifFalse: [[(nameAst doitScopeNameToPythonName: k) asString] on: Error do: [:e | e return: k asString]].
+  "Grail carries Python's _ under a spelling of its own (measured: ___unused___)."
+  nm = '___unused___' ifTrue: [nm := '_'].
+  (nm size >= 6 and: [(nm copyFrom: 1 to: 6) = '_gemdb']) ifFalse: [
+    v := dict at: k.
+    tname := [((v @env1:___pyAttrLoad___: #'__class__') @env1:___pyAttrLoad___: #'__name__') asString]
+      on: AbstractException do: [:e | e return: v class name asString].
+    text := [(v @env1:__repr__) asString] on: AbstractException do: [:e | e return: '?'].
+    text size > 80 ifTrue: [text := (text copyFrom: 1 to: 77) , '...'].
+    out nextPutAll: nm; nextPut: field; nextPutAll: tname; nextPut: field;
+      nextPutAll: (text collect: [:c | (c == field or: [c == record]) ifTrue: [$?] ifFalse: [c]]);
+      nextPut: record]].
+(cref printString , (String with: record) , out contents) encodeAsUTF8`;
+}
+
+/** Parse `consoleNamesQuery`'s answer: the console's position, and its names. */
+export function parseConsoleNames(raw: string): {
+  consoleRef: number;
+  names: Array<{ name: string; type: string; repr: string }>;
+} {
+  if (raw.startsWith('Error: ')) throw new Error(raw.slice('Error: '.length));
+  const [ref = '', ...records] = raw.split(RECORD);
+  return {
+    consoleRef: Number.parseInt(ref, 10) || 0,
+    names: records
+      .filter((r) => r.length > 0)
+      .map((r) => {
+        const [name = '', type = '', repr = ''] = r.split(FIELD);
+        return { name, type, repr };
+      }),
+  };
 }
 
 /** Parse `consoleQuery`'s answer. */
