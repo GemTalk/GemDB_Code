@@ -64,6 +64,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   write a change into the saved stack, which then no longer holds the values it was saved with. Closing the stack
   with changes pending asks whether to commit them; otherwise they are discarded.
 
+### Changed
+
+- **The new GemDB brand.** The Marketplace and Extensions view icon is GemDB's dark-mode favicon, the
+  gem on a blue gradient, and the activity bar shows the gem, recoloured to fit your theme with its
+  right face lighter as in the logo. The Marketplace page's banner is the brand's Core Purple.
+
 ### Fixed
 
 - **A classmethod's or staticmethod's frame is named by its class.** The Call Stack read
