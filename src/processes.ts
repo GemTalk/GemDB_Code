@@ -16,7 +16,7 @@ import {
 } from './config';
 import { libraryPathVariable, sharedLibraryExtension } from './platform';
 import { log, logStep } from './log';
-import { withStoneLock } from './lock';
+import { STONE_LOCK_POLL_MS, STONE_LOCK_TIMEOUT_MS, withStoneLock } from './lock';
 import { DiskSpaceError, databaseOnNfsError } from './database';
 import { EngineProcess, parseGslist } from './gslist';
 import { databaseConfPath, databaseLogPath, databasePath, enginePath, grailPath } from './paths';
@@ -171,6 +171,104 @@ export function isListening(processes = listProcesses()): boolean {
 }
 
 /**
+ * True when the stone has finished starting and will take a login.
+ *
+ * Not the same question as {@link isRunning}. `gslist` lists a stone from the
+ * moment it exists, and one recovering from a crash sits at `Startup` for as
+ * long as recovery takes; a login in that time fails. So whatever is about to
+ * log in waits for `OK`, while the status bar and maintenance, which ask
+ * whether there is a stone at all, keep asking that.
+ */
+export function stoneReady(processes: EngineProcess[]): boolean {
+  return findStone(processes)?.responding === true;
+}
+
+/** True when the listener is up and answering, the listener's half of {@link stoneReady}. */
+export function listenerReady(processes: EngineProcess[]): boolean {
+  return findNetldi(processes)?.responding === true;
+}
+
+/**
+ * What to do about the stone, from its gslist status.
+ *
+ * The engine prints statuses in mixed case — `OK`, `Startup`, `Shutdown`,
+ * `frozen`, `killed`, `exists`, `exe deleted` were all seen — and `gslist -h`
+ * also lists `recovery`, `full`, `restoreBkup`, `restoreLogs` and
+ * `contRestore`, so they are compared without case. Only a stone that is
+ * starting is worth waiting for. One shutting down is said to be, rather than
+ * waited on for a minute. Anything else that is listed goes on to the login,
+ * which judges it, as it did before GemDB waited for `OK`: a stone left
+ * running when the engine tree was replaced reads `exe deleted` and takes
+ * logins, and refusing it would stop a working database.
+ */
+export type StoneState = 'absent' | 'ready' | 'starting' | 'stopping' | 'other';
+
+export function stoneState(processes: EngineProcess[]): StoneState {
+  const stone = findStone(processes);
+  if (!stone) return 'absent';
+  if (stone.responding) return 'ready';
+  switch (stone.status.toLowerCase()) {
+    case 'startup':
+    case 'recovery':
+      return 'starting';
+    case 'shutdown':
+      return 'stopping';
+    default:
+      return 'other';
+  }
+}
+
+/** What to say about a stone that is on its way down, wherever it is met. */
+export const SHUTTING_DOWN_MESSAGE =
+  'The database is shutting down. Start it again once it has stopped.';
+
+/**
+ * Wait for a listed stone to finish starting.
+ *
+ * Returns at once for a stone that is not starting. One this process did not
+ * start — a crash being recovered, or one an older GemDB started without
+ * waiting — is polled until it is past `Startup`. A stone that disappears
+ * while we wait failed to start, and one still starting after a minute is not
+ * going to soon; both end in an error naming the stone's log, which says why.
+ * A stone at `Shutdown` ends the wait at once: it is being stopped. Starts
+ * from `wait.listing` when the caller has one that recent, rather than asking
+ * gslist twice in a row. Returns the last listing, so the caller need not
+ * take another.
+ */
+export async function waitForStoneReady(
+  report?: (message: string) => void,
+  wait: { pollMs?: number; timeoutMs?: number; listing?: EngineProcess[] } = {},
+): Promise<EngineProcess[]> {
+  const stoneLog = path.join(databaseLogPath(), `${STONE_NAME}.log`);
+  const deadline = Date.now() + (wait.timeoutMs ?? STONE_LOCK_TIMEOUT_MS);
+  let running = wait.listing ?? (await listProcessesAsync());
+  let waiting = false;
+  for (;;) {
+    switch (stoneState(running)) {
+      case 'ready':
+      case 'other':
+        return running;
+      case 'stopping':
+        throw new Error(SHUTTING_DOWN_MESSAGE);
+      case 'absent':
+        throw new Error(`The database stopped while it was starting. See ${stoneLog}.`);
+      case 'starting':
+        break;
+    }
+    if (!waiting) {
+      waiting = true;
+      report?.('Waiting for the database to finish starting…');
+      log('The database is still starting; waiting for it.');
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`The database has been starting for over a minute. See ${stoneLog}.`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, wait.pollMs ?? STONE_LOCK_POLL_MS));
+    running = await listProcessesAsync();
+  }
+}
+
+/**
  * Raised when something asks GemDB to start or stop a database it does not
  * run. See {@link externalDatabase} for why that is refused, not attempted.
  */
@@ -191,44 +289,153 @@ function requireOwnDatabase(action: string): void {
   );
 }
 
-export async function startStone(): Promise<void> {
-  requireOwnDatabase('start');
-  // Under the lock the generated `gemdb` wrapper also takes, because both
-  // doors start the same stone and nothing downstream refuses a second one.
-  // The re-check inside the lock is the point: whoever we queued behind was
-  // most likely starting it, and without this we would start another. For the
-  // same reason, a stone that comes up while we wait ends the wait.
-  await withStoneLock(
-    async () => {
-      if (isRunning()) {
-        log('The database is already running; nothing to start.');
-        return;
-      }
-      logStep(`Starting the database`);
-      const env = engineEnvironment();
-      const stoneLog = path.join(databaseLogPath(), `${STONE_NAME}.log`);
-      const logSizeBefore = fileSize(stoneLog);
-      try {
-        await runEngineCommand(
-          path.join(env.GEMSTONE, 'bin', 'startstone'),
-          ['-l', stoneLog, STONE_NAME],
-          env,
-          'Start database',
-        );
-      } catch (e) {
-        if (refusedNfs(e, stoneLog, logSizeBefore)) throw databaseOnNfsError();
-        if (stoneLogSays(/No space left on device/, e, stoneLog, logSizeBefore)) {
-          throw new DiskSpaceError(
-            'The GemDB database could not start: the disk ran out of space while it reserved ' +
-              'its extent. Free some disk space, or set gemdb.rootPath to a folder on a disk ' +
-              'with more room, then start GemDB again.',
-          );
-        }
-        throw e;
-      }
-    },
-    { satisfied: isRunningAsync },
+/**
+ * What to say when an external database is not up: GemDB does not start it,
+ * so the sentence says who does.
+ */
+export function externalDatabaseDownError(external: {
+  stone: string;
+  netldi: string;
+}): ExternalDatabaseError {
+  return new ExternalDatabaseError(
+    `The database is not running: GemDB expects stone ${external.stone} and NetLDI ` +
+      `${external.netldi}, which this machine's administrator runs. Ask them to start it.`,
   );
+}
+
+/**
+ * Bring up whichever of the stone and the session listener is not already
+ * up, and say which of them this call started.
+ *
+ * Every start of GemDB's own database goes through here — the window's and
+ * the GemDB Shell's (the listener a declined force-stop puts back goes through
+ * {@link ensureListener}) — and all of it happens under the stone lock the `gemdb` wrapper also takes. Checking
+ * and starting have to be one step: checked outside the lock, two callers
+ * that both found the listener missing both ran `startnetldi`, and the loser
+ * reported a failure over a database that was up. So the look happens inside
+ * the lock, and a caller that queued behind whoever was starting it finds
+ * everything up and starts nothing. For the same reason, both coming up while
+ * we wait for the lock ends the wait, with nothing started.
+ *
+ * `beforeStoneStart` runs only when this call is about to start the stone:
+ * the guards that refuse a stone that should not start belong there, not on
+ * every call. `report` hears each step as it begins, for a progress
+ * notification or a terminal.
+ */
+export async function ensureProcesses(
+  opts: { beforeStoneStart?: () => void; report?: (message: string) => void } = {},
+): Promise<{ startedStone: boolean; startedNetldi: boolean }> {
+  requireOwnDatabase('start');
+  // Every notebook cell lands here, and nearly always both are up: one
+  // listing and no lock then. Never for a stone starting or stopping, which
+  // the lock and the wait below are for.
+  const before = await listProcessesAsync();
+  const stoneUp = ['ready', 'other'].includes(stoneState(before));
+  if (stoneUp && findNetldi(before)) {
+    log('The database is already running.');
+    log('The session listener is already running.');
+    return { startedStone: false, startedNetldi: false };
+  }
+  let seen = before;
+  const started = await withStoneLock(
+    async () => {
+      let startedStone = false;
+      // Listed again: what was true before the lock may not be now.
+      const listed = await listProcessesAsync();
+      const state = stoneState(listed);
+      // Said here, before any wait: a stopping stone's last moments read
+      // `Startup` before it disappears (measured), which a wait would report
+      // as a start that failed.
+      if (state === 'stopping') throw new Error(SHUTTING_DOWN_MESSAGE);
+      if (state === 'absent') {
+        opts.beforeStoneStart?.();
+        opts.report?.('Starting the database…');
+        logStep('Starting the database');
+        await runStartstone();
+        startedStone = true;
+      } else {
+        log('The database is already running.');
+      }
+      // The wait's last listing is recent enough to judge the listener by:
+      // it was taken after the stone, ours or not, finished starting. One
+      // taken before our startstone is not, so the wait starts afresh then.
+      const running = await waitForStoneReady(opts.report, {
+        listing: startedStone ? undefined : listed,
+      });
+
+      let startedNetldi = false;
+      if (!findNetldi(running)) {
+        opts.report?.('Starting the session listener…');
+        startedNetldi = await startNetldi();
+      } else {
+        log('The session listener is already running.');
+      }
+      return { startedStone, startedNetldi };
+    },
+    {
+      satisfied: async () => {
+        seen = await listProcessesAsync();
+        return stoneReady(seen) && listenerReady(seen);
+      },
+      // A stone listed and not going down means whoever holds the lock is past
+      // startstone: waiting on it, or starting the listener beside it.
+      progressing: () => ['starting', 'ready', 'other'].includes(stoneState(seen)),
+    },
+  );
+  return started ?? { startedStone: false, startedNetldi: false };
+}
+
+/**
+ * Put the session listener back, and never the stone: what a declined
+ * force-stop needs. By the time the user has answered, the stone may have gone
+ * after all, or be on its way down, and starting one then would undo a stop
+ * without the guards a start runs. True when this call started the listener.
+ * Under the stone lock, like every other start.
+ */
+export async function ensureListener(): Promise<boolean> {
+  requireOwnDatabase('start');
+  const started = await withStoneLock(
+    async () => {
+      const running = await listProcessesAsync();
+      const state = stoneState(running);
+      if (state === 'absent' || state === 'stopping') {
+        log('The database is not running; not starting the session listener.');
+        return false;
+      }
+      if (findNetldi(running)) return false;
+      return startNetldi();
+    },
+    { satisfied: async () => findNetldi(await listProcessesAsync()) !== undefined },
+  );
+  return started ?? false;
+}
+
+/**
+ * Run `startstone`, turning the two refusals the stone explains only in its
+ * log into errors that say what to do. The caller holds the stone lock.
+ */
+async function runStartstone(): Promise<void> {
+  const env = engineEnvironment();
+  const stoneLog = path.join(databaseLogPath(), `${STONE_NAME}.log`);
+  const logSizeBefore = fileSize(stoneLog);
+  try {
+    await runEngineCommand(
+      path.join(env.GEMSTONE, 'bin', 'startstone'),
+      ['-l', stoneLog, STONE_NAME],
+      env,
+      'Start database',
+    );
+  } catch (e) {
+    if (refusedNfs(e, stoneLog, logSizeBefore)) throw databaseOnNfsError();
+    if (stoneLogSays(/No space left on device/, e, stoneLog, logSizeBefore)) {
+      throw new DiskSpaceError(
+        'The GemDB database could not start: the disk ran out of space while it reserved ' +
+          'its extent. Free some disk space, or set gemdb.rootPath to a folder on a disk ' +
+          'with more room, then start GemDB again.',
+      );
+    }
+    throw e;
+  }
 }
 
 /**
@@ -277,26 +484,58 @@ function fileSize(file: string): number {
   }
 }
 
-export async function startNetldi(): Promise<void> {
-  requireOwnDatabase('start');
+/** How long a listener another process is starting gets to answer. */
+const LISTENER_SETTLE_MS = 5_000;
+
+/**
+ * Start the session listener. True when this call started it; false when
+ * `startnetldi` refused because another process had started it first.
+ *
+ * Not exported: the listener starts only through {@link ensureProcesses} or
+ * {@link ensureListener}, under the stone lock.
+ *
+ * That race is not rare (#89): the window's start, the GemDB Shell's, and
+ * releases before this one, which start the listener without any lock, can
+ * all find it missing and start it together. The loser's `startnetldi` fails
+ * — exit 1, "Server 'gemdbldi' is already running", when the winner is fully
+ * up; exit 3, "could not start server" over the winner's lock file, when the
+ * two overlap — and everything the caller wanted is true, so a listener that
+ * is up and answering afterwards is not a failure. In the overlap the
+ * winner's listener may still be coming up when ours gives up, so it gets
+ * {@link LISTENER_SETTLE_MS} to answer; one that does not still fails with
+ * startnetldi's own words. The lock closes the race between GemDB's own
+ * callers; this covers what takes no lock.
+ */
+async function startNetldi(): Promise<boolean> {
   logStep('Starting the session listener');
   const env = engineEnvironment();
-  await runEngineCommand(
-    path.join(env.GEMSTONE, 'bin', 'startnetldi'),
-    // -a restricts logins to this user, -g runs sessions as that user without
-    // needing a host password. Together they are what lets GemDB log in with
-    // no operating-system credentials at all.
-    [
-      '-a',
-      os.userInfo().username,
-      '-g',
-      '-l',
-      path.join(databaseLogPath(), `${NETLDI_NAME}.log`),
-      NETLDI_NAME,
-    ],
-    env,
-    'Start session listener',
-  );
+  try {
+    await runEngineCommand(
+      path.join(env.GEMSTONE, 'bin', 'startnetldi'),
+      // -a restricts logins to this user, -g runs sessions as that user without
+      // needing a host password. Together they are what lets GemDB log in with
+      // no operating-system credentials at all.
+      [
+        '-a',
+        os.userInfo().username,
+        '-g',
+        '-l',
+        path.join(databaseLogPath(), `${NETLDI_NAME}.log`),
+        NETLDI_NAME,
+      ],
+      env,
+      'Start session listener',
+    );
+    return true;
+  } catch (e) {
+    const deadline = Date.now() + LISTENER_SETTLE_MS;
+    while (!listenerReady(await listProcessesAsync())) {
+      if (Date.now() > deadline) throw e;
+      await new Promise((resolve) => setTimeout(resolve, STONE_LOCK_POLL_MS));
+    }
+    log('Another process started the session listener.');
+    return false;
+  }
 }
 
 /**

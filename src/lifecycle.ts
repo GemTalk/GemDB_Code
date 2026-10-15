@@ -18,9 +18,8 @@ import {
   DatabaseOnNfsError,
   DatabaseVersionError,
   DiskSpaceError,
-  assertRoomForExtent,
   assertRoomForSetup,
-  ensureSpaceLimits,
+  assertSafeToStart,
   removeDatabase,
 } from './database';
 import { Progress, installEngine, removeEngine } from './engine';
@@ -53,14 +52,14 @@ import {
   mcpPath,
 } from './paths';
 import {
-  ExternalDatabaseError,
+  ensureListener,
+  ensureProcesses,
+  externalDatabaseDownError,
   findNetldi,
   findStone,
   isListening,
   isRunning,
   listProcesses,
-  startNetldi,
-  startStone,
   stopNetldi,
   stopStone,
 } from './processes';
@@ -810,54 +809,24 @@ export async function resumeRunning(extensionPath: string): Promise<boolean> {
 async function startProcesses(
   progress?: vscode.Progress<{ message?: string }>,
 ): Promise<{ startedStone: boolean; startedNetldi: boolean }> {
-  const running = listProcesses();
-  let startedStone = false;
-  let startedNetldi = false;
-
   // Nothing to start for an external database — only whether it is up, said
   // in terms of what to do about it.
   const external = externalDatabase();
   if (external) {
-    if (!findStone(running) || !findNetldi(running)) {
-      throw new ExternalDatabaseError(
-        `The database is not running: GemDB expects stone ${external.stone} and NetLDI ` +
-          `${external.netldi}, which this machine's administrator runs. Ask them to start it.`,
-      );
-    }
+    const running = listProcesses();
+    if (!findStone(running) || !findNetldi(running)) throw externalDatabaseDownError(external);
     log('The database is running.');
-    return { startedStone, startedNetldi };
+    return { startedStone: false, startedNetldi: false };
   }
 
-  if (!findStone(running)) {
-    // Checked here as well as in `prepareFiles`, because an extension update
-    // reaches this line without going through preparation at all: the engine
-    // is downloaded, the database exists, Grail is staged, so `isInstalled()`
-    // is true and the first thing that happens is a stone starting on a
-    // repository the new engine cannot read.
-    // NFS likewise: a database set up there before setup checked for it.
-    assertDatabaseIsLocal();
-    const engine = enginePath();
-    if (engine) assertDatabaseMatchesEngine(engine, engineVersion());
-    // A database an earlier GemDB created has no space limits yet, and the
-    // stone reserves the extent's full size as it starts.
-    ensureSpaceLimits();
-    // Every start, not once: the settings it is written from may have changed.
-    ensureStatmonitor();
-    assertRoomForExtent();
-    progress?.report({ message: 'Starting the database…' });
-    await startStone();
-    startedStone = true;
-  } else {
-    log('The database is already running.');
-  }
-  if (!findNetldi(running)) {
-    progress?.report({ message: 'Starting the session listener…' });
-    await startNetldi();
-    startedNetldi = true;
-  } else {
-    log('The session listener is already running.');
-  }
-  return { startedStone, startedNetldi };
+  return ensureProcesses({
+    beforeStoneStart: () => {
+      assertSafeToStart();
+      // Every start, not once: the settings it is written from may have changed.
+      ensureStatmonitor();
+    },
+    report: (message) => progress?.report({ message }),
+  });
 }
 
 /**
@@ -884,7 +853,7 @@ export interface StopWorld {
   listenerUp: () => boolean;
   stopStone: (force: boolean) => Promise<void>;
   stopNetldi: () => Promise<void>;
-  startNetldi: () => Promise<void>;
+  startNetldi: () => Promise<unknown>;
   /** Ask whether to disconnect the sessions that are in the way. */
   confirmForce: (reason: string) => Promise<boolean>;
   log: (message: string) => void;
@@ -933,7 +902,12 @@ export async function runStop(world: StopWorld): Promise<void> {
     if (!(await world.confirmForce(reason))) {
       // Declining means "leave it running", and a running database with no
       // listener accepts no new sessions — so put back what we stopped on the
-      // way in rather than leaving a half-stopped machine behind.
+      // way in rather than leaving a half-stopped machine behind. Unless it
+      // finished stopping while the question was up: then it is stopped.
+      if (!world.stoneUp()) {
+        world.log('GemDB stopped.');
+        return;
+      }
       if (!world.listenerUp()) await world.startNetldi();
       world.log('GemDB is still running.');
       return;
@@ -976,7 +950,10 @@ async function stopOnce(): Promise<void> {
           listenerUp: () => isListening(),
           stopStone,
           stopNetldi,
-          startNetldi,
+          // Through the lock, like every other start: the window that declined
+          // is not the only one that may be putting the listener back. The
+          // listener only: a stone gone by now is not this call's to restart.
+          startNetldi: () => ensureListener(),
           confirmForce,
           log,
         });

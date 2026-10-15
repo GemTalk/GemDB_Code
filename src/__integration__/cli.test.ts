@@ -5,8 +5,14 @@ import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cliPath } from '../cli';
 import { bundledGrailStamp, stageGrail } from '../grail';
-import { isRunning, startStone, stopStone } from '../processes';
-import { createDatabaseWithPython, Fixture, haveTestExtent, makeFixture } from './fixture';
+import { isRunning, stopStone } from '../processes';
+import {
+  createDatabaseWithPython,
+  Fixture,
+  haveTestExtent,
+  makeFixture,
+  startStoneAlone,
+} from './fixture';
 
 /**
  * The `gemdb` shell command, run the way a user runs it: bash, a file
@@ -69,7 +75,7 @@ beforeAll(async () => {
 
   createDatabaseWithPython(fixture); // Python already filed in — see testExtentPath
   stageGrail(ext); // stages Grail and generates the CLI
-  await startStone();
+  await startStoneAlone();
 
   fs.writeFileSync(path.join(workDir, 'hello.py'), 'print("hello from", 6 * 7)\n');
   fs.writeFileSync(path.join(workDir, 'both.py'), 'print("partial")\n1 / 0\n');

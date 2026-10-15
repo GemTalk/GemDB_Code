@@ -25,7 +25,7 @@ import {
   setVariableQuery,
   unquote,
 } from '../pauseVariables';
-import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
+import { ensureProcesses, isRunning, stopNetldi, stopStone } from '../processes';
 import { fileOwner } from '../fileOwner';
 import { runPython, runPythonFile } from '../pythonQueries';
 import {
@@ -94,8 +94,7 @@ beforeAll(async () => {
   if (!fixture) return;
   createDatabaseWithPython(fixture);
   stageGrail(ext);
-  await startStone();
-  await startNetldi();
+  await ensureProcesses();
 });
 
 afterEach(() => setHaltHandler(undefined));
