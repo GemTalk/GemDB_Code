@@ -123,6 +123,18 @@ describe('writeCliScripts', () => {
     expect(script).toMatch(/if \[ -z "\$STATUS" \]; then\n\s+sed .* "\$GEMDB_TOPAZ_LOG" >&2\n/);
   });
 
+  it('removes its temporary files however the run ends', () => {
+    writeCliScripts(ext);
+
+    const script = fs.readFileSync(cliPath(), 'utf8');
+
+    // Armed before the first file is made, so no exit path — a hangup
+    // included — can skip it, and nothing after the run removes them itself.
+    expect(script.indexOf('trap remove_temp_files EXIT')).toBeGreaterThan(-1);
+    expect(script.indexOf('trap remove_temp_files EXIT')).toBeLessThan(script.indexOf('mktemp'));
+    expect(script).not.toMatch(/^rm -f "\$GEMDB_STATUS_FILE"/m);
+  });
+
   it('never leaves topaz reading commands from stdin', () => {
     writeCliScripts(ext);
 

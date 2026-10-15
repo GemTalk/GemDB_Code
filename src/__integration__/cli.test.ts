@@ -1,4 +1,4 @@
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -293,11 +293,54 @@ exit [lindex $result 3]
       fs.writeFileSync(driver, good);
     }
 
-    expect(ran.stderr).toContain('Login failed');
-    expect(ran.stderr).not.toContain('not-the-password');
-    expect(ran.stdout + ran.stderr).not.toContain('LEAKED');
+    // Exactly GemStone's report of the refusal: none of the driver, which
+    // topaz echoes into the log and the wrapper strips, nothing about the run
+    // block topaz goes on through with no session, and not the piped line.
+    // stdout is not pinned: the gem sometimes writes a line of its own there
+    // about the failed login, which is not topaz's to keep quiet.
+    expect(ran.stderr.trimEnd().split('\n')).toEqual([
+      expect.stringMatching(/^-+$/),
+      'GemStone: Error         Fatal',
+      'Login failed:  the userId/password combination is invalid or expired.',
+      expect.stringContaining('Number: 4051'),
+      'Arg 1: nil',
+    ]);
+    expect(ran.stdout).not.toContain('LEAKED');
     expect(ran.stdout).not.toContain('hello from');
-    expect(ran.code).not.toBe(0);
+    // topaz's own status, which the wrapper passes on when there is no other.
+    expect(ran.code).toBe(1);
+  });
+
+  it('leaves no temporary files behind, even when its terminal closes mid-run', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gemdb-cli-tmp-'));
+    const env = { ...process.env, TMPDIR: tmp };
+    fs.writeFileSync(
+      path.join(workDir, 'forever.py'),
+      'import time\nprint("serving", flush=True)\nwhile True:\n    time.sleep(0.2)\n',
+    );
+    await new Promise((resolve) =>
+      execFile('bash', [cliPath(), '-c', 'print(1)'], { cwd: workDir, env }, resolve),
+    );
+    // Its own process group, so the hangup reaches the wrapper and topaz
+    // together, as closing a terminal tab does.
+    const child = spawn('bash', [cliPath(), 'forever.py'], { cwd: workDir, env, detached: true });
+    const exited = new Promise((resolve) => child.on('exit', resolve));
+    await new Promise<void>((resolve) => {
+      child.stdout.on('data', (chunk: Buffer) => {
+        if (chunk.toString().includes('serving')) resolve();
+      });
+    });
+
+    process.kill(-(child.pid ?? 0), 'SIGHUP');
+    await exited;
+    const left = fs.readdirSync(tmp);
+    // topaz outlives a hangup, as it did before the wrapper had a trap, so it
+    // is ended here: left running it holds a session the next test needs gone.
+    process.kill(-(child.pid ?? 0), 'SIGTERM');
+    await waitForGroupToEnd(child.pid ?? 0);
+    fs.rmSync(tmp, { recursive: true, force: true });
+
+    expect(left).toEqual([]);
   });
 
   it('raises EOFError when stdin runs dry', async () => {
@@ -341,4 +384,17 @@ function canMakeFixture(): boolean {
   const probe = makeFixture();
   probe?.remove();
   return probe !== undefined;
+}
+
+/** Resolves once no process in the group is left, polling as `kill -0` does. */
+async function waitForGroupToEnd(pgid: number): Promise<void> {
+  for (let i = 0; i < 100; i++) {
+    try {
+      process.kill(-pgid, 0);
+    } catch {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`process group ${pgid} still running after 10 s`);
 }

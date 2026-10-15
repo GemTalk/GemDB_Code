@@ -624,9 +624,24 @@ fi
   fi
 fi
 
+# The run's temporary files, removed however it ends: bash runs an EXIT trap
+# on a normal exit, and on SIGHUP (a terminal tab closed mid-run) and SIGTERM
+# too — measured with macOS's /bin/bash 3.2, the oldest this runs under. A
+# function rather than an array, because 3.2 calls an empty array unbound
+# under set -u.
+CODE_FILE=""
+GEMDB_STATUS_FILE=""
+GEMDB_TOPAZ_LOG=""
+remove_temp_files() {
+  local f
+  for f in "$CODE_FILE" "\${CODE_FILE%.py}" "$GEMDB_STATUS_FILE" "$GEMDB_TOPAZ_LOG"; do
+    if [ -n "$f" ]; then rm -f "$f"; fi
+  done
+}
+trap remove_temp_files EXIT
+
 # -c 'code': materialise the code as a file, like CPython's -c but visibly so.
 # mktemp is given an explicit template — BSD and GNU disagree about -t.
-CODE_FILE=""
 if [ "$1" = "-c" ]; then
   [ "$#" -ge 2 ] || { echo "gemdb: -c requires an argument" >&2; exit 2; }
   CODE_FILE="$(mktemp "\${TMPDIR:-/tmp}/gemdb-c-XXXXXX").py"
@@ -658,8 +673,6 @@ STATUS="$(cat "$GEMDB_STATUS_FILE" 2>/dev/null || true)"
 if [ -z "$STATUS" ]; then
   sed -e '/^topaz[^>]*> run$/,/^%$/d' -e '/^topaz[^>]*> /d' "$GEMDB_TOPAZ_LOG" >&2
 fi
-rm -f "$GEMDB_STATUS_FILE" "$GEMDB_TOPAZ_LOG"
-[ -n "$CODE_FILE" ] && rm -f "$CODE_FILE" "\${CODE_FILE%.py}"
 case "$STATUS" in
   ''|*[!0-9]*) [ "$RC" -ne 0 ] && exit "$RC"; exit 1 ;;
   *) exit "$STATUS" ;;
