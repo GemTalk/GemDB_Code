@@ -63,6 +63,8 @@ class FakeGem {
   paths = new Map<number, string>();
   /** What `snapshotQuery` answers, by session and permanent number (`extension:7`). */
   snapshots = new Map<string, string>();
+  /** What `pendingQuery` answers, by session; nothing written when absent. */
+  pendingLists = new Map<string, string>();
   /** The reverts run, by session. */
   reverts: Array<{ session: string; code: string }> = [];
   /** Sessions with changes to commit beyond their additions, as a %pending would find them. */
@@ -102,6 +104,9 @@ class FakeGem {
         .join('');
     }
     if (code.includes('len(gemdb.root)')) return String(this.committed.size);
+    if (code.includes('System _writtenObjects')) {
+      return this.pendingLists.get(session) ?? `#${F}0${F}0${F}0${R}`;
+    }
     if (code.includes("#'_gemdb_obj'")) {
       this.reverts.push({ session, code });
       const n = /_objectForOop: (\d+)\)\./.exec(code)![1];
@@ -913,6 +918,7 @@ describe('saved stacks', () => {
     const notebook = rows.find((r) => r.kind === 'notebook')!;
     expect((await view.getChildren(notebook)).map((r) => item(view, r).label)).toEqual([
       'stack_bp',
+      'Pending changes',
     ]);
     debug.activeDebugSession = undefined;
   });
@@ -1584,5 +1590,137 @@ describe('marking what %pending found changed', () => {
     const [boss] = await view.getChildren(root);
 
     expect(item(view, boss).resourceUri).toBeUndefined();
+  });
+});
+
+describe('a notebook’s Pending changes, with nothing paused', () => {
+  const S = '\u001d';
+  const change = (steps: string, oop: number, type: string, value: string) =>
+    [steps, String(oop), value, type, '0', '0', '0', '1', '-1', '0', ''].join(F) + R;
+  const snap = (...entries: Array<[string, string]>) =>
+    `#${F}obj${R}` +
+    entries.map(([name, value]) => `${name}${F}v${value}${F}${value}${R}`).join('');
+
+  /** other.ipynb, connected and idle, having changed boss in a cell and set note back as it was. */
+  async function changedInACell() {
+    connected.push({ key: OTHER, label: 'other.ipynb' });
+    gem.dirty.add(OTHER);
+    gem.committed.set('boss', 'Employee');
+    gem.refs.set('boss', 2);
+    gem.fields.set(2, row('total', '10', 'int', 0, 0, 0, 1));
+    gem.paths.set(5, `${S}k0:boss`);
+    gem.pendingLists.set(
+      OTHER,
+      change(`${S}k0:boss`, 5, 'Employee', '<Employee>') +
+        change(`${S}k1:note`, 6, 'Note', '<Note>') +
+        change('!', 7, 'RcCollisionBucket', '[...]') +
+        ['#', '3', '0', '0'].join(F) +
+        R,
+    );
+    gem.snapshots.set('extension:5', snap(['total', '10']));
+    gem.snapshots.set(`${OTHER}:5`, snap(['total', '15']));
+    gem.snapshots.set('extension:6', snap(['text', "'hi'"]));
+    gem.snapshots.set(`${OTHER}:6`, snap(['text', "'hi'"]));
+    const { view } = setUp();
+    const rows = await topOf(view);
+    const notebook = rows.find((r) => r.kind === 'notebook')!;
+    return { view, rows, notebook };
+  }
+
+  it('shows a notebook with changes to commit, though nothing was added from the debugger', async () => {
+    const { view, notebook } = await changedInACell();
+
+    expect(item(view, notebook).label).toBe('other.ipynb');
+    expect(item(view, notebook).description).toBe('uncommitted changes');
+    // Its Commit and Abort buttons come with it.
+    expect(item(view, notebook).contextValue).toBe('gemdbNotebookDirty');
+    expect((await view.getChildren(notebook)).map((r) => item(view, r).label)).toEqual([
+      'Pending changes',
+    ]);
+  });
+
+  it('lists what the next commit changes, each a row that shows the object when clicked', async () => {
+    const { view, notebook } = await changedInACell();
+    const [group] = await view.getChildren(notebook);
+
+    const rows = await view.getChildren(group);
+
+    expect(rows.map((r) => item(view, r).label)).toEqual([
+      'boss',
+      "+ 1 internal object: storage inside these, or the database's caches",
+      '+ 1 written back unchanged (reverted, or set to what it held)',
+    ]);
+    const boss = item(view, rows[0]);
+    // What changes, rather than a path cut off before the part that differs.
+    expect(boss.description).toBe('total 10 → 15');
+    expect((boss.tooltip as MarkdownString).value).toContain(
+      '- `total`: committed `10` → next commit `15`',
+    );
+    expect(boss.command).toMatchObject({
+      command: 'gemdb.savedObjects.showObject',
+      arguments: [5, { fromPendingChanges: true }],
+    });
+    // Read in the notebook's own session, with nothing paused.
+    expect(gem.queries.some((q) => q.session === OTHER && q.code.includes('_writtenObjects'))).toBe(
+      true,
+    );
+
+    await command('gemdb.savedObjects.showObject')(5);
+
+    expect(item(view, __treeViews.get(VIEW_ID)!.reveals.at(-1)!.element as SavedRow).label).toBe(
+      'boss',
+    );
+  });
+
+  it('keeps Pending changes open when one of its objects is clicked', async () => {
+    const { view, notebook } = await changedInACell();
+    const [group] = await view.getChildren(notebook);
+    __treeViews.get(VIEW_ID)!.toggle(group, true);
+    const reads = gem.queries.length;
+
+    await command('gemdb.savedObjects.showObject')(5, { fromPendingChanges: true });
+
+    // Gone to in the view as it is: nothing re-read, so VS Code keeps every open row open.
+    // (A fresh reading starts the view's registry afresh; finding the object's path does not.)
+    expect(
+      gem.queries.slice(reads).some((q) => q.code.includes("#'GemDbPersistedRefs' put:")),
+    ).toBe(false);
+    const shown = __treeViews.get(VIEW_ID)!.reveals.at(-1)!.element as SavedRow;
+    expect(item(view, shown).label).toBe('boss');
+    expect(item(view, group).collapsibleState).toBe(2);
+  });
+
+  it('draws Pending changes open again after the view is re-read, while the user keeps it open', async () => {
+    const { view, notebook } = await changedInACell();
+    const [group] = await view.getChildren(notebook);
+    const id = item(view, group).id;
+    __treeViews.get(VIEW_ID)!.toggle(group, true);
+
+    const again = (
+      await view.getChildren((await topOf(view)).find((r) => r.kind === 'notebook')!)
+    )[0];
+
+    expect(item(view, again).id).toBe(id);
+    expect(item(view, again).collapsibleState).toBe(2);
+    __treeViews.get(VIEW_ID)!.toggle(again, false);
+    expect(item(view, again).collapsibleState).toBe(1);
+  });
+
+  it('marks the objects it lists M under gemdb.root, as %pending does', async () => {
+    const { view, rows, notebook } = await changedInACell();
+    const [group] = await view.getChildren(notebook);
+    await view.getChildren(group);
+    for (let i = 0; i < 10; i++) await settle();
+
+    const root = rows.find((r) => r.kind === 'root')!;
+    const [boss] = await view.getChildren(root);
+    expect(item(view, boss).description).toBe('changed: total 10 → 15');
+  });
+
+  it('leaves out a notebook with nothing to commit', async () => {
+    connected.push({ key: OTHER, label: 'other.ipynb' });
+    const { view } = setUp();
+
+    expect((await topOf(view)).map((r) => r.kind)).toEqual(['root']);
   });
 });

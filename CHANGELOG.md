@@ -47,6 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that grew still finds the right item. Objects created since the last commit are written as part
   of the objects that now hold them. Internal objects — storage inside a Python object, such as a
   big dict's buckets, or the database's own caches — are counted on one line, not listed.
+- **Pending changes in Persisted Objects, with nothing paused.** Every notebook with uncommitted
+  changes now has a row in Persisted Objects, with Commit and Abort, whether or not anything was
+  added from the debugger. Under it, **Pending changes** lists what its next commit changes, as
+  `%pending` does in the Debug Console. Click one to go to it under `gemdb.root`, where it is
+  marked **M** and can be reverted.
 - **The Debug Console and Watch work at a `breakpoint()` or red dot.** Type Python into the Debug
   Console and it runs in the frame selected in the Call Stack: its locals, closed-over names, its
   module's globals (an imported module's own, not the notebook's) and the builtins, as the paused

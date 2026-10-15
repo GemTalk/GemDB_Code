@@ -1232,6 +1232,43 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
       /1 written back unchanged \(reverted, or set to what it already held\): not listed|Nothing changes on commit: the object/,
     );
   });
+  it('lists a notebook’s pending changes in Persisted Objects with nothing paused', async () => {
+    const nb = notebook('po-pending-idle');
+    await runPython('import gemdb\ngemdb.root["pend_idle"] = {"total": 10}\ngemdb.commit()', nb);
+    // A cell that changes saved data and does not commit: no debugger anywhere.
+    await runPython('gemdb.root["pend_idle"]["total"] = 11', nb);
+    const view = registerSavedObjects({
+      subscriptions: [],
+      globalState: { get: () => undefined, update: () => Promise.resolve() },
+    } as unknown as Parameters<typeof registerSavedObjects>[0]);
+    view.getChildren();
+    let top = view.getChildren();
+    for (let i = 0; i < 200 && top.length === 1 && top[0].kind === 'message'; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      top = view.getChildren();
+    }
+    const row = top.find((r) => r.kind === 'notebook' && r.notebook.key === nb.key)!;
+    const [group] = await view.getChildren(row);
+    const changes = await view.getChildren(group);
+    // Opening it marks the same object M under gemdb.root, in the background: wait for that.
+    const rootRow = view.getChildren().find((r) => r.kind === 'root')!;
+    let marked: string | undefined;
+    for (let i = 0; i < 200 && !marked?.startsWith('changed'); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const entry = (await view.getChildren(rootRow)).find(
+        (r) => r.kind === 'entry' && r.entry.key === 'pend_idle',
+      );
+      marked = entry && String(view.getTreeItem(entry).description);
+    }
+    closeSessionFor(nb.key);
+
+    expect(marked).toBe("changed: 'total' 10 → 11");
+    expect(view.getTreeItem(row).description).toBe('uncommitted changes');
+    expect(view.getTreeItem(group).label).toBe('Pending changes');
+    const shown = changes.map((r) => view.getTreeItem(r));
+    expect(shown.map((i) => i.label)).toContain('pend_idle');
+    expect(shown.find((i) => i.label === 'pend_idle')?.description).toBe("'total' 10 → 11");
+  });
   it('makes what Persisted Objects holds available by its key at a later pause', async () => {
     const nb = notebook('dc-persisted-names');
     // Persisted earlier, as %persist would leave it after %commit.

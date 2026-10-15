@@ -455,8 +455,11 @@ database, select that kernel from the kernel picker at the top right.
   Variables; and when `gemdb.root` holds more than 200 entries, it shows them as ranges of 200.
   Right-click a list, set or dict (or one of its ranges) and choose **Go to Item…** to type a position
   (negative counts from the end; `[42]`, as the ranges write it, also works) or a dict's key, and the
-  view opens down to that item and selects it; a key it can't find says so and how keys are written. The view's
-  title bar always has **Commit** and **Abort** for the notebook you are working in. **Add Stack to Persisted Objects…** on the Call Stack saves the whole paused stack the same
+  view opens down to that item and selects it; a key it can't find says so and how keys are written.
+  Every notebook with uncommitted changes is listed below `gemdb.root`, paused or not, with
+  **Commit** and **Abort** on its row and a **Pending changes** group: the persisted objects its
+  next commit changes, as `%pending` lists them. Click one to go to it under `gemdb.root`, marked
+  **M**. The view's title bar always has **Commit** and **Abort** for the notebook you are working in. **Add Stack to Persisted Objects…** on the Call Stack saves the whole paused stack the same
   way; once committed, Persisted Objects reopens it in the debugger, even after a restart. Its
   Debug Console works on the saved objects: call a method, bind a name, change an object,
   `%persist` one. A change waits uncommitted; the console says when the stack opens that `%commit`

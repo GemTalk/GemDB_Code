@@ -18,6 +18,8 @@ import {
   MAIN_MODULE,
   ObjectDiff,
   PAGE,
+  Pending,
+  PendingChange,
   PathStep,
   PERSISTED_REGISTRY,
   PauseVariable,
@@ -34,16 +36,19 @@ import {
   Snapshot,
   diffSnapshots,
   parsePaths,
+  parsePending,
   parseSaveSuggestion,
   parseSnapshot,
   parseSteps,
   pathText,
   pathToQuery,
   pathsToQuery,
+  pendingQuery,
   revertPlan,
   revertQuery,
   snapshotQuery,
   stepNames,
+  withoutUnchanged,
   persistedRowsQuery,
   removeCommittedQuery,
   removeSavedQuery,
@@ -264,6 +269,10 @@ export type SavedRow =
   | { kind: 'field'; field: PauseVariable; readIn: ReadIn; parent: SavedRow }
   /** Items `start` up to `end` of an opened container, or entries of `gemdb.root`, opened to read them. */
   | { kind: 'range'; parent: SavedRow; start: number; end: number }
+  /** A notebook's Pending changes: what its next commit writes, read when opened. */
+  | { kind: 'changes'; notebook: NotebookState }
+  /** One object a notebook's next commit changes; clicking it shows it under `gemdb.root`. */
+  | { kind: 'change'; change: PendingChange; parent: SavedRow; diff?: ObjectDiff }
   | { kind: 'message'; text: string; parent?: SavedRow };
 
 /**
@@ -447,14 +456,15 @@ export function plainGuide(): string {
 /** Shown beside the view's name, so the rule is in sight before any hover. */
 export const VIEW_DESCRIPTION = 'add, then commit';
 
-/** A notebook row's tooltip: its additions are waiting on its commit. */
+/** A notebook row's tooltip: its additions and its other changes are waiting on its commit. */
 export function notebookGuide(notebook: string): string {
   return [
-    `**${notebook}: added, not persisted yet**`,
-    'These objects are under `gemdb.root` for this notebook only. **Commit** (✓) persists ' +
-      'them, together with everything else this notebook has changed. **Abort** (↺) ' +
-      "discards them and the rest of the notebook's uncommitted changes.",
-    'To drop just one, right-click it and choose *Remove from Persisted Objects*.',
+    `**${notebook}: not committed yet**`,
+    'What it added is under `gemdb.root` for this notebook only, and *Pending changes* lists ' +
+      'every persisted object it has changed. **Commit** (✓) persists all of it. **Abort** (↺) ' +
+      "discards all of it: the additions and the rest of the notebook's uncommitted changes.",
+    'To drop just one addition, right-click it and choose *Remove from Persisted Objects*. ' +
+      'To undo one change, open it from *Pending changes* and choose *Revert to Committed Value*.',
   ].join('\n\n');
 }
 
@@ -493,7 +503,7 @@ export function topRows(
       notebook,
       saves: pending.filter((save) => save.ownerKey === notebook.key),
     }))
-    .filter((row) => row.saves.length > 0);
+    .filter((row) => row.saves.length > 0 || row.notebook.dirty === true);
   return [...rows, ...waiting];
 }
 
@@ -699,7 +709,7 @@ const DIFF_ROWS = 30;
  * A changed object's hover: entry by entry, what is committed and what the
  * next commit writes, each value labelled where it stands.
  */
-export function diffMarkdown(object: MarkedObject, label: string): string {
+export function diffMarkdown(object: Pick<MarkedObject, 'path' | 'diff'>, label: string): string {
   const code = (text: string) => '`' + text.replace(/`/g, "'") + '`';
   const lines = [
     `**${object.path.replace(/([*_[\]])/g, '\\$1')}**`,
@@ -732,6 +742,70 @@ export function diffMarkdown(object: MarkedObject, label: string): string {
   return lines.join('\n');
 }
 
+/**
+ * A changed object's name, as the tree names its row, and the rows it is
+ * under: `'customer'` in `pending_demo`. An item of a list or set takes its
+ * container's name too (`orders[1]`), since `[1]` alone says nothing.
+ */
+export function shortPlace(steps: PathStep[]): { name: string; within: string } {
+  const names = stepNames(steps);
+  if (names.length === 0) return { name: 'gemdb.root', within: '' };
+  let end = names.length - 1;
+  let name = names[end];
+  if (name.startsWith('[') && end > 0) {
+    end--;
+    name = names[end] + name;
+  }
+  return { name, within: names.slice(0, end).join(' › ') };
+}
+
+/**
+ * The rows under a notebook's Pending changes: one per changed object, the
+ * found ones by path and the unfound after them, then a line each for what is
+ * counted rather than listed, as `%pending` words them.
+ */
+export function changeRows(
+  parent: SavedRow,
+  pending: Pending,
+  diffs: Map<number, ObjectDiff> = new Map(),
+): SavedRow[] {
+  const listed = pending.changes
+    .filter((c) => !c.internal)
+    .sort(
+      (a, b) =>
+        Number(b.steps !== undefined) - Number(a.steps !== undefined) ||
+        (a.steps ? pathText(a.steps) : '').localeCompare(b.steps ? pathText(b.steps) : ''),
+    )
+    .map((change): SavedRow => {
+      const diff = diffs.get(change.oop);
+      return diff ? { kind: 'change', change, parent, diff } : { kind: 'change', change, parent };
+    });
+  const note = (text: string): SavedRow => ({ kind: 'message', text, parent });
+  const notes: SavedRow[] = [];
+  const internal = pending.changes.filter((c) => c.internal).length;
+  if (internal > 0) {
+    notes.push(
+      note(
+        `+ ${internal} internal ${internal === 1 ? 'object' : 'objects'}: storage inside these, or the database's caches`,
+      ),
+    );
+  }
+  const unchanged = pending.unchanged ?? 0;
+  if (unchanged > 0) {
+    notes.push(
+      note(
+        `+ ${unchanged} written back unchanged (reverted, or set to what ${unchanged === 1 ? 'it' : 'they'} held)`,
+      ),
+    );
+  }
+  if (pending.more > 0) notes.push(note(`… and ${pending.more} more not listed`));
+  if (pending.cut)
+    notes.push(note('The search for paths stopped early: some may show as not found.'));
+  if (listed.length === 0 && notes.length === 0) notes.push(note('Nothing changes on commit.'));
+  else if (listed.length === 0) notes.unshift(note('Nothing of yours changes on commit.'));
+  return [...listed, ...notes];
+}
+
 export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
   private readonly emitter = new vscode.EventEmitter<SavedRow | undefined>();
   readonly onDidChangeTreeData = this.emitter.event;
@@ -749,6 +823,12 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
   private children = new WeakMap<SavedRow, SavedRow[]>();
   /** What `%pending` last found changed, shown on the rows it names until it is committed or dropped. */
   private marked: Marked | undefined;
+  /**
+   * The notebooks whose Pending changes the user has open, by key, so a
+   * re-reading of the view — after a cell, after a commit elsewhere — draws
+   * the group open again rather than closed (`noteGroupOpen`).
+   */
+  private openGroups = new Set<string>();
 
   constructor(private readonly store?: vscode.Memento) {
     this.origins = store?.get<Record<string, Origin>>(ORIGINS_KEY) ?? {};
@@ -820,7 +900,10 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
     switch (row.kind) {
       case 'notebook': {
         const { notebook } = row;
-        const item = new vscode.TreeItem(notebook.label, row.saves.length > 0 ? Expanded : None);
+        const item = new vscode.TreeItem(
+          notebook.label,
+          row.saves.length > 0 || notebook.dirty ? Expanded : None,
+        );
         item.description =
           notebook.dirty === undefined
             ? 'running a cell'
@@ -888,6 +971,54 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
         const item = new vscode.TreeItem(`[${row.start} … ${row.end - 1}]`, Collapsed);
         // gemdb.root's ranges hold entries, which are found by key in the view itself.
         if (this.ownerOf(row)?.kind !== 'root') item.contextValue = 'gemdbRange';
+        return item;
+      }
+      case 'changes': {
+        const item = new vscode.TreeItem(
+          'Pending changes',
+          this.openGroups.has(row.notebook.key) ? Expanded : Collapsed,
+        );
+        // A stable id lets VS Code keep the group as the user left it across re-readings.
+        item.id = `gemdb.pendingChanges:${row.notebook.key}`;
+        item.description = 'what the next commit writes';
+        item.iconPath = new vscode.ThemeIcon('diff');
+        item.tooltip =
+          `The persisted objects ${row.notebook.label} has changed and not committed yet, ` +
+          'as %pending lists them. Click one to show it under gemdb.root, marked M.';
+        return item;
+      }
+      case 'change': {
+        const { change, diff } = row;
+        // What tells the rows apart leads, since a long row is cut off at its end.
+        const place = change.steps ? shortPlace(change.steps) : undefined;
+        const item = new vscode.TreeItem(
+          place?.name ?? `${change.type} (not found under gemdb.root)`,
+          None,
+        );
+        const what = diff ? changeSummary(diff).replace(/^changed(: )?/, '') : '';
+        item.description = [
+          what || `${change.type} = ${change.value}`,
+          place?.within ? `in ${place.within}` : '',
+        ]
+          .filter(Boolean)
+          .join(' · ');
+        item.iconPath = new vscode.ThemeIcon(
+          'diff-modified',
+          new vscode.ThemeColor('charts.orange'),
+        );
+        if (change.steps) {
+          item.command = {
+            command: 'gemdb.savedObjects.showObject',
+            title: 'Show in gemdb.root',
+            arguments: [change.oop, { fromPendingChanges: true }],
+          };
+          const path = pathText(change.steps);
+          const label = row.parent.kind === 'changes' ? row.parent.notebook.label : 'the notebook';
+          item.tooltip = new vscode.MarkdownString(
+            (diff ? diffMarkdown({ path, diff }, label) : `**${path}**`) +
+              '\n\nClick to show it under `gemdb.root`, marked M.',
+          );
+        }
         return item;
       }
       case 'message':
@@ -959,6 +1090,11 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
   async noteChanges(ownerKey: string, label: string, oops: number[]): Promise<void> {
     this.refresh();
     await this.load();
+    await this.markChanges(ownerKey, label, oops);
+  }
+
+  /** `noteChanges` in the view already read: no reading of it again. */
+  private async markChanges(ownerKey: string, label: string, oops: number[]): Promise<void> {
     const shown = oops.slice(0, MARKED_LIMIT);
     const paths = parsePaths(orThrow(await extensionQuery(pathsToQuery(shown), { budget: true })));
     const marked: Marked = { ownerKey, label, objects: new Map(), entries: new Map() };
@@ -987,13 +1123,66 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
    * Each object's committed contents (`snapshotQuery`), by number, in the
    * order asked, read by GemDB's own session in a fresh view.
    */
-  async committedSnapshots(oops: number[]): Promise<string[]> {
-    await extensionQuery(`System abortTransaction. 'fresh' encodeAsUTF8`);
+  async committedSnapshots(oops: number[], fresh = true): Promise<string[]> {
+    if (fresh) await extensionQuery(`System abortTransaction. 'fresh' encodeAsUTF8`);
     const snapshots: string[] = [];
     for (const oop of oops) {
       snapshots.push(orThrow(await extensionQuery(snapshotQuery(oop), { budget: true })));
     }
     return snapshots;
+  }
+
+  /**
+   * A notebook's Pending changes, opened: what `%pending` would list for it,
+   * read in its own session with nothing paused, less what reads exactly as
+   * committed again, and sorted by path. Each found object is a row that
+   * shows it under `gemdb.root` when clicked; the rest are counted below
+   * them. Opening the group also marks the same objects M, as `%pending`
+   * does. What is committed is read in the view this load already took.
+   */
+  private async pendingChanges(row: SavedRow & { kind: 'changes' }): Promise<SavedRow[]> {
+    if (!this.isCurrent(row)) return [];
+    const kept = this.children.get(row);
+    if (kept) return kept;
+    const { key, label } = row.notebook;
+    let rows: SavedRow[];
+    let found: number[] = [];
+    try {
+      const listed = parsePending(orThrow(await inNotebook(key, pendingQuery(), { budget: true })));
+      const oops = listed.changes.filter((c) => !c.internal).map((c) => c.oop);
+      const committed = await this.committedSnapshots(oops, false);
+      const before = new Map(oops.map((oop, i) => [oop, parseSnapshot(committed[i] ?? '')]));
+      const after = new Map<number, Snapshot>();
+      for (const oop of oops) {
+        after.set(
+          oop,
+          parseSnapshot(orThrow(await inNotebook(key, snapshotQuery(oop), { budget: true }))),
+        );
+      }
+      const pending = withoutUnchanged(listed, before, after);
+      const diffs = new Map(
+        oops.map((oop) => [oop, diffSnapshots(before.get(oop)!, after.get(oop)!)] as const),
+      );
+      rows = changeRows(row, pending, diffs);
+      found = pending.changes.filter((c) => c.steps).map((c) => c.oop);
+    } catch (e) {
+      return [this.unread(row, { session: 'notebook', ownerKey: key }, e)];
+    }
+    if (!this.isCurrent(row)) return [];
+    this.children.set(row, rows);
+    if (found.length > 0) {
+      this.markChanges(key, label, found).catch((e: unknown) =>
+        log(`Could not mark ${label}'s pending changes: ${errorMessage(e)}`),
+      );
+    }
+    return rows;
+  }
+
+  /** Note that a row was opened or closed, so a notebook's Pending changes stays as the user left it. */
+  noteGroupOpen(row: SavedRow, open: boolean): void {
+    if (row.kind !== 'changes') return;
+    if (open) this.openGroups.add(row.notebook.key);
+    else this.openGroups.delete(row.notebook.key);
   }
 
   /**
@@ -1083,6 +1272,7 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
   getChildren(row?: SavedRow): SavedRow[] | Promise<SavedRow[]> {
     if (row?.kind === 'notebook' || row?.kind === 'root') return this.listed(row);
     if (row?.kind === 'range') return this.ranged(row);
+    if (row?.kind === 'changes') return this.pendingChanges(row);
     if (row) return this.opened(row);
     if (this.rows) return this.rows;
     void this.load();
@@ -1099,19 +1289,24 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
     if (!rows) {
       rows =
         row.kind === 'notebook'
-          ? row.saves.map((save): SavedRow => {
-              const read = row.read?.get(save.key);
-              return read?.ref
-                ? {
-                    kind: 'pending',
-                    save,
-                    ref: read.ref,
-                    children: read.indexed + read.named,
-                    indexed: read.indexed,
-                    kids: read.kind,
-                  }
-                : { kind: 'pending', save };
-            })
+          ? [
+              ...row.saves.map((save): SavedRow => {
+                const read = row.read?.get(save.key);
+                return read?.ref
+                  ? {
+                      kind: 'pending',
+                      save,
+                      ref: read.ref,
+                      children: read.indexed + read.named,
+                      indexed: read.indexed,
+                      kids: read.kind,
+                    }
+                  : { kind: 'pending', save };
+              }),
+              ...(row.notebook.dirty
+                ? [{ kind: 'changes', notebook: row.notebook } as SavedRow]
+                : []),
+            ]
           : row.total !== undefined && row.total > row.entries.length
             ? rangeRows(row, 0, row.total, ROOT_LISTING_LIMIT)
             : row.entries.map((entry): SavedRow => ({ kind: 'entry', entry }));
@@ -1223,9 +1418,14 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
    */
   async objectRow(
     oop: number,
+    { reread = true } = {},
   ): Promise<{ row: SavedRow; steps: PathStep[]; reached: number } | undefined> {
-    this.refresh();
-    await this.load();
+    // Re-reading shows only "Reading gemdb.root…" for a moment, and VS Code then forgets which rows
+    // were open; a click in Pending changes, just read, goes to the object in the view as it is.
+    if (reread || !this.rows) {
+      this.refresh();
+      await this.load();
+    }
     const root = this.rows?.find((r) => r.kind === 'root');
     if (!root) return undefined;
     // Read right after the view's own fresh listing, so its positions are the view's.
@@ -1317,7 +1517,10 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
 
   /** The row a row was read under, when it keeps one: a field's, a range's, an entry read in a range. */
   private static parentOf(row: SavedRow): SavedRow | undefined {
-    return row.kind === 'field' || row.kind === 'range' || row.kind === 'entry'
+    return row.kind === 'field' ||
+      row.kind === 'range' ||
+      row.kind === 'entry' ||
+      row.kind === 'change'
       ? row.parent
       : undefined;
   }
@@ -1379,10 +1582,11 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
       this.rows = topRows(false, [], [], []);
       return;
     }
-    // Only a notebook holding a pending save is shown, so only those are asked.
+    // Every notebook (and file run, and saved stack) is asked: one with changes to commit is
+    // shown, with its Pending changes, whether or not anything was added from the debugger.
     const notebooks = await Promise.all(
       sessionRegistry()
-        .filter((info) => this.pending.some((save) => save.ownerKey === info.owner.key))
+        .filter((info) => info.owner.kind !== 'extension')
         .map(async (info): Promise<NotebookState> => {
           let dirty: boolean | undefined;
           try {
@@ -2142,10 +2346,12 @@ async function showObject(
   view: SavedObjectsProvider,
   treeViews: Map<string, vscode.TreeView<SavedRow>>,
   oop: number,
+  { fromPendingChanges = false } = {},
 ): Promise<void> {
   let found: Awaited<ReturnType<SavedObjectsProvider['objectRow']>>;
   try {
-    found = await view.objectRow(oop);
+    // From Pending changes, the view was just read: going to the object keeps it, and the list, open.
+    found = await view.objectRow(oop, { reread: !fromPendingChanges });
   } catch (e) {
     void vscode.window.showErrorMessage(`Could not look for that object: ${errorMessage(e)}`);
     return;
@@ -2212,6 +2418,8 @@ export function registerSavedObjects(context: vscode.ExtensionContext): SavedObj
       treeView.onDidChangeVisibility((event) => {
         if (event.visible) view.refresh();
       }),
+      treeView.onDidExpandElement((event) => view.noteGroupOpen(event.element, true)),
+      treeView.onDidCollapseElement((event) => view.noteGroupOpen(event.element, false)),
     );
   }
   context.subscriptions.push(
@@ -2264,8 +2472,10 @@ export function registerSavedObjects(context: vscode.ExtensionContext): SavedObj
       },
     }),
     // Internal: where `%pending`'s links in the Debug Console go, through the URI handler below.
-    vscode.commands.registerCommand('gemdb.savedObjects.showObject', (oop: number) =>
-      showObject(view, treeViews, oop),
+    vscode.commands.registerCommand(
+      'gemdb.savedObjects.showObject',
+      (oop: number, options?: { fromPendingChanges?: boolean }) =>
+        showObject(view, treeViews, oop, options),
     ),
     // GemDB's only URI handler: `objectLink` (`consoleCommands.ts`) writes the links it takes.
     vscode.window.registerUriHandler({

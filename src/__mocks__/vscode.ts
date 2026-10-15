@@ -166,6 +166,10 @@ export interface FakeTreeView {
   reveals: Array<{ element: unknown; options: unknown }>;
   reveal(element: unknown, options?: unknown): Promise<void>;
   onDidChangeVisibility(listener: (event: { visible: boolean }) => void): Disposable;
+  onDidExpandElement(listener: (event: { element: unknown }) => void): Disposable;
+  onDidCollapseElement(listener: (event: { element: unknown }) => void): Disposable;
+  /** Open or close a row, as the user's click on its twistie does. */
+  toggle(element: unknown, open: boolean): void;
   dispose(): void;
 }
 
@@ -218,6 +222,8 @@ export const window = {
     return new Disposable(() => __customEditors.delete(viewType));
   },
   createTreeView(viewId: string, options: unknown): FakeTreeView {
+    const expand: Array<(event: { element: unknown }) => void> = [];
+    const collapse: Array<(event: { element: unknown }) => void> = [];
     const view: FakeTreeView = {
       id: viewId,
       options,
@@ -229,6 +235,16 @@ export const window = {
       },
       onDidChangeVisibility: (_listener: (event: { visible: boolean }) => void) =>
         new Disposable(() => {}),
+      onDidExpandElement: (listener: (event: { element: unknown }) => void) => {
+        expand.push(listener);
+        return new Disposable(() => {});
+      },
+      onDidCollapseElement: (listener: (event: { element: unknown }) => void) => {
+        collapse.push(listener);
+        return new Disposable(() => {});
+      },
+      toggle: (element: unknown, open: boolean) =>
+        (open ? expand : collapse).forEach((listener) => listener({ element })),
       dispose: () => {},
     };
     __treeViews.set(viewId, view);
@@ -336,6 +352,7 @@ export class MarkdownString {
 }
 
 export class TreeItem {
+  id?: string;
   description?: string;
   tooltip?: string | MarkdownString;
   iconPath?: unknown;
