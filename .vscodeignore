@@ -17,13 +17,16 @@ CONTRIBUTING.md
 # become the Marketplace's Overview and Changelog tabs — but nothing in docs/
 # is written for someone who installed the extension.
 docs/**
-# The full lockup is source art and a README banner, not something the running
-# extension ever loads. Shipping it would put 25 KB of unreferenced image in
-# every install. GemDB_Icon.svg is the mark's vector source: resources/icon.png
-# is rendered from it by scripts/render-icon.sh (regenerate it there, not by
-# hand), and resources/gemdb-sidebar.svg is traced from it.
-resources/GemDB.png
+# Source art, not something the running extension ever loads. The wordmarks
+# are the brand's primary logo, black for light backgrounds and white for dark,
+# kept for READMEs and banners. GemDB_Favicon.png is the brand's dark-mode
+# favicon at full size, 120 KB that would otherwise ride in every install:
+# resources/icon.png is rendered from it by scripts/render-icon.sh (regenerate
+# it there, not by hand). GemDB_Icon.svg is the gem, and
+# resources/gemdb-sidebar.svg is traced from it.
+resources/GemDB_Favicon.png
 resources/GemDB_Icon.svg
+resources/GemDB_Wordmark_*.svg
 **/*.map
 **/*.ts
 !out/**/*.js

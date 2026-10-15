@@ -3,17 +3,13 @@
   Activity-bar icon: GemDB_Icon.svg as a single-colour mask.
 
   VS Code treats an activity-bar icon as a mask and recolours it to match the
-  theme, so the mark's shades cannot survive; what carries it instead is its
-  negative space — the open top of the box, the band splitting it from the
-  chevron below, and a gap around the gem. The coordinates are GemDB_Icon.svg's
-  own, with the faces of each part merged; the gem is scaled to 0.45 and raised
-  2 units, because in the source its corners sit on the wall and a mask would
-  fuse them. The viewBox is widened to a square about the mark's centre.
+  theme, so the mark's two shades cannot survive as colours. They survive as
+  alpha instead: the mask keeps opacity, so the right half carries the source's
+  own 0.6 and reads as the lighter face whatever colour the theme paints it.
+  The coordinates are GemDB_Icon.svg's own; the viewBox is widened to a square
+  about the mark's centre.
 -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="-14.12 0 144.89 144.89" width="24" height="24">
-  <path fill="currentColor" fill-rule="evenodd"
-        d="M58.33 .44 116.3 39.12 116.3 64.37 58.33 103.07 .36 64.37 .36 39.12 Z
-           M58.33 25.7 97.36 51.76 58.33 77.81 19.3 51.76 Z"/>
-  <path fill="currentColor" d="M58.33 119.18 116.3 80.49 116.3 105.75 58.33 144.44 .36 105.75 .36 80.49 Z"/>
-  <path fill="currentColor" d="M58.33 49.72 70.45 57.82 58.33 65.92 46.2 57.82 Z"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -15.01 90.31 90.31" width="24" height="24">
+  <path fill="currentColor" d="M45.15 0 0 30.14 45.15 60.29 Z"/>
+  <path fill="currentColor" fill-opacity=".6" d="M45.15 0 90.31 30.14 45.15 60.29 Z"/>
 </svg>
