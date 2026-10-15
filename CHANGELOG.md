@@ -14,8 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variables folded, and what is inside it opens in turn. A committed entry is read by GemDB's own
   session, so it opens any time, in a new window, after a restart; one added and not committed yet
   is read by its notebook's session, while that notebook is not running a cell. A slow `__repr__`
-  is cut off at two seconds, as in Variables, and a list or dict longer than 500 items shows its first 500
-  and says how many more there are. A saved stack still opens in the debugger instead.
+  is cut off at two seconds, as in Variables. A saved stack still opens in the debugger instead.
+- **Ranges for a long list in the Persisted Objects view.** A list or dict longer than 500 items
+  opens to ranges of 500 — `[0 … 499]`, `[500 … 999]`, … — each opening to its items and nested for
+  a very long one, as the Variables show them; nothing is read until a range is opened. When
+  `gemdb.root` holds more than 200 entries, it says how many and shows them as ranges of 200.
+- **Go to Item… in the Persisted Objects view.** Right-click a list, set or dict, or one of its
+  ranges, and type a position (a negative one counts from the end; `[42]`, as the ranges write it,
+  works too) or a dict's key — `'SKU0042'`, or just `SKU0042`, or `42` — and the view opens the
+  ranges down to that item and selects it. For a dict a key is tried first; a number that is no key
+  but is a position goes there and says so, and a key that isn't there says so and how keys are
+  written.
 - **The Debug Console and Watch work at a `breakpoint()` or red dot.** Type Python into the Debug
   Console and it runs in the frame selected in the Call Stack: its locals, closed-over names, its
   module's globals (an imported module's own, not the notebook's) and the builtins, as the paused

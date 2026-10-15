@@ -53,10 +53,19 @@ class FakeGem {
    */
   refs = new Map<string, number>();
   fields = new Map<number, string>();
+  /** Containers of this many items, by registry position, answered a page at a time as asked. */
+  lists = new Map<number, number>();
+  /** Which of `lists` are dicts, keyed `'k0'`, `'k1'`, … rather than lists. */
+  dicts = new Set<number>();
 
   /** An entry's row as a listing writes it: with a registry position when it opens. */
   private entryRow(key: string, type: string): string {
     const ref = this.refs.get(key) ?? 0;
+    const items = this.lists.get(ref);
+    if (items !== undefined) {
+      const kind = this.dicts.has(ref) ? 'dict' : 'seq';
+      return row(key, `<${type}>`, type, ref, items, 0, 1, items, 0, kind);
+    }
     return row(key, `<${type}>`, type, ref, 0, ref ? 2 : 0, 1);
   }
 
@@ -75,12 +84,44 @@ class FakeGem {
     }
     const openStack = /_s = gemdb\.root\["([^"]+)"\]/.exec(code);
     if (openStack) return this.stacks.get(openStack[1]) ?? 'Error: KeyError - ' + openStack[1];
-    if (code.includes('list(gemdb.root.items())')) {
-      return [...this.committed].map(([key, type]) => this.entryRow(key, type)).join('');
+    const slice = /list\(gemdb\.root\.items\(\)\)\[(\d+):(\d+)\]/.exec(code);
+    if (slice) {
+      return [...this.committed]
+        .slice(Number(slice[1]), Number(slice[2]))
+        .map(([key, type]) => this.entryRow(key, type))
+        .join('');
     }
+    if (code.includes('len(gemdb.root)')) return String(this.committed.size);
     const opened =
       /GemDbPersistedRefs' otherwise: nil\.\nobj := \(reg notNil and: \[(\d+) between/.exec(code);
-    if (opened) return this.fields.get(Number(opened[1])) ?? '';
+    if (code.includes('want := #(')) {
+      const ref = Number(/reg notNil and: \[(\d+) between/.exec(code)![1]);
+      const names = [...code.matchAll(/'((?:[^']|'')*)'/g)].map((m) => m[1].replace(/''/g, "'"));
+      const total = this.lists.get(ref) ?? 0;
+      const at = Array.from({ length: total }, (_, i) => `'k${i}'`).findIndex((n) =>
+        names.includes(n),
+      );
+      return String(this.dicts.has(ref) ? at : -1);
+    }
+    if (opened) {
+      const total = this.lists.get(Number(opened[1]));
+      if (total === undefined) return this.fields.get(Number(opened[1])) ?? '';
+      const start = Number(/start := (\d+)\./.exec(code)![1]);
+      const count = Number(/count := (\d+)\./.exec(code)![1]);
+      return Array.from({ length: Math.max(0, Math.min(start + count, total) - start) }, (_, i) =>
+        row(
+          this.dicts.has(Number(opened[1])) ? `'k${start + i}'` : `[${start + i}]`,
+          String(start + i),
+          'int',
+          0,
+          0,
+          0,
+          1,
+          -1,
+          0,
+        ),
+      ).join('');
+    }
     const keys = /for _k in \[(.*?)\] if _k in gemdb\.root/.exec(code);
     if (keys) {
       return (JSON.parse(`[${keys[1]}]`) as string[])
@@ -1030,40 +1071,289 @@ describe('opening a persisted object in the view', () => {
   });
 });
 
-describe('the rows under an opened object', () => {
+describe('the ranges of a long container', () => {
   const parent: SavedRow = { kind: 'message', text: 'parent' };
-  const child = (name: string) => ({
-    name,
-    value: '1',
-    type: 'int',
-    ref: 0,
-    indexed: 0,
-    named: 0,
-    handle: 1,
-    size: -1,
-    readOnly: false,
+  const spans = (rows: SavedRow[]) =>
+    rows.map((r) => (r.kind === 'range' ? [r.start, r.end] : undefined));
+
+  it('divides it into ranges of a page, nesting them when there are too many', async () => {
+    const { PAGE } = await import('../pauseVariables');
+    const { rangeRows } = await import('../savedObjects');
+
+    expect(spans(rangeRows(parent, 0, 1200))).toEqual([
+      [0, PAGE],
+      [PAGE, 2 * PAGE],
+      [2 * PAGE, 1200],
+    ]);
+    expect(spans(rangeRows(parent, 0, PAGE * PAGE + 1))).toEqual([
+      [0, PAGE * PAGE],
+      [PAGE * PAGE, PAGE * PAGE + 1],
+    ]);
   });
 
-  it('ends a list longer than a page with how many more there are', async () => {
+  it('takes the page it is given, as gemdb.root gives its own', async () => {
+    const { rangeRows } = await import('../savedObjects');
+
+    expect(spans(rangeRows(parent, 0, 230, 200))).toEqual([
+      [0, 200],
+      [200, 230],
+    ]);
+  });
+});
+
+describe('a list longer than a page', () => {
+  const COLLAPSED = 1;
+
+  /** gemdb.root holding `orders`, a list of `n` items. */
+  async function withOrders(n: number) {
+    gem.committed.set('orders', 'list');
+    gem.refs.set('orders', 1);
+    gem.lists.set(1, n);
+    const { view } = setUp();
+    const [root] = await topOf(view);
+    const [orders] = await view.getChildren(root);
+    return { view, orders };
+  }
+
+  const labels = (view: ReturnType<typeof setUp>['view'], rows: SavedRow[]) =>
+    rows.map((r) => item(view, r).label);
+  const reads = () => gem.queries.filter((q) => q.code.includes("GemDbPersistedRefs' otherwise"));
+
+  it('opens straight to its ranges, reading nothing until one is opened', async () => {
     const { PAGE } = await import('../pauseVariables');
-    const { fieldRows } = await import('../savedObjects');
-    const page = Array.from({ length: PAGE }, (_, i) => child(`[${i}]`));
+    const { view, orders } = await withOrders(1200);
 
-    const rows = fieldRows(parent, { session: 'extension' }, page, PAGE + 250);
+    const ranges = await view.getChildren(orders);
 
-    expect(rows).toHaveLength(PAGE + 1);
-    expect(rows.at(-1)).toMatchObject({ kind: 'message', text: '… 250 more not shown' });
+    expect(labels(view, ranges)).toEqual([
+      `[0 … ${PAGE - 1}]`,
+      `[${PAGE} … ${2 * PAGE - 1}]`,
+      `[${2 * PAGE} … 1199]`,
+    ]);
+    expect(item(view, ranges[0]).collapsibleState).toBe(COLLAPSED);
+    expect(reads()).toHaveLength(0);
   });
 
-  it('adds nothing when the rows already say so, or when they all fit', async () => {
+  it('reads a range’s items when it is opened, from where the range starts', async () => {
     const { PAGE } = await import('../pauseVariables');
-    const { fieldRows } = await import('../savedObjects');
-    const page = [...Array.from({ length: PAGE }, (_, i) => child(`a${i}`)), child('...')];
+    const { view, orders } = await withOrders(1200);
+    const ranges = await view.getChildren(orders);
 
-    expect(fieldRows(parent, { session: 'extension' }, page, PAGE + 9)).toHaveLength(PAGE + 1);
-    // An object counts only its own attributes; the rows its dir() gives can outnumber them.
-    expect(fieldRows(parent, { session: 'extension' }, [child('a'), child('b')], 5)).toHaveLength(
-      2,
+    const items = await view.getChildren(ranges[2]);
+    const again = await view.getChildren(ranges[2]);
+
+    expect(labels(view, items)).toEqual(
+      Array.from({ length: 1200 - 2 * PAGE }, (_, i) => `[${2 * PAGE + i}]`),
     );
+    expect(again).toBe(items);
+    expect(reads()).toHaveLength(1);
+    expect(reads()[0].code).toContain(`start := ${2 * PAGE}.`);
+    // So a row deep in a range can be revealed: each knows the row it is under.
+    expect(view.getParent(items[0])).toBe(ranges[2]);
+    expect(view.getParent(ranges[2])).toBe(orders);
+  });
+
+  it('nests the ranges of a very long list', async () => {
+    const { PAGE } = await import('../pauseVariables');
+    const { view, orders } = await withOrders(PAGE * PAGE + 10);
+    const [first, last] = await view.getChildren(orders);
+
+    const inner = await view.getChildren(first);
+
+    expect(labels(view, [first, last])).toEqual([
+      `[0 … ${PAGE * PAGE - 1}]`,
+      `[${PAGE * PAGE} … ${PAGE * PAGE + 9}]`,
+    ]);
+    expect(inner).toHaveLength(PAGE);
+    expect(labels(view, await view.getChildren(inner[1]))[0]).toBe(`[${PAGE}]`);
+  });
+
+  it('leaves a list of exactly a page as its items', async () => {
+    const { PAGE } = await import('../pauseVariables');
+    const { view, orders } = await withOrders(PAGE);
+
+    const rows = await view.getChildren(orders);
+
+    expect(rows).toHaveLength(PAGE);
+    expect(rows.every((r) => r.kind === 'field')).toBe(true);
+  });
+
+  it('reads nothing for a range from before the view was read again', async () => {
+    const { view, orders } = await withOrders(1200);
+    const ranges = await view.getChildren(orders);
+    await topOf(view);
+
+    expect(await view.getChildren(ranges[0])).toEqual([]);
+    expect(reads()).toHaveLength(0);
+  });
+});
+
+describe('gemdb.root with more entries than it lists at first', () => {
+  it('counts them all and shows them as ranges, each read in the view the listing took', async () => {
+    const { ROOT_LISTING_LIMIT } = await import('../pauseVariables');
+    for (let i = 0; i < ROOT_LISTING_LIMIT + 30; i++) gem.committed.set(`k${i}`, 'int');
+    const { view } = setUp();
+    const [root] = await topOf(view);
+
+    expect(item(view, root).description).toBe(`persisted · ${ROOT_LISTING_LIMIT + 30} objects`);
+    const ranges = await view.getChildren(root);
+    expect(ranges.map((r) => item(view, r).label)).toEqual([
+      `[0 … ${ROOT_LISTING_LIMIT - 1}]`,
+      `[${ROOT_LISTING_LIMIT} … ${ROOT_LISTING_LIMIT + 29}]`,
+    ]);
+
+    const entries = await view.getChildren(ranges[1]);
+
+    expect(entries.map((r) => item(view, r).label)).toEqual(
+      Array.from({ length: 30 }, (_, i) => `k${ROOT_LISTING_LIMIT + i}`),
+    );
+    // A range adds to the first listing's registry and view, rather than starting afresh.
+    const read = gem.queries.find((q) => q.code.includes(`[${ROOT_LISTING_LIMIT}:`))!;
+    expect(read.code).not.toContain('System abortTransaction.');
+    expect(view.getParent(entries[0])).toBe(ranges[1]);
+    expect(view.getParent(ranges[1])).toBe(root);
+  });
+
+  it('lists them as before when they all fit', async () => {
+    gem.committed.set('a', 'int').set('b', 'int');
+    const { view } = setUp();
+    const [root] = await topOf(view);
+
+    expect((await view.getChildren(root)).map((r) => r.kind)).toEqual(['entry', 'entry']);
+    expect(gem.queries.some((q) => q.code.includes('len(gemdb.root)'))).toBe(false);
+  });
+});
+
+describe('going to an item', () => {
+  /** gemdb.root holding `orders`, a list (or a dict, keyed 'k0'…) of `n` items. */
+  async function withOrders(n: number, dict = false) {
+    gem.committed.set('orders', dict ? 'dict' : 'list');
+    gem.refs.set('orders', 1);
+    gem.lists.set(1, n);
+    if (dict) gem.dicts.add(1);
+    const { view } = setUp();
+    const [root] = await topOf(view);
+    const [orders] = await view.getChildren(root);
+    return { view, orders };
+  }
+
+  const revealed = () => __treeViews.get(VIEW_ID)!.reveals.at(-1);
+  const typing = (text: string) => vi.spyOn(window, 'showInputBox').mockResolvedValue(text);
+
+  it('offers Go to Item… on a list, a set or a dict and on its ranges, not on other rows', async () => {
+    const { view, orders } = await withOrders(1200);
+    const [range] = await view.getChildren(orders);
+
+    expect(item(view, orders).contextValue).toBe('gemdbSavedObject gemdbContainer');
+    expect(item(view, range).contextValue).toBe('gemdbRange');
+  });
+
+  it('opens the ranges down to an index and selects that item', async () => {
+    const { view, orders } = await withOrders(1200);
+    typing('1100');
+
+    await command('gemdb.savedObjects.goToItem')(orders);
+
+    const shown = revealed()!;
+    expect(item(view, shown.element as SavedRow).label).toBe('[1100]');
+    expect(shown.options).toMatchObject({ select: true, focus: true });
+    // Every row on the way is one VS Code can find by its parent.
+    const range = view.getParent(shown.element as SavedRow)!;
+    expect(item(view, range).label).toBe('[1000 … 1199]');
+    expect(view.getParent(range)).toBe(orders);
+  });
+
+  it('counts a negative index from the end, and works from a range too', async () => {
+    const { view, orders } = await withOrders(1200);
+    const [first] = await view.getChildren(orders);
+    typing('-1');
+
+    await command('gemdb.savedObjects.goToItem')(first);
+
+    expect(item(view, revealed()!.element as SavedRow).label).toBe('[1199]');
+  });
+
+  it('refuses an index outside the list before going anywhere', async () => {
+    const { orders } = await withOrders(1200);
+    let check: ((text: string) => unknown) | undefined;
+    vi.spyOn(window, 'showInputBox').mockImplementation((options) => {
+      check = (options as { validateInput: (text: string) => unknown }).validateInput;
+      return Promise.resolve(undefined);
+    });
+
+    await command('gemdb.savedObjects.goToItem')(orders);
+
+    expect(check!('1200')).toMatch(/from 0 to 1,199/);
+    expect(check!('-1201')).toMatch(/from 0 to 1,199/);
+    expect(check!('3.5')).toMatch(/from 0 to 1,199/);
+    expect(check!('-1200')).toBeUndefined();
+    expect(check!('[7]')).toBeUndefined();
+    expect(__treeViews.get(VIEW_ID)!.reveals).toHaveLength(0);
+  });
+
+  it('finds a dict’s key where the dict holds it, typed with or without quotes', async () => {
+    const { view, orders } = await withOrders(1200, true);
+    typing('k742');
+
+    await command('gemdb.savedObjects.goToItem')(orders);
+
+    expect(item(view, revealed()!.element as SavedRow).label).toBe("'k742'");
+    const asked = gem.queries.find((q) => q.code.includes('want := #('))!;
+    expect(asked.session).toBe('extension');
+    expect(asked.code).toContain("'''k742'''");
+  });
+
+  it('says so, and how keys are written, when a dict has no such key', async () => {
+    const { orders } = await withOrders(1200, true);
+    typing('nope');
+    const warn = vi.spyOn(window, 'showWarningMessage');
+
+    await command('gemdb.savedObjects.goToItem')(orders);
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/^This dict has no key nope\. Keys are/),
+    );
+    expect(warn.mock.calls[0][0]).toContain('type [0] to [1,199]');
+    expect(__treeViews.get(VIEW_ID)!.reveals).toHaveLength(0);
+  });
+
+  it('goes to a dict’s item by position in brackets, as its ranges are labelled', async () => {
+    const { view, orders } = await withOrders(1200, true);
+    typing('[742]');
+
+    await command('gemdb.savedObjects.goToItem')(orders);
+
+    expect(item(view, revealed()!.element as SavedRow).label).toBe("'k742'");
+    // A position needs no lookup.
+    expect(gem.queries.some((q) => q.code.includes('want := #('))).toBe(false);
+  });
+
+  it('takes a bare number a dict has no key for as a position, and says so', async () => {
+    const { view, orders } = await withOrders(1200, true);
+    typing('-1');
+    const info = vi.spyOn(window, 'showInformationMessage');
+
+    await command('gemdb.savedObjects.goToItem')(orders);
+
+    expect(item(view, revealed()!.element as SavedRow).label).toBe("'k1199'");
+    expect(info).toHaveBeenCalledWith(
+      expect.stringMatching(/no key -1, so this is the item at position -1/),
+    );
+  });
+
+  it('refuses a bracketed position outside the dict before going anywhere', async () => {
+    const { orders } = await withOrders(1200, true);
+    let check: ((text: string) => unknown) | undefined;
+    vi.spyOn(window, 'showInputBox').mockImplementation((options) => {
+      check = (options as { validateInput: (text: string) => unknown }).validateInput;
+      return Promise.resolve(undefined);
+    });
+
+    await command('gemdb.savedObjects.goToItem')(orders);
+
+    expect(check!('[1200]')).toMatch(/from 0 to 1,199/);
+    // A bare word or number may be a key, which only the database can say.
+    expect(check!('99999')).toBeUndefined();
+    expect(check!('SKU1')).toBeUndefined();
   });
 });

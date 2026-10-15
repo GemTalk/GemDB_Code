@@ -624,6 +624,40 @@ ${LIST_CHILDREN}]]`)}
 out contents encodeAsUTF8`;
 }
 
+/**
+ * Smalltalk that answers where a dict's key is among its entries — the
+ * position `childrenQuery` lists it at, from 0 — or -1 when none of its keys
+ * reads as one of `names`. A key reads as `childrenQuery` names its row: by
+ * its repr, so `'SKU0042'` for a str and `42` for an int; the caller passes
+ * the forms the user might have meant. Answers -1 for anything not a dict.
+ */
+export function keyPositionQuery(
+  ref: number,
+  names: string[],
+  registry: string = REGISTRY,
+): string {
+  const want = names.map((n) => `'${escapeString(n)}'`).join(' ');
+  return `| reg obj kids out field record none saved describe childrenOf nameOf reprOf late clean isLeaf want pos i ${ROW_TEMPS} |
+${PREAMBLE}
+reg := SessionTemps current at: #'${registry}' otherwise: nil.
+obj := (reg notNil and: [${ref} between: 1 and: reg size]) ifTrue: [reg at: ${ref}] ifFalse: [nil].
+${HELPERS}
+${CHILDREN_OF}
+${DESCRIBE}
+want := #(${want}).
+pos := -1.
+i := 0.
+${withQuietConsole(`
+  nameOf := [:key | (reprOf value: key) ifNil: [key printString]].
+  kids := obj isNil ifTrue: [nil] ifFalse: [childrenOf value: obj].
+  (kids notNil and: [(kids at: 1) == #dict]) ifTrue: [
+    (kids at: 2) keysAndValuesDo: [:key :x |
+      pos < 0 ifTrue: [
+        (want includes: (nameOf value: key)) ifTrue: [pos := i].
+        i := i + 1]]]`)}
+pos printString encodeAsUTF8`;
+}
+
 /** Parse `childrenQuery`'s answer. */
 export function parseChildren(raw: string): PauseVariable[] {
   return raw
@@ -935,39 +969,62 @@ export function needsCommitQuery(): string {
   return `System needsCommit printString encodeAsUTF8`;
 }
 
-/** The most gemdb.root entries the Persisted Objects view lists. */
+/**
+ * How many gemdb.root entries the Persisted Objects view lists at first. When
+ * it holds more, the view shows all of them as ranges instead.
+ */
 export const ROOT_LISTING_LIMIT = 200;
 
 /**
  * Smalltalk, for a session with no work of its own (the extension's), that
- * takes a fresh view and lists what is committed under gemdb.root: one row per
- * entry, in the Variables view's row format, a str key by its text. Values
- * are shown with the same bounded repr as the debugger's rows. `gemdb.root`
- * is a Python object (`_Root`), not a Smalltalk dictionary, so its entries
- * come from its own `items()`.
+ * lists what is committed under gemdb.root: one row per entry, `count` of
+ * them from `start`, in the Variables view's row format, a str key by its
+ * text. Values are shown with the same bounded repr as the debugger's rows.
+ * `gemdb.root` is a Python object (`_Root`), not a Smalltalk dictionary, so
+ * its entries come from its own `items()`.
  *
- * Each entry is registered in a fresh `PERSISTED_REGISTRY`, so a row that has
+ * A `fresh` listing — the view's first read — takes a fresh view and
+ * registers each entry in a fresh `PERSISTED_REGISTRY`, so a row that has
  * children opens with `childrenQuery(ref, …, PERSISTED_REGISTRY)` in the same
- * session, against the view this listing took.
+ * session, against the view this listing took. Opening one of the view's
+ * ranges is not fresh: it adds to that registry, so the rows already shown
+ * still open, and reads the same view, so its entries are the ones that
+ * range covered when the view was read.
  */
-export function rootListingQuery(): string {
+export function rootListingQuery(start = 0, count = ROOT_LISTING_LIMIT, fresh = true): string {
   return `| reg obj out field record none saved describe childrenOf reprOf late clean isLeaf dispatcher root ro isDunder typeNameOf broke classCounts classData isMethodType tooLong |
 ${PREAMBLE}
-reg := OrderedCollection new.
-SessionTemps current at: #'${PERSISTED_REGISTRY}' put: reg.
+${
+  fresh
+    ? `reg := OrderedCollection new.
+SessionTemps current at: #'${PERSISTED_REGISTRY}' put: reg.`
+    : `reg := SessionTemps current at: #'${PERSISTED_REGISTRY}' otherwise: nil.
+reg isNil ifTrue: [^ 'Error: the listing this range belongs to is gone; refresh the view' encodeAsUTF8].`
+}
 ${HELPERS}
 ${CHILDREN_OF}
 ${DESCRIBE}
-System abortTransaction.
+${fresh ? 'System abortTransaction.' : ''}
 dispatcher := System myUserProfile symbolList objectNamed: #'ModuleAst'.
 root := dispatcher evaluateSource: 'import gemdb
-list(gemdb.root.items())[:${ROOT_LISTING_LIMIT}]' usingModuleScope: SymbolDictionary new.
+list(gemdb.root.items())[${start}:${start + count}]' usingModuleScope: SymbolDictionary new.
 ${withQuietConsole(`
   root do: [:pair | | key |
     key := pair at: 1.
     describe value: (key isString ifTrue: [key] ifFalse: [(reprOf value: key) ifNil: [key printString]])
       value: (pair at: 2)]`)}
 out contents encodeAsUTF8`;
+}
+
+/**
+ * Smalltalk, for the extension's session, that answers how many entries
+ * gemdb.root holds, in the view a fresh `rootListingQuery` took — so run it
+ * after that listing, which is what tells the view whether there is more.
+ */
+export function rootSizeQuery(): string {
+  return `((System myUserProfile symbolList objectNamed: #'ModuleAst')
+  evaluateSource: 'import gemdb
+len(gemdb.root)' usingModuleScope: SymbolDictionary new) printString encodeAsUTF8`;
 }
 
 /**

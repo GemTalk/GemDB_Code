@@ -13,6 +13,7 @@ import {
 import { errorMessage, log } from './log';
 import { runFileOf } from './fileOwner';
 import {
+  ChildKind,
   ConsoleScope,
   MAIN_MODULE,
   PAGE,
@@ -24,6 +25,7 @@ import {
   commitQuery,
   freeKeyQuery,
   inspectQuery,
+  keyPositionQuery,
   keyTakenQuery,
   needsCommitQuery,
   parseChildren,
@@ -32,6 +34,7 @@ import {
   removeCommittedQuery,
   removeSavedQuery,
   rootListingQuery,
+  rootSizeQuery,
   saveSuggestionQuery,
   saveToRootQuery,
   unquote,
@@ -116,6 +119,12 @@ function extensionQuery(code: string, { budget = false } = {}): Promise<string> 
  * notebook's for an addition. The objects the rows open are kept in that
  * session's `PERSISTED_REGISTRY`, which each reading of the view starts afresh.
  */
+
+/**
+ * Added to a row's context value when it is a list, a set or a dict, so its
+ * menu offers Go to Item…; the menus that match a row exactly allow for it.
+ */
+const CONTAINER = ' gemdbContainer';
 
 /** The view under GemDB Code in the activity bar. */
 export const VIEW_ID = 'gemdbSavedObjects';
@@ -204,6 +213,10 @@ export interface RootEntry {
   ref?: number;
   /** How many children it has, when it has a `ref`. */
   children?: number;
+  /** How many of those are items read by position, for a container — what its ranges divide. */
+  indexed?: number;
+  /** How its children are read (`ChildKind`): a list's, a set's or a dict's, or an object's. */
+  kind?: ChildKind;
 }
 
 /**
@@ -221,11 +234,22 @@ export type SavedRow =
       /** Each addition's row as its notebook read it, by key; absent while it runs a cell. */
       read?: Map<string, PauseVariable>;
     }
-  | { kind: 'pending'; save: PendingSave; ref?: number; children?: number }
-  | { kind: 'root'; entries: RootEntry[] }
-  | { kind: 'entry'; entry: RootEntry }
+  | {
+      kind: 'pending';
+      save: PendingSave;
+      ref?: number;
+      children?: number;
+      indexed?: number;
+      kids?: ChildKind;
+    }
+  /** What is committed: the first entries, and how many there are in all when that is known. */
+  | { kind: 'root'; entries: RootEntry[]; total?: number }
+  /** A committed entry; `parent` is the range it was read in, when `gemdb.root` shows ranges. */
+  | { kind: 'entry'; entry: RootEntry; parent?: SavedRow }
   /** One of an opened object's attributes, items or entries, or a group of them. */
   | { kind: 'field'; field: PauseVariable; readIn: ReadIn; parent: SavedRow }
+  /** Items `start` up to `end` of an opened container, or entries of `gemdb.root`, opened to read them. */
+  | { kind: 'range'; parent: SavedRow; start: number; end: number }
   | { kind: 'message'; text: string; parent?: SavedRow };
 
 /**
@@ -235,11 +259,17 @@ export type SavedRow =
  */
 export function openable(
   row: SavedRow,
-): { readIn: ReadIn; ref: number; total: number } | undefined {
+): { readIn: ReadIn; ref: number; total: number; indexed: number; kind?: ChildKind } | undefined {
   switch (row.kind) {
     case 'entry':
       return row.entry.ref && !row.entry.stack
-        ? { readIn: { session: 'extension' }, ref: row.entry.ref, total: row.entry.children ?? 0 }
+        ? {
+            readIn: { session: 'extension' },
+            ref: row.entry.ref,
+            total: row.entry.children ?? 0,
+            indexed: row.entry.indexed ?? 0,
+            kind: row.entry.kind,
+          }
         : undefined;
     case 'pending':
       return row.ref
@@ -247,35 +277,68 @@ export function openable(
             readIn: { session: 'notebook', ownerKey: row.save.ownerKey },
             ref: row.ref,
             total: row.children ?? 0,
+            indexed: row.indexed ?? 0,
+            kind: row.kids,
           }
         : undefined;
     case 'field':
       return row.field.ref
-        ? { readIn: row.readIn, ref: row.field.ref, total: row.field.indexed + row.field.named }
+        ? {
+            readIn: row.readIn,
+            ref: row.field.ref,
+            total: row.field.indexed + row.field.named,
+            indexed: row.field.indexed,
+            kind: row.field.kind,
+          }
         : undefined;
     default:
       return undefined;
   }
 }
 
+/** A list's, a set's or a dict's items: what Go to Item… finds one of, by position or by key. */
+export type ItemsKind = 'seq' | 'coll' | 'dict';
+
+/** How an opened row's items are read, when it is a list, a set or a dict; else undefined. */
+export function itemsKind(row: SavedRow): ItemsKind | undefined {
+  const kind = openable(row)?.kind;
+  return kind === 'seq' || kind === 'coll' || kind === 'dict' ? kind : undefined;
+}
+
 /**
- * The rows under an opened object, from `childrenQuery`'s answer for its
- * first `PAGE`. The view has no paging, so a container longer than that ends
- * with a row saying how many more there are, as a scope does in the
- * Variables. An object's rows say so themselves (`childrenQuery` writes a
- * `...` row), and its count is only its own attributes, not the rows its
- * `dir()` gives, so only a full page is taken as cut short.
+ * What the user typed for a dict's key, as the names its row could have: as
+ * typed, and for a bare word, as a str's repr in either quote — so `SKU0042`
+ * finds the row named `'SKU0042'`, and `42` still finds an int key.
  */
-export function fieldRows(
-  parent: SavedRow,
-  readIn: ReadIn,
-  children: PauseVariable[],
-  total: number,
-): SavedRow[] {
-  const rows: SavedRow[] = children.map((field) => ({ kind: 'field', field, readIn, parent }));
-  const cut = children.length >= PAGE && total > children.length;
-  if (cut && !children.some((c) => c.name === '...')) {
-    rows.push({ kind: 'message', text: `… ${total - children.length} more not shown`, parent });
+export function keyNames(text: string): string[] {
+  const typed = text.trim();
+  if (/^['"]/.test(typed)) return [typed];
+  return [typed, `'${typed}'`, `"${typed}"`];
+}
+
+/** The rows under an opened object (or one of its ranges), from `childrenQuery`'s answer. */
+export function fieldRows(parent: SavedRow, readIn: ReadIn, children: PauseVariable[]): SavedRow[] {
+  return children.map((field) => ({ kind: 'field', field, readIn, parent }));
+}
+
+/**
+ * Range rows covering items `start` up to `end` of an opened container (or
+ * entries of `gemdb.root`): one per `page` items, or, for one too big for
+ * that to fit in a page of rows, one per `page` × `page` items, each opening
+ * to ranges in turn — as VS Code nests the Variables' groups. A container's
+ * page is `PAGE`; `gemdb.root`'s is `ROOT_LISTING_LIMIT`, what it lists at first.
+ *
+ * A container longer than a page opens straight to its ranges, as it does in
+ * the Variables, so nothing is read until a range is opened. Only a container
+ * is divided: its items can be read from any position. An object never is;
+ * past a page, its rows end in `childrenQuery`'s own `...` row.
+ */
+export function rangeRows(parent: SavedRow, start: number, end: number, page = PAGE): SavedRow[] {
+  let span = page;
+  while ((end - start) / span > page) span *= page;
+  const rows: SavedRow[] = [];
+  for (let at = start; at < end; at += span) {
+    rows.push({ kind: 'range', parent, start: at, end: Math.min(at + span, end) });
   }
   return rows;
 }
@@ -527,6 +590,8 @@ function toEntry(row: PauseVariable): RootEntry {
     value: row.value,
     ref: row.ref,
     children: row.indexed + row.named,
+    indexed: row.indexed,
+    kind: row.kind,
   };
 }
 
@@ -634,17 +699,19 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
           'circle-outline',
           new vscode.ThemeColor('charts.orange'),
         );
-        item.contextValue = 'gemdbSavedPending';
+        item.contextValue = 'gemdbSavedPending' + (itemsKind(row) ? CONTAINER : '');
         // The tooltip is left for resolveTreeItem, which inspects the object on hover.
         return item;
       }
       case 'root': {
         const item = new vscode.TreeItem('gemdb.root', row.entries.length > 0 ? Expanded : None);
-        const count = row.entries.length;
+        // Its total when read, else what was listed, marked as maybe more when the listing was full.
+        const count = row.total ?? row.entries.length;
+        const more = row.total === undefined && count >= ROOT_LISTING_LIMIT;
         item.description =
           count === 0
             ? 'nothing persisted yet'
-            : `persisted · ${count}${count >= ROOT_LISTING_LIMIT ? '+' : ''} ` +
+            : `persisted · ${count.toLocaleString('en-US')}${more ? '+' : ''} ` +
               (count === 1 ? 'object' : 'objects');
         item.iconPath = new vscode.ThemeIcon('database');
         item.tooltip = new vscode.MarkdownString(ROOT_GUIDE);
@@ -662,7 +729,9 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
           row.entry.stack ? 'debug-stackframe' : 'pass-filled',
           new vscode.ThemeColor('charts.green'),
         );
-        item.contextValue = row.entry.stack ? 'gemdbSavedStack' : 'gemdbSavedObject';
+        item.contextValue = row.entry.stack
+          ? 'gemdbSavedStack'
+          : 'gemdbSavedObject' + (itemsKind(row) ? CONTAINER : '');
         return item;
       }
       case 'field': {
@@ -671,7 +740,14 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
         // As the Variables show it: the type badge first, and a big container's size in place of its text.
         item.description = toDapVariable(field).value;
         if (field.type) item.tooltip = `${field.type}: ${field.value}`;
-        item.contextValue = 'gemdbPersistedField';
+        item.contextValue = 'gemdbPersistedField' + (itemsKind(row) ? CONTAINER : '');
+        return item;
+      }
+      case 'range': {
+        // As VS Code labels the Variables' groups of a big container.
+        const item = new vscode.TreeItem(`[${row.start} … ${row.end - 1}]`, Collapsed);
+        // gemdb.root's ranges hold entries, which are found by key in the view itself.
+        if (this.ownerOf(row)?.kind !== 'root') item.contextValue = 'gemdbRange';
         return item;
       }
       case 'message':
@@ -719,13 +795,18 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
   getChildren(row: SavedRow): SavedRow[] | Promise<SavedRow[]>;
   getChildren(row?: SavedRow): SavedRow[] | Promise<SavedRow[]> {
     if (row?.kind === 'notebook' || row?.kind === 'root') return this.listed(row);
+    if (row?.kind === 'range') return this.ranged(row);
     if (row) return this.opened(row);
     if (this.rows) return this.rows;
     void this.load();
     return [{ kind: 'message', text: 'Reading gemdb.root…' }];
   }
 
-  /** A notebook's additions, or what is committed: rows made once per load, so `reveal` finds them. */
+  /**
+   * A notebook's additions, or what is committed: rows made once per load, so
+   * `reveal` finds them. `gemdb.root` lists its first entries; when it holds
+   * more than that, it shows all of them as ranges instead.
+   */
   private listed(row: SavedRow & { kind: 'notebook' | 'root' }): SavedRow[] {
     let rows = this.children.get(row);
     if (!rows) {
@@ -734,10 +815,19 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
           ? row.saves.map((save): SavedRow => {
               const read = row.read?.get(save.key);
               return read?.ref
-                ? { kind: 'pending', save, ref: read.ref, children: read.indexed + read.named }
+                ? {
+                    kind: 'pending',
+                    save,
+                    ref: read.ref,
+                    children: read.indexed + read.named,
+                    indexed: read.indexed,
+                    kids: read.kind,
+                  }
                 : { kind: 'pending', save };
             })
-          : row.entries.map((entry): SavedRow => ({ kind: 'entry', entry }));
+          : row.total !== undefined && row.total > row.entries.length
+            ? rangeRows(row, 0, row.total, ROOT_LISTING_LIMIT)
+            : row.entries.map((entry): SavedRow => ({ kind: 'entry', entry }));
       this.children.set(row, rows);
     }
     return rows;
@@ -748,45 +838,160 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
    * holds it and kept until the next load. Its registry position is only good
    * until then — each load starts the registry afresh — so a row from an
    * earlier load reads nothing. A failure, such as a notebook busy running a
-   * cell, is shown and not kept, so opening the row again tries again.
+   * cell, is shown and not kept, so opening the row again tries again. A
+   * container longer than a page opens to its ranges, with nothing read yet.
    */
   private async opened(row: SavedRow): Promise<SavedRow[]> {
     const where = openable(row);
     if (!where || !this.isCurrent(row)) return [];
     const kept = this.children.get(row);
     if (kept) return kept;
-    const query = childrenQuery(where.ref, 0, PAGE, PERSISTED_REGISTRY);
+    if (where.indexed > PAGE) {
+      const ranges = rangeRows(row, 0, where.indexed);
+      this.children.set(row, ranges);
+      return ranges;
+    }
     try {
-      const raw =
-        where.readIn.session === 'extension'
-          ? await extensionQuery(query, { budget: true })
-          : await inNotebook(where.readIn.ownerKey, query, { budget: true });
-      const rows = fieldRows(row, where.readIn, parseChildren(orThrow(raw)), where.total);
+      const rows = fieldRows(row, where.readIn, await this.readItems(row, 0, PAGE));
       if (this.isCurrent(row)) this.children.set(row, rows);
       return rows;
     } catch (e) {
-      const busy = where.readIn.session === 'notebook' && !pauseForOwner(where.readIn.ownerKey);
-      return [
-        {
-          kind: 'message',
-          text: busy
-            ? `Could not read it: ${errorMessage(e)}. If its notebook is running a cell, open it again once the cell finishes.`
-            : `Could not read it: ${errorMessage(e)}`,
-          parent: row,
-        },
-      ];
+      return [this.unread(row, where.readIn, e)];
     }
+  }
+
+  /**
+   * A range: its items (or `gemdb.root`'s entries) when it is a page or less,
+   * else the ranges it divides into. What it reads is kept, as an opened
+   * object's children are.
+   */
+  private async ranged(row: SavedRow & { kind: 'range' }): Promise<SavedRow[]> {
+    if (!this.isCurrent(row)) return [];
+    const kept = this.children.get(row);
+    if (kept) return kept;
+    const owner = this.ownerOf(row);
+    const page = owner?.kind === 'root' ? ROOT_LISTING_LIMIT : PAGE;
+    if (row.end - row.start > page) {
+      const rows = rangeRows(row, row.start, row.end, page);
+      this.children.set(row, rows);
+      return rows;
+    }
+    if (owner?.kind === 'root') {
+      try {
+        const rows = parseChildren(
+          orThrow(
+            await extensionQuery(rootListingQuery(row.start, row.end - row.start, false), {
+              budget: true,
+            }),
+          ),
+        ).map((field): SavedRow => ({ kind: 'entry', entry: toEntry(field), parent: row }));
+        if (this.isCurrent(row)) this.children.set(row, rows);
+        return rows;
+      } catch (e) {
+        return [this.unread(row, { session: 'extension' }, e)];
+      }
+    }
+    const where = owner && openable(owner);
+    if (!owner || !where) return [];
+    try {
+      const rows = fieldRows(
+        row,
+        where.readIn,
+        await this.readItems(owner, row.start, row.end - row.start),
+      );
+      if (this.isCurrent(row)) this.children.set(row, rows);
+      return rows;
+    } catch (e) {
+      return [this.unread(row, where.readIn, e)];
+    }
+  }
+
+  /**
+   * The row of a list's, set's or dict's item at `index` (from 0), as shown
+   * under `container`: opening each range on the way, as the user would, so
+   * every row on the path is one `reveal` can find. Undefined when there is no
+   * such item, or the rows on the way could not be read.
+   */
+  async itemAt(container: SavedRow, index: number): Promise<SavedRow | undefined> {
+    let at = container;
+    for (;;) {
+      const rows = await this.getChildren(at);
+      const range = rows.find((r) => r.kind === 'range' && r.start <= index && index < r.end);
+      if (range) {
+        at = range;
+        continue;
+      }
+      const item = rows[index - (at.kind === 'range' ? at.start : 0)];
+      return item?.kind === 'field' ? item : undefined;
+    }
+  }
+
+  /**
+   * Where a dict's key is among its entries (from 0), read in the session that
+   * holds the dict; -1 when it has no such key.
+   */
+  async keyPosition(container: SavedRow, text: string): Promise<number> {
+    const where = openable(container);
+    if (!where) return -1;
+    const query = keyPositionQuery(where.ref, keyNames(text), PERSISTED_REGISTRY);
+    const raw =
+      where.readIn.session === 'extension'
+        ? await extensionQuery(query, { budget: true })
+        : await inNotebook(where.readIn.ownerKey, query, { budget: true });
+    return Number(orThrow(raw));
+  }
+
+  /** The container (or `gemdb.root`) a range row, or a range within a range, divides. */
+  ownerOf(row: SavedRow): SavedRow | undefined {
+    let at: SavedRow | undefined = row;
+    while (at?.kind === 'range') at = at.parent;
+    return at;
+  }
+
+  /** `count` of an opened object's children from `start`, read in the session that holds it. */
+  private async readItems(row: SavedRow, start: number, count: number): Promise<PauseVariable[]> {
+    const where = openable(row);
+    if (!where) return [];
+    const query = childrenQuery(where.ref, start, count, PERSISTED_REGISTRY);
+    const raw =
+      where.readIn.session === 'extension'
+        ? await extensionQuery(query, { budget: true })
+        : await inNotebook(where.readIn.ownerKey, query, { budget: true });
+    return parseChildren(orThrow(raw));
+  }
+
+  /** The row that says why an object's children could not be read. */
+  private unread(parent: SavedRow, readIn: ReadIn, e: unknown): SavedRow {
+    const busy = readIn.session === 'notebook' && !pauseForOwner(readIn.ownerKey);
+    return {
+      kind: 'message',
+      text: busy
+        ? `Could not read it: ${errorMessage(e)}. If its notebook is running a cell, open it again once the cell finishes.`
+        : `Could not read it: ${errorMessage(e)}`,
+      parent,
+    };
+  }
+
+  /** The row a row was read under, when it keeps one: a field's, a range's, an entry read in a range. */
+  private static parentOf(row: SavedRow): SavedRow | undefined {
+    return row.kind === 'field' || row.kind === 'range' || row.kind === 'entry'
+      ? row.parent
+      : undefined;
   }
 
   /** Whether a row belongs to the rows shown now, so its registry position still holds. */
   private isCurrent(row: SavedRow): boolean {
-    let at: SavedRow | undefined = row;
-    while (at?.kind === 'field') at = at.parent;
-    return at !== undefined && this.getParent(at) !== undefined;
+    let at: SavedRow = row;
+    for (let up = SavedObjectsProvider.parentOf(at); up; up = SavedObjectsProvider.parentOf(at)) {
+      at = up;
+    }
+    return this.rows?.includes(at) === true || this.getParent(at) !== undefined;
   }
 
   getParent(row: SavedRow): SavedRow | undefined {
-    if (row.kind === 'field' || (row.kind === 'message' && row.parent)) return row.parent;
+    const up = SavedObjectsProvider.parentOf(row);
+    if (up) return up;
+    if (row.kind === 'message' && row.parent) return row.parent;
     return this.rows?.find((top) => this.children.get(top)?.includes(row));
   }
 
@@ -867,8 +1072,14 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
         }),
     );
     let root: RootEntry[] | string;
+    let rootTotal: number | undefined;
     try {
       root = parseChildren(await extensionQuery(rootListingQuery())).map(toEntry);
+      // Only a full first page can have more after it, so only then is it worth counting.
+      if (root.length >= ROOT_LISTING_LIMIT) {
+        const counted = Number(await extensionQuery(rootSizeQuery()).catch(() => ''));
+        rootTotal = Number.isInteger(counted) && counted > 0 ? counted : undefined;
+      }
       const stacks = new Set(
         (
           JSON.parse(
@@ -891,7 +1102,9 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
     this.rows = topRows(true, notebooks, this.pending, root).map((row) =>
       row.kind === 'notebook' && read.has(row.notebook.key)
         ? { ...row, read: read.get(row.notebook.key) }
-        : row,
+        : row.kind === 'root' && rootTotal !== undefined
+          ? { ...row, total: rootTotal }
+          : row,
     );
   }
 }
@@ -1465,6 +1678,103 @@ async function restoreStack(): Promise<void> {
 }
 
 /** Register the view and its commands. Answers the view, for others to refresh. */
+/**
+ * A position typed for Go to Item…: a whole number, or one in brackets as the
+ * range rows write them (`[42]`), negative to count from the end. Answers the
+ * number and whether it was bracketed, or undefined for anything else.
+ */
+export function typedPosition(text: string): { n: number; bracketed: boolean } | undefined {
+  const typed = text.trim();
+  const inBrackets = /^\[\s*(-?\d+)\s*\]$/.exec(typed);
+  if (inBrackets) return { n: Number(inBrackets[1]), bracketed: true };
+  return /^-?\d+$/.test(typed) ? { n: Number(typed), bracketed: false } : undefined;
+}
+
+/**
+ * Go to Item…: ask for a position (any list, set or dict) or a key (a dict),
+ * then open the container's ranges down to that item and select it, in the
+ * views showing Persisted Objects (or the main one, when neither is showing).
+ *
+ * For a dict, what is typed is tried as a key first. A bracketed position
+ * (`[42]`, as the ranges are labelled) is always a position; a bare number
+ * that is not a key, but is a position, goes there and says so; anything
+ * else that is not a key says why nothing was found.
+ */
+async function goToItem(
+  view: SavedObjectsProvider,
+  treeViews: Map<string, vscode.TreeView<SavedRow>>,
+  clicked: SavedRow,
+): Promise<void> {
+  const container = clicked.kind === 'range' ? view.ownerOf(clicked) : clicked;
+  const kind = container && itemsKind(container);
+  const where = container && openable(container);
+  if (!container || !kind || !where) return;
+  const count = where.total;
+  const n = (k: number) => k.toLocaleString('en-US');
+  const positions = `a position from 0 to ${n(count - 1)}, or -1 to -${n(count)} from the end`;
+  const inRange = (p: number) => p < count && p >= -count;
+  const text = await vscode.window.showInputBox({
+    title: 'Go to Item',
+    prompt:
+      kind === 'dict'
+        ? `A key, as Python writes it — 'SKU0042' (or just SKU0042) for a str, 42 for an int — ` +
+          `or a position in brackets, [0] to [${n(count - 1)}].`
+        : `A position from 0 to ${n(count - 1)}, or a negative one to count from the end.`,
+    ignoreFocusOut: true,
+    validateInput: (typed) => {
+      if (!typed.trim())
+        return kind === 'dict' ? 'Enter a key or a position.' : 'Enter a position.';
+      const at = typedPosition(typed);
+      // A dict's bare word or number may be a key; only the database can say.
+      if (kind === 'dict' && !at?.bracketed) return undefined;
+      return at && inRange(at.n) ? undefined : `Enter ${positions}.`;
+    },
+  });
+  if (text === undefined) return;
+  const typed = text.trim();
+  const at = typedPosition(typed);
+  let index: number;
+  if (kind !== 'dict' || at?.bracketed) {
+    if (!at || !inRange(at.n)) {
+      void vscode.window.showWarningMessage(`No item ${typed} here: enter ${positions}.`);
+      return;
+    }
+    index = at.n;
+  } else {
+    try {
+      index = await view.keyPosition(container, typed);
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Could not look for ${typed}: ${errorMessage(e)}`);
+      return;
+    }
+    if (index < 0 && at && inRange(at.n)) {
+      index = at.n;
+      void vscode.window.showInformationMessage(
+        `This dict has no key ${typed}, so this is the item at position ${typed}. ` +
+          `Type [${typed}] to go by position directly.`,
+      );
+    } else if (index < 0) {
+      void vscode.window.showWarningMessage(
+        `This dict has no key ${typed}. Keys are matched as Python writes them: ` +
+          `'SKU0042' or SKU0042 for a str, 42 for an int. To go by position, type [0] to [${n(count - 1)}].`,
+      );
+      return;
+    }
+  }
+  if (index < 0) index += count;
+  const item = await view.itemAt(container, index);
+  if (!item) {
+    void vscode.window.showWarningMessage(
+      `Could not show item ${n(index)}; refresh the view and try again.`,
+    );
+    return;
+  }
+  const showing = [...treeViews.values()].filter((tv) => tv.visible);
+  for (const tv of showing.length > 0 ? showing : [treeViews.get(VIEW_ID)!]) {
+    await tv.reveal(item, { select: true, focus: true, expand: false });
+  }
+}
+
 export function registerSavedObjects(context: vscode.ExtensionContext): SavedObjectsProvider {
   const view = new SavedObjectsProvider(context.globalState);
   const treeViews = new Map<string, vscode.TreeView<SavedRow>>();
@@ -1489,6 +1799,9 @@ export function registerSavedObjects(context: vscode.ExtensionContext): SavedObj
       saveVariable(view, treeViews, ctx),
     ),
     vscode.commands.registerCommand('gemdb.savedObjects.refresh', () => view.refresh()),
+    vscode.commands.registerCommand('gemdb.savedObjects.goToItem', (row: SavedRow) =>
+      row ? goToItem(view, treeViews, row) : undefined,
+    ),
     // Internal, for `%persist` in the Debug Console (`debugger.ts`): show the
     // save as pending, as Add to Persisted Objects does.
     vscode.commands.registerCommand(

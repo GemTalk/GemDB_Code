@@ -446,7 +446,12 @@ database, select that kernel from the kernel picker at the top right.
   holds. Each entry opens like a Variables row, with its type badges and groups, and you can keep
   opening what is inside it, with nothing paused: a committed entry is read by GemDB's own session,
   any time, even after a restart; one added and not committed yet is read by its notebook's, while
-  that notebook is not running a cell. A list or dict longer than 500 items shows its first 500. The view's
+  that notebook is not running a cell. A list or dict longer than 500 items opens to ranges of 500 —
+  `[0 … 499]`, `[500 … 999]`, … — each opening to its items, nested for a very long one, as in
+  Variables; and when `gemdb.root` holds more than 200 entries, it shows them as ranges of 200.
+  Right-click a list, set or dict (or one of its ranges) and choose **Go to Item…** to type a position
+  (negative counts from the end; `[42]`, as the ranges write it, also works) or a dict's key, and the
+  view opens down to that item and selects it; a key it can't find says so and how keys are written. The view's
   title bar always has **Commit** and **Abort** for the notebook you are working in. **Add Stack to Persisted Objects…** on the Call Stack saves the whole paused stack the same
   way; once committed, Persisted Objects reopens it in the debugger, even after a restart. Its
   Debug Console works on the saved objects: call a method, bind a name, change an object,
