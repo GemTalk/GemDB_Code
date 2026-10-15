@@ -1,13 +1,17 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { TelemetryReporter } from '@vscode/extension-telemetry';
 import type { DiskSnapshot } from './paths';
-import type { ScarfTransport } from './scarfTransport';
+import { scarfTransport, type ScarfTransport } from './scarfTransport';
 import type { GemDbState } from './statusView';
 
 /**
  * GemDB's telemetry: one named function per thing worth counting.
+ *
+ * Every event goes to two sinks through the one `send` below: Azure App
+ * Insights, and Scarf. Scarf hears only from Production windows.
  *
  * Four rules a future edit can break, none visible from a call site:
  *
@@ -138,6 +142,9 @@ export const EVENT = {
 export type EventName = (typeof EVENT)[keyof typeof EVENT];
 
 let reporter: TelemetryReporter | undefined;
+
+/** Scarf's logger, set only in a Production window; see `initTelemetry`. */
+let scarf: vscode.TelemetryLogger | undefined;
 
 /**
  * Properties stamped on every event, established once at activation.
@@ -292,6 +299,22 @@ export function initTelemetry(context: vscode.ExtensionContext, databaseExists: 
   // Disposal flushes queued events, so the subscription is load-bearing.
   reporter = new TelemetryReporter(CONNECTION_STRING);
   context.subscriptions.push(reporter);
+  // Scarf is sent production events only, rather than every event to be
+  // filtered later: its dashboards are read by people who never filter by
+  // `extensionMode`.
+  // `ignoreUnhandledErrors` defaults to false, which would forward the
+  // extension host's unhandled errors, stack traces and all, to the sender.
+  // `common.os` is not one of VS Code's own common properties:
+  // `@vscode/extension-telemetry` adds it, to its own logger only, so this
+  // one has to add it the same way.
+  scarf =
+    context.extensionMode === vscode.ExtensionMode.Production
+      ? vscode.env.createTelemetryLogger(new ScarfSender(scarfTransport), {
+          ignoreUnhandledErrors: true,
+          additionalCommonProperties: { 'common.os': os.platform() },
+        })
+      : undefined;
+  if (scarf) context.subscriptions.push(scarf);
 }
 
 /**
@@ -317,7 +340,7 @@ export function registerCopyTelemetryIdCommand(context: vscode.ExtensionContext)
  * keeps `EVENT` the complete list of what GemDB emits, gives each event one
  * documented shape and one place to change it.
  *
- * No consent check here, deliberately: `sendTelemetryEvent` goes through
+ * No consent check here, deliberately: both sinks go through
  * `vscode.env.createTelemetryLogger`, and VS Code checks `isTelemetryEnabled`
  * before it reaches any sender. Do not add one, and in particular do not read
  * `telemetry.telemetryLevel` — VS Code's own guide says it can disagree.
@@ -337,6 +360,10 @@ function send(
   measures?: Record<string, number>,
 ): void {
   reporter?.sendTelemetryEvent(name, { ...baseProperties, ...properties }, measures);
+  // Flat on purpose, the reverse of the rule above: with no `properties`
+  // field, VS Code mixes `common.*` into the top level, which is where
+  // `scarfUrl` reads every field.
+  scarf?.logUsage(name, { ...baseProperties, ...properties, ...measures });
 }
 
 /**

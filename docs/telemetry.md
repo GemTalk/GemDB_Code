@@ -3,8 +3,30 @@
 What GemDB reports, and when. For what is collected overall, how it is stored,
 and how users turn it off, see [USAGE_DATA.md](../USAGE_DATA.md).
 
-Events go to Azure Application Insights and are kept for 90 days. Nothing is
-sent when a user sets VS Code's `telemetry.telemetryLevel` to `off`.
+Events go to Azure Application Insights, where they are kept for 90 days, and
+to Scarf. Nothing is sent to either when a user sets VS Code's
+`telemetry.telemetryLevel` to `off`.
+
+Scarf receives the same events and properties, with three differences:
+
+- Only real installs send to it, so everything in Scarf is production data.
+  Events with an `extensionMode` of `development` or `test` go to Application
+  Insights alone.
+- Every value arrives as a string, measures included: `activationMs` is
+  `"1234"`, not `1234`.
+- Of VS Code's own `common.*` properties it gets only `common.extversion`,
+  `common.os`, `common.vscodeversion` and `common.remotename`. There is no
+  `common.vscodemachineid`, so Scarf cannot tell one installation's events
+  from another's: count installs, or find a machine's first event, in
+  Application Insights.
+
+Scarf names the company behind each event from the IP address it arrives
+from. In a remote window GemDB runs on the remote machine, so the event comes
+from there: over SSH to a cloud machine, or in Codespaces, it reads as the
+cloud provider (Amazon, Microsoft, Google) rather than the user's employer.
+When counting companies, leave out events whose `common.remotename` is set.
+WSL, and a Dev Container on the user's own machine, still send from that
+machine, so this undercounts them slightly rather than miscounting.
 
 ## The journey the events describe
 
