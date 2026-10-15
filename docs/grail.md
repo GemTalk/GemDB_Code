@@ -63,15 +63,29 @@ longer stamps at all and the ordering question has gone with it.
 
 **The CLI's exit codes go through a status file, not topaz.** topaz cannot
 carry an exit status out of a `run` block — `ExitClientError status:` is not
-translated, and an `iferr … exit 1` action exits 0 (all measured). The driver
-therefore ends with no `exit` command at all, and must not grow one: `topaz -h`
-says of `-S` that topaz "exits when the script completes" and that "exit and
-quit commands are ignored". Ignored silently when stdin is a pipe — which is
-every CI run, every test, and every `gemdb x.py | cat` — and out loud when
-stdin is a tty, where it printed four lines of explanation and a
-`Logging out session 1.` in front of the user. So
+translated, and an `iferr … exit 1` action exits 0 (all measured). So
 `gemdb-run.tpz` writes the status to the file named in `GEMDB_STATUS_FILE` and
-the bash wrapper becomes the exit code. Errors there are caught as
+the bash wrapper becomes the exit code.
+
+**Topaz says nothing on the terminal during a file run.** The driver runs
+under `-P` with an `-I` init file whose one line is
+`output push $GEMDB_TOPAZ_LOG only`, so everything topaz prints goes to a
+per-run log, while the program's output, written to `GsFile stdout` and
+`stderr`, still reaches the terminal directly. Without it Ctrl-C ended a run
+with a soft-break notice, `Near line 155 of file …/gemdb-run.tpz`,
+`ERROR 3004` for the `ExitClientError` that ends topaz, and
+`Logging out session 1.` (#131). All three pieces are needed, as measured on
+4.0.0.a4. Under `-S`, `OUTPUT PUSH … ONLY` has no effect on stdout. Under `-P`
+without `-I`, the lines before the push are echoed. And a log, not
+`/dev/null`, because a refused login or a session the stone ends mid-run is
+reported by topaz alone: the wrapper prints the log, less topaz's echo of the
+driver, whenever no status was written. `-P` does not exit at the end of the
+script, so the driver ends with `exit`. Without it, topaz reads its next
+commands from stdin, and a refused login with input piped in ran that input as
+topaz commands (measured, and covered by `cli.test.ts`). Under `-S` the same
+`exit` was ignored, and on a tty it printed four lines saying so.
+
+Errors in the driver are caught as
 `AbstractException`, not `Error`: Grail's Python exceptions live outside the
 `Error` branch, which is why grail.tpz's own file mode exits 0 on a Python
 error. `sys.exit(n)` is decoded by that same handler: Grail raises its own

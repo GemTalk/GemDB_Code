@@ -26,11 +26,14 @@ import { sharedLibraryExtension } from './platform';
  * Generated files under `<rootPath>/bin`, rewritten on every staging so they
  * always match the installed engine and the staged Grail:
  *
- *   `gemdb`            the wrapper. Sets the whole engine environment itself,
- *                      so it works from any shell with no setup beyond PATH.
- *   `gemdb-run.tpz`    the topaz driver for running a file or module.
- *   `gemdb-shell.js`   the GemDB Shell, staged out of the extension's build
- *                      together with `node_modules/koffi` beside it.
+ *   `gemdb`               the wrapper. Sets the whole engine environment
+ *                         itself, so it works from any shell with no setup
+ *                         beyond PATH.
+ *   `gemdb-run.tpz`       the topaz driver for running a file or module.
+ *   `gemdb-run-init.tpz`  its init file, which keeps topaz's own output off
+ *                         the terminal (see TOPAZ_INIT below).
+ *   `gemdb-shell.js`      the GemDB Shell, staged out of the extension's
+ *                         build together with `node_modules/koffi` beside it.
  *
  * File mode drives *linked* topaz — the right login for a batch run: its own
  * process, one session, crash isolation by construction, and real stdin/stdout
@@ -67,6 +70,45 @@ export function cliPath(): string {
 }
 
 const TOPAZ_TUNING = `-T 400000 -C 'GEM_TEMPOBJ_CODE_SIZE=300000;'`;
+
+/**
+ * The init file (`-I`) for a file run: everything topaz itself says goes to a
+ * per-run log the wrapper names in GEMDB_TOPAZ_LOG, and never to the terminal.
+ *
+ * The program's own output is unaffected, because it never passes through
+ * topaz: print() and the driver's reports write to `GsFile stdout`/`stderr`,
+ * which in linked topaz are the process's real descriptors. What this removes
+ * is topaz talking over the program. Ctrl-C used to end a run with
+ *
+ *   [Sending soft break]
+ *    Near line 155 of file …/gemdb-run.tpz
+ *   KeyboardInterrupt
+ *   ERROR 3004 , a ExitClientError occurred (error 3004)
+ *   Logging out session 1.
+ *
+ * where CPython prints only the KeyboardInterrupt — and the ERROR line, which
+ * is the driver's deliberate way out (see the end of the driver), read as a
+ * failure (GemTalk/GemDB_Code#131). Each piece here was measured on 4.0.0.a4:
+ *
+ * - **`-P`, not `-S`.** Under `-S`, `OUTPUT PUSH … ONLY` has no effect on
+ *   stdout (topaz's own help says so, and `output push /dev/null only` changed
+ *   nothing). Under `-P` it takes effect, the soft-break notice on stderr
+ *   included.
+ * - **Pushed here, not in the driver.** `-P` echoes each script line to the
+ *   terminal until the push takes effect, so a push on the driver's first line
+ *   still printed that line and the one before it. An `-I` file is not echoed.
+ *   `-i` is no substitute: it did not stop `-P`'s echo, and it ignores `-I`.
+ * - **A log, not /dev/null.** A refused login (the session limit, the space
+ *   threshold, an external database's password) or a session the stone ends
+ *   mid-run is reported by topaz and nothing else, so the wrapper shows the
+ *   log whenever the run did not report a status.
+ *
+ * `-I` also means no `.topazini` is read, from home or from the current
+ * directory — which the driver's `set` lines already overrode for the login,
+ * and which a cloned repository could otherwise use to run topaz commands.
+ */
+const TOPAZ_INIT = `output push $GEMDB_TOPAZ_LOG only
+`;
 
 /**
  * Copy the shell bundle and its one native dependency beside the wrapper.
@@ -118,6 +160,7 @@ function cliFingerprint(wrapper: string, driver: string, shellBundle: string): s
   const hash = crypto.createHash('sha256');
   hash.update(wrapper);
   hash.update(driver);
+  hash.update(TOPAZ_INIT);
   hash.update(fs.existsSync(shellBundle) ? fs.readFileSync(shellBundle) : Buffer.of());
   return hash.digest('hex');
 }
@@ -196,22 +239,23 @@ export function writeCliScripts(extensionPath: string): void {
   const external = externalDatabase();
   const stone = stoneName();
 
-  // The topaz driver for one file or module. `set` lines beat any ~/.topazini
-  // (the ini runs first, these run later), so a Jasper user's defaults cannot
-  // hijack the login. Errors are caught as AbstractException, not Error —
-  // Grail's Python exceptions live outside the Error branch, which is why
-  // grail.tpz's own file mode exits 0 on a Python error.
+  // The topaz driver for one file or module, run with `-P` after TOPAZ_INIT.
+  // No ~/.topazini runs (`-I` replaces it), and the `set` lines would beat one
+  // anyway, so a Jasper user's defaults cannot hijack the login. Errors are
+  // caught as AbstractException, not Error — Grail's Python exceptions live
+  // outside the Error branch, which is why grail.tpz's own file mode exits 0
+  // on a Python error.
   //
-  // There is deliberately no `exit` command at the end. topaz's own help says
-  // it of `-S`: the script is processed with INPUT, "topaz exits when the
-  // script completes", and "exit and quit commands are ignored". Ignored
-  // quietly when stdin is a pipe, which is why both suites and every run
-  // through a non-interactive shell missed it — but out loud when stdin is a
-  // tty, where `gemdb hide.py` printed four lines of topaz explaining that it
-  // was ignoring the EXIT, plus a "Logging out session 1." the ignored exit
-  // provoked. The status still leaves through GEMDB_STATUS_FILE, which never
-  // depended on that line (measured again without it: sys.exit(3) → 3, an
-  // uncaught exception → 1, a missing file → 2).
+  // `-P` is why the driver ends with `exit`. Unlike `-S`, it does not exit at
+  // the end of the script: it goes on to read commands from stdin, which is
+  // the user's terminal or, worse, whatever was piped to their program. A
+  // topaz-level error does not change that — measured with a wrong password,
+  // topaz reports the refused login, carries on through the script, and
+  // leaves at this line, on a tty and on a pipe alike. Only Ctrl-C stops it
+  // reading, and the ExitClientError below covers that. (Under `-S` the
+  // closing exit was the opposite problem: ignored, and on a tty four lines
+  // saying so.) The status still leaves through GEMDB_STATUS_FILE, not the
+  // exit: sys.exit(3) → 3, an uncaught exception → 1, a missing file → 2.
   //
   // sys.exit(n) is decoded here, not upstream: Grail raises its own SystemExit
   // (never ExitClientError — input()'s except SystemExit and finally blocks
@@ -382,9 +426,12 @@ sys.breakpointhook = _gemdb_breakpoint']]
 and it stops reading this script once the block returns, leaving the user at
 a topaz 1> prompt still holding a session -- so nothing written after this
 block would run. An ExitClientError is what makes topaz log out and exit
-instead. The status still travels through GEMDB_STATUS_FILE, written above."
+instead. The status still travels through GEMDB_STATUS_FILE, written above,
+and topaz's ERROR 3004 for it goes to the log TOPAZ_INIT opened, which the
+wrapper shows only when there is no status."
 interrupted ifTrue: [ExitClientError new status: status; signal].
 %
+exit
 `;
 
   const script = `#!/bin/bash
@@ -597,12 +644,21 @@ fi
 
 # topaz cannot carry an exit status out of a run block, so the driver writes
 # it to a file and this wrapper becomes the exit code. See gemdb-run.tpz.
+# Everything topaz itself prints goes to GEMDB_TOPAZ_LOG instead of the
+# terminal (gemdb-run-init.tpz), so that Ctrl-C ends a program the way it ends
+# CPython. No status means the program never finished — a refused login, or a
+# session ended under it — and then topaz's account is the only one, so it is
+# shown, less topaz's echo of the driver.
 GEMDB_STATUS_FILE="$(mktemp "\${TMPDIR:-/tmp}/gemdb-status-XXXXXX")"
-export GEMDB_STATUS_FILE
-topaz -L -q -S "$ROOT/bin/gemdb-run.tpz" ${TOPAZ_TUNING} -- "$@"
+GEMDB_TOPAZ_LOG="$(mktemp "\${TMPDIR:-/tmp}/gemdb-topaz-XXXXXX")"
+export GEMDB_STATUS_FILE GEMDB_TOPAZ_LOG
+topaz -L -q -I "$ROOT/bin/gemdb-run-init.tpz" -P "$ROOT/bin/gemdb-run.tpz" ${TOPAZ_TUNING} -- "$@"
 RC=$?
 STATUS="$(cat "$GEMDB_STATUS_FILE" 2>/dev/null || true)"
-rm -f "$GEMDB_STATUS_FILE"
+if [ -z "$STATUS" ]; then
+  sed -e '/^topaz[^>]*> run$/,/^%$/d' -e '/^topaz[^>]*> /d' "$GEMDB_TOPAZ_LOG" >&2
+fi
+rm -f "$GEMDB_STATUS_FILE" "$GEMDB_TOPAZ_LOG"
 [ -n "$CODE_FILE" ] && rm -f "$CODE_FILE" "\${CODE_FILE%.py}"
 case "$STATUS" in
   ''|*[!0-9]*) [ "$RC" -ne 0 ] && exit "$RC"; exit 1 ;;
@@ -631,6 +687,7 @@ esac
   const driverPath = path.join(cliDirPath(), 'gemdb-run.tpz');
   fs.writeFileSync(driverPath, driver, { mode: 0o600 });
   fs.chmodSync(driverPath, 0o600);
+  fs.writeFileSync(path.join(cliDirPath(), 'gemdb-run-init.tpz'), TOPAZ_INIT);
 
   // An earlier release handed the no-argument mode to Grail's topaz REPL
   // through this file; the shell replaced it, so a stale copy is only a trap.

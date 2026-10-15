@@ -222,7 +222,7 @@ describe.skipIf(!ready || !canMakeFixture())('the gemdb command', () => {
     expect(ran.code).toBe(0);
   });
 
-  it('stops on Ctrl-C, after finally blocks, rather than at a topaz prompt', async () => {
+  it('stops on Ctrl-C as python3 does, after finally blocks, with nothing from topaz', async () => {
     // A real Ctrl-C needs a real terminal: the line discipline turns ^C into
     // SIGINT for topaz, which sends the gem a soft break. expect(1) owns the
     // pty, as in repl.test.ts. The script blocks in a primitive, where a web
@@ -268,10 +268,36 @@ exit [lindex $result 3]
         },
       );
     });
-    expect(ran.transcript).toContain('cleaned up');
-    expect(ran.transcript).toContain('KeyboardInterrupt');
-    expect(ran.transcript).not.toContain('topaz 1>');
+    // Everything the terminal showed after expect's own spawn line, less the
+    // ^C the line discipline echoes. Topaz used to add a soft-break notice,
+    // the driver line it stopped at, ERROR 3004 and a logout (#131).
+    const shown = ran.transcript
+      .replaceAll('^C', '')
+      .split(/\r?\n/)
+      .slice(1)
+      .map((line) => line.trim())
+      .filter((line) => line !== '');
+
+    expect(shown).toEqual(['serving', 'cleaned up', 'KeyboardInterrupt']);
     expect(ran.code).toBe(130);
+  });
+
+  it('says why when the database refuses the login, and runs nothing piped to it', async () => {
+    const driver = path.join(path.dirname(cliPath()), 'gemdb-run.tpz');
+    const good = fs.readFileSync(driver, 'utf8');
+    fs.writeFileSync(driver, good.replace(/^(set user \S+ pass )\S*$/m, '$1not-the-password'));
+    let ran: Ran;
+    try {
+      ran = await run(['hello.py'], 'shell echo LEAKED\n');
+    } finally {
+      fs.writeFileSync(driver, good);
+    }
+
+    expect(ran.stderr).toContain('Login failed');
+    expect(ran.stderr).not.toContain('not-the-password');
+    expect(ran.stdout + ran.stderr).not.toContain('LEAKED');
+    expect(ran.stdout).not.toContain('hello from');
+    expect(ran.code).not.toBe(0);
   });
 
   it('raises EOFError when stdin runs dry', async () => {
