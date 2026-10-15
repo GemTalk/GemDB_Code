@@ -77,19 +77,13 @@ describe('writeCliScripts', () => {
     // only path. Sending it is now a doesNotUnderstand that kills the run at
     // that line, so the driver must not carry it.
     expect(run).not.toContain('___canonicalClassesEnabled___');
-    // A file run is linked topaz, so it never reaches session.ts and would
-    // otherwise sit in the shared cache as the stock 'TopazL'. The truncation
-    // is not optional: 32 characters raises OutOfRange, at login.
-    // No `exit` command: with -S, topaz exits when the script completes and
-    // ignores exit outright — quietly on a pipe, but on a tty it prints four
-    // lines about ignoring it and a spurious "Logging out session 1.". A test
-    // here because a pipe is what both suites use, so nothing else would
-    // notice it coming back.
-    expect(run.split('\n').some((line) => /^\s*(exit|quit)\b/.test(line))).toBe(false);
     // The console sink is a GsFile, which takes bytes; the second slot of
     // the #GrailConsole box is what tells Grail to encode. Without it,
     // non-ASCII print() output is UTF-16 code units on the terminal.
     expect(run).toContain("put: (Array with: GsFile stdout with: #'utf8')");
+    // A file run is linked topaz, so it never reaches session.ts and would
+    // otherwise sit in the shared cache as the stock 'TopazL'. The truncation
+    // is not optional: 32 characters raises OutOfRange, at login.
     expect(run).toContain('System cacheName: label');
     expect(run).toContain("label := 'GemDB run ', label");
     expect(run).toContain('label size > 31 ifTrue:');
@@ -111,6 +105,47 @@ describe('writeCliScripts', () => {
     expect(run.indexOf('interrupted ifTrue:')).toBeGreaterThan(
       run.indexOf('GsFile openWrite: statusFile'),
     );
+  });
+
+  it("keeps topaz's own output off the terminal, and shows it when a run never finished", () => {
+    writeCliScripts(ext);
+
+    const script = fs.readFileSync(cliPath(), 'utf8');
+    const init = fs.readFileSync(path.join(root, 'bin', 'gemdb-run-init.tpz'), 'utf8');
+
+    // Only -P honours OUTPUT PUSH ... ONLY for stdout, and only an -I file is
+    // not echoed before the push takes effect.
+    expect(init).toBe('output push $GEMDB_TOPAZ_LOG only\n');
+    expect(script).toContain(
+      'topaz -L -q -I "$ROOT/bin/gemdb-run-init.tpz" -P "$ROOT/bin/gemdb-run.tpz"',
+    );
+    expect(script).toContain('GEMDB_TOPAZ_LOG="$(mktemp');
+    expect(script).toMatch(/if \[ -z "\$STATUS" \]; then\n\s+sed .* "\$GEMDB_TOPAZ_LOG" >&2\n/);
+  });
+
+  it('removes its temporary files however the run ends', () => {
+    writeCliScripts(ext);
+
+    const script = fs.readFileSync(cliPath(), 'utf8');
+
+    // Armed before the first file is made, so no exit path — a hangup
+    // included — can skip it, and nothing after the run removes them itself.
+    expect(script.indexOf('trap remove_temp_files EXIT')).toBeGreaterThan(-1);
+    expect(script.indexOf('trap remove_temp_files EXIT')).toBeLessThan(script.indexOf('mktemp'));
+    expect(script).not.toMatch(/^rm -f "\$GEMDB_STATUS_FILE"/m);
+  });
+
+  it('never leaves topaz reading commands from stdin', () => {
+    writeCliScripts(ext);
+
+    const lines = fs
+      .readFileSync(path.join(root, 'bin', 'gemdb-run.tpz'), 'utf8')
+      .trimEnd()
+      .split('\n');
+
+    // Under -P, topaz reads stdin once the script ends — a terminal, or
+    // whatever was piped to the user's program.
+    expect(lines[lines.length - 1]).toBe('exit');
   });
 
   it('reports an uncaught exception only after the stack has unwound', () => {

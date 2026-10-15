@@ -91,6 +91,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The MCP server is installed and started once when GemDB starts.** Opening a window on a running
   database while a cell started it could install the MCP server's classes twice and start two
   servers on one port. Now the second waits for the first.
+- **Ctrl+C ends a `gemdb` run without an error.** Stopping `gemdb app.py` printed
+  `[Sending soft break]`, a line number in GemDB's own script, `ERROR 3004 , a ExitClientError
+  occurred` and `Logging out session 1.` around the `KeyboardInterrupt`, which read as a failure. It
+  now prints only `KeyboardInterrupt`, as Python does. GemStone's own messages from a `gemdb` run are
+  shown only when the program could not run to the end, such as a refused login, and a
+  `.topazini` file is no longer read.
 
 ## [1.6.0] - 2026-10-07
 
