@@ -50,13 +50,22 @@ stores those three fields alongside each event. Your IP address itself is
 do not use the location to identify anyone; it tells us which regions GemDB
 is used in.
 
+**Scarf.** The same events also go to [Scarf](https://about.scarf.sh), with
+GemDB's own properties and four of VS Code's: `common.extversion`,
+`common.os`, `common.vscodeversion` and `common.remotename`. VS Code's other
+common properties, `common.vscodemachineid` among them, are not sent to Scarf,
+so nothing Scarf receives identifies your installation.
+Scarf matches the IP address an event arrives from to the company or
+organisation it belongs to, if any, and to a coarse location.
+The raw IP address is discarded once it has been matched.
+
 ## What we do not collect
 
 File paths, file names, notebook URIs or titles, Python source code, notebook
 cell contents, query text, database contents, GemStone session or cache
 names, usernames, email addresses, environment variables, error messages, or
-exception text, or your IP address (see "Approximate location" above for
-what Azure derives from it before discarding it). Events that record a
+exception text, or your IP address (see "Approximate location" and "Scarf"
+above for what Azure and Scarf derive from it before discarding it). Events that record a
 failure — for example, whether setup or a database start succeeded — carry
 only a short classified reason (such as "cancelled" or "failed"), never the
 underlying error's own text, because GemStone errors can embed file paths.
@@ -65,10 +74,10 @@ underlying error's own text, because GemStone errors can embed file paths.
 
 To understand GemDB's usage in aggregate: whether setup and startup succeed
 and how long they take, which platforms GemDB runs on and which regions it is
-used in, and which features people actually use. That lets us prioritize
-fixes and improvements. We do not use it to see what any individual does with
-their data or code (see "What we do not collect"), and it is never used for
-advertising or profiling. This relies on legitimate interest (GDPR Art.
+used in, which organisations use it, and which features people actually use.
+That lets us prioritize fixes and improvements. We do not use it to see what
+any individual does with their data or code (see "What we do not collect"),
+and it is never used for advertising or profiling. This relies on legitimate interest (GDPR Art.
 6(1)(f)).
 
 ## How it is transmitted and stored
@@ -78,17 +87,22 @@ Azure subscription owned by GemTalk. They are stored in the **West US 2**
 region (United States) and are **retained for 90 days**, after which Azure
 deletes them.
 
+Events go to Scarf over TLS too, as web requests to a GemTalk endpoint
+Scarf hosts.
+Scarf stores them in the **United States** and retains them for **1 year**.
+
 ## Disclosure
 
-Microsoft/Azure processes this data as our infrastructure provider. We do
-not sell it, use it for advertising, or share it with any other third party.
+Microsoft/Azure processes this data as our infrastructure provider, and
+Scarf processes it as our usage analytics provider. We do not sell it, use it
+for advertising, or share it with any third party beyond these two.
 
 ## Your controls
 
 GemDB honours VS Code's `telemetry.telemetryLevel` setting via
 `vscode.env.createTelemetryLogger`:
 
-- `off` — no telemetry is sent.
+- `off` — no telemetry is sent, to Azure or to Scarf.
 - `crash` / `error` — only events containing an error are sent.
 - `all` — all usage events described above are sent.
 
@@ -100,7 +114,10 @@ Telemetry ID** from VS Code's Command Palette; it copies the value to your
 clipboard. If you send it to the contact address above, we will locate and
 delete the matching records.
 
+Events sent to Scarf carry no identifier, so they cannot be traced back to
+you, and there is no record of yours there to look up or delete.
+
 ## Changes
 
-Last updated: 2026-10-07. Changes to this notice will be published in this
+Last updated: 2026-10-15. Changes to this notice will be published in this
 repository.

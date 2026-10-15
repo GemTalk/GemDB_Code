@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Usage data also goes to Scarf.** The same usage events GemDB already sends now go to
+  [Scarf](https://about.scarf.sh) as well, with fewer of VS Code's own properties. Turning
+  telemetry off in VS Code turns off both. Scarf is not sent VS Code's machine id, so nothing it
+  receives identifies your installation. [USAGE_DATA.md](USAGE_DATA.md) says what Scarf receives
+  and how long it keeps it.
+
 ## [1.7.0] - 2026-10-16
 
 The engine is unchanged at GemStone 4.0.0.a4, and the bundled Python runtime moves forward. Start
