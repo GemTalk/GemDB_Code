@@ -97,6 +97,17 @@ beforeEach(() => {
   for (const key of Object.keys(exitCodes)) delete exitCodes[key];
 });
 
+/**
+ * Run fake time forward in steps, letting the faked commands — which exit on a
+ * real `setImmediate` — finish between them.
+ */
+async function runFakeTime(ms: number): Promise<void> {
+  for (let elapsed = 0; elapsed < ms; elapsed += 100) {
+    await new Promise((resolve) => setImmediate(resolve));
+    await vi.advanceTimersByTimeAsync(100);
+  }
+}
+
 afterEach(() => {
   vi.useRealTimers();
   fs.rmSync(root, { recursive: true, force: true });
@@ -204,7 +215,7 @@ describe('ensureProcesses', () => {
     // Both saw no listener; the other one won, so startnetldi refuses with
     // "already running" and the re-list shows the listener answering.
     exitCodes.startnetldi = 1;
-    listings = [STONE_UP, STONE_UP, STONE_UP, BOTH_UP];
+    listings = [STONE_UP, STONE_UP, BOTH_UP];
 
     const started = await ensureProcesses();
 
@@ -212,25 +223,52 @@ describe('ensureProcesses', () => {
     expect(__log).toContain('Another process started the session listener.');
   });
 
+  it('waits for a listener another process is still starting when the two overlap', async () => {
+    // startnetldi gives up over the other's lock file before that one answers.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    exitCodes.startnetldi = 3;
+    listings = [STONE_UP, STONE_UP, STONE_UP, STONE_UP, BOTH_UP];
+
+    const start = ensureProcesses();
+    await runFakeTime(1_000);
+
+    await expect(start).resolves.toEqual({ startedStone: false, startedNetldi: false });
+  });
+
   it('still fails a listener start that leaves no listener up', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
     exitCodes.startnetldi = 1;
     listings = [STONE_UP];
 
-    await expect(ensureProcesses()).rejects.toThrow(
+    const failed = expect(ensureProcesses()).rejects.toThrow(
       /Start session listener failed \(exit code 1\)/,
     );
+    await runFakeTime(6_000);
+
+    await failed;
   });
 
   it('still fails a listener start that leaves a listener that is not answering', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
     exitCodes.startnetldi = 1;
     listings = [
-      STONE_UP,
       STONE_UP,
       STONE_UP,
       [STONE_UP, row('exe deleted', 'Netldi', 'gemdbldi')].join('\n'),
     ];
 
-    await expect(ensureProcesses()).rejects.toThrow(/Start session listener failed/);
+    const failed = expect(ensureProcesses()).rejects.toThrow(/Start session listener failed/);
+    await runFakeTime(6_000);
+
+    await failed;
+  });
+
+  it('asks gslist once inside the lock when only the listener is missing', async () => {
+    listings = [STONE_UP];
+
+    await ensureProcesses();
+
+    expect(gslistCalls).toBe(2);
   });
 
   it('stops waiting for the lock only once both are up and answering', async () => {
@@ -454,5 +492,6 @@ describe('waiting for the stone lock', () => {
     const outcome = await after(ensureProcesses(), 65_000);
 
     expect(outcome.error?.message).toMatch(/^This window has been starting the database/);
+    expect(outcome.error?.message).toContain(STONE_LOCK_NAME);
   });
 });

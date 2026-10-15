@@ -130,8 +130,8 @@ describe('runStop', () => {
   });
 
   it('puts nothing back when the stone stopped while the user was deciding', async () => {
-    // Starting the listener now would, through ensureProcesses, start the stone
-    // the user had just stopped, without any of a start's guards.
+    // The user's question was whether to leave it running, and it is no longer
+    // running: a listener would serve nothing, and "still running" would be untrue.
     const { calls, world } = makeWorld({
       stoneRefuses: true,
       stoneStopsDuringQuestion: true,

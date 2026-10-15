@@ -230,16 +230,18 @@ export const SHUTTING_DOWN_MESSAGE =
  * waiting — is polled until it is past `Startup`. A stone that disappears
  * while we wait failed to start, and one still starting after a minute is not
  * going to soon; both end in an error naming the stone's log, which says why.
- * A stone at `Shutdown` ends the wait at once: it is being stopped. Returns
- * the last listing, so the caller need not take another.
+ * A stone at `Shutdown` ends the wait at once: it is being stopped. Starts
+ * from `wait.listing` when the caller has one that recent, rather than asking
+ * gslist twice in a row. Returns the last listing, so the caller need not
+ * take another.
  */
 export async function waitForStoneReady(
   report?: (message: string) => void,
-  wait: { pollMs?: number; timeoutMs?: number } = {},
+  wait: { pollMs?: number; timeoutMs?: number; listing?: EngineProcess[] } = {},
 ): Promise<EngineProcess[]> {
   const stoneLog = path.join(databaseLogPath(), `${STONE_NAME}.log`);
   const deadline = Date.now() + (wait.timeoutMs ?? STONE_LOCK_TIMEOUT_MS);
-  let running = await listProcessesAsync();
+  let running = wait.listing ?? (await listProcessesAsync());
   let waiting = false;
   for (;;) {
     switch (stoneState(running)) {
@@ -339,7 +341,8 @@ export async function ensureProcesses(
     async () => {
       let startedStone = false;
       // Listed again: what was true before the lock may not be now.
-      const state = stoneState(await listProcessesAsync());
+      const listed = await listProcessesAsync();
+      const state = stoneState(listed);
       // Said here, before any wait: a stopping stone's last moments read
       // `Startup` before it disappears (measured), which a wait would report
       // as a start that failed.
@@ -354,8 +357,11 @@ export async function ensureProcesses(
         log('The database is already running.');
       }
       // The wait's last listing is recent enough to judge the listener by:
-      // it was taken after the stone, ours or not, finished starting.
-      const running = await waitForStoneReady(opts.report);
+      // it was taken after the stone, ours or not, finished starting. One
+      // taken before our startstone is not, so the wait starts afresh then.
+      const running = await waitForStoneReady(opts.report, {
+        listing: startedStone ? undefined : listed,
+      });
 
       let startedNetldi = false;
       if (!findNetldi(running)) {
@@ -478,6 +484,9 @@ function fileSize(file: string): number {
   }
 }
 
+/** How long a listener another process is starting gets to answer. */
+const LISTENER_SETTLE_MS = 5_000;
+
 /**
  * Start the session listener. True when this call started it; false when
  * `startnetldi` refused because another process had started it first.
@@ -491,8 +500,11 @@ function fileSize(file: string): number {
  * — exit 1, "Server 'gemdbldi' is already running", when the winner is fully
  * up; exit 3, "could not start server" over the winner's lock file, when the
  * two overlap — and everything the caller wanted is true, so a listener that
- * is up and answering afterwards is not a failure. One that is not still fails with startnetldi's own words. The lock
- * closes the race between GemDB's own callers; this covers what takes no lock.
+ * is up and answering afterwards is not a failure. In the overlap the
+ * winner's listener may still be coming up when ours gives up, so it gets
+ * {@link LISTENER_SETTLE_MS} to answer; one that does not still fails with
+ * startnetldi's own words. The lock closes the race between GemDB's own
+ * callers; this covers what takes no lock.
  */
 async function startNetldi(): Promise<boolean> {
   logStep('Starting the session listener');
@@ -516,7 +528,11 @@ async function startNetldi(): Promise<boolean> {
     );
     return true;
   } catch (e) {
-    if (!listenerReady(await listProcessesAsync())) throw e;
+    const deadline = Date.now() + LISTENER_SETTLE_MS;
+    while (!listenerReady(await listProcessesAsync())) {
+      if (Date.now() > deadline) throw e;
+      await new Promise((resolve) => setTimeout(resolve, STONE_LOCK_POLL_MS));
+    }
     log('Another process started the session listener.');
     return false;
   }

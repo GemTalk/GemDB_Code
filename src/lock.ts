@@ -506,7 +506,7 @@ export const STONE_LOCK_TIMEOUT_MS = 60_000;
 /**
  * How long past {@link STONE_LOCK_TIMEOUT_MS} a holder that is visibly
  * getting somewhere keeps a waiter waiting. The holder keeps the lock through
- * the pre-start guards (`copydbf -i` alone can take 30 s), `startstone`, up to
+ * the pre-start guards (a `copydbf -i` header read and disk checks), `startstone`, up to
  * a minute's wait for the stone and `startnetldi`, so a minute is not its
  * worst case; this ceiling is above it. Progress counts for
  * {@link STONE_LOCK_IDLE_MS} after it was last seen.
@@ -572,7 +572,8 @@ export async function withStoneLock<T>(
       throw new Error(
         ours
           ? 'This window has been starting the database for over a minute and has not ' +
-              'finished. See the GemDB log for what it is waiting on.'
+              'finished. See the GemDB log for what it is waiting on; if nothing is, ' +
+              `remove ${lock} and try again.`
           : 'Another process has been starting the database for over a minute. ' +
               `If nothing is, remove ${lock} and try again.`,
       );
