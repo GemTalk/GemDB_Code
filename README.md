@@ -433,8 +433,12 @@ database, select that kernel from the kernel picker at the top right.
   nested row, ready for the next line, or **Evaluate with self…**,
   which runs an expression with `self` bound to it (`len(self.history)`) and shows the answer
   there. Lines starting with `%` are GemDB commands, not Python: `%persist p` adds `p` to
-  Persisted Objects (`%persist expr as key` for anything else), `%commit` commits the notebook,
-  `%names` lists what you have bound in the console, and `%help` lists them all. Type `%` and the
+  Persisted Objects (`%persist expr as key` for anything else), `%pending` lists the persisted
+  objects the notebook's next commit writes — each by its path under `gemdb.root`, with a link
+  (Ctrl+click) that shows it in Persisted Objects, where each changed object is marked **M**, its
+  hover sets the committed value beside the new one, and right-click **Revert to Committed Value**
+  undoes the change — `%commit` commits the
+  notebook, `%names` lists what you have bound in the console, and `%help` lists them all. Type `%` and the
   console suggests them. `gemdb` is always available in the console, so a line copied from Persisted
   Objects, such as `gemdb.root["orders"]`, works even if the program never imported it. What Persisted Objects holds is available by its
   key too (`o` for `gemdb.root["o"]`), unless the paused code has its own name `o`; `persisted.o` reaches it whatever `o` means, and a

@@ -61,6 +61,21 @@ export const GEMDB_STATE = {
 } as const;
 export type GemDbState = (typeof GEMDB_STATE)[keyof typeof GEMDB_STATE];
 
+/**
+ * A callback for each state the status panel reads, which calls `changed`
+ * whenever the database goes from running to not running or back: not on the
+ * first read, which has nothing to compare against, and not on a read that
+ * only repeats the state.
+ */
+export function onRunningChange(changed: () => void): (state: GemDbState) => void {
+  let wasRunning: boolean | undefined;
+  return (state) => {
+    const running = state === 'running';
+    if (wasRunning !== undefined && running !== wasRunning) changed();
+    wasRunning = running;
+  };
+}
+
 export interface Row {
   label: string;
   description?: string;
@@ -298,7 +313,7 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
 
   constructor(
     private readonly extensionPath: string,
-    private readonly onStateRead: () => void = () => {},
+    private readonly onStateRead: (state: GemDbState) => void = () => {},
   ) {}
 
   refresh(): void {
@@ -342,7 +357,7 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
     setContext('gemdb.externalDatabase', external !== undefined);
     // The status bar reads the same process list, so it is refreshed from here
     // rather than polling separately and risking the two disagreeing.
-    this.onStateRead();
+    this.onStateRead(state);
 
     if (state === 'unsupportedPlatform' || state === 'notInstalled') {
       // viewsWelcome covers both — an empty row list is what makes it show.

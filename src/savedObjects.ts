@@ -16,7 +16,9 @@ import {
   ChildKind,
   ConsoleScope,
   MAIN_MODULE,
+  ObjectDiff,
   PAGE,
+  PathStep,
   PERSISTED_REGISTRY,
   PauseVariable,
   ROOT_LISTING_LIMIT,
@@ -29,7 +31,19 @@ import {
   keyTakenQuery,
   needsCommitQuery,
   parseChildren,
+  Snapshot,
+  diffSnapshots,
+  parsePaths,
   parseSaveSuggestion,
+  parseSnapshot,
+  parseSteps,
+  pathText,
+  pathToQuery,
+  pathsToQuery,
+  revertPlan,
+  revertQuery,
+  snapshotQuery,
+  stepNames,
   persistedRowsQuery,
   removeCommittedQuery,
   removeSavedQuery,
@@ -598,6 +612,126 @@ function toEntry(row: PauseVariable): RootEntry {
 /** Where the origins of committed additions are kept (global state). */
 const ORIGINS_KEY = 'gemdb.persistedObjectOrigins';
 
+/** The URI scheme of a changed row, which `registerSavedObjects`' decoration colours and badges. */
+export const CHANGED_SCHEME = 'gemdb-changed';
+
+/** The most changed objects `%pending` marks in the view. */
+const MARKED_LIMIT = 50;
+
+/** One object a notebook's next commit changes, as the view marks it. */
+export interface MarkedObject {
+  /** Its path, as Python reads it. */
+  path: string;
+  /** Its permanent number, by which a revert finds it in the notebook's session. */
+  oop: number;
+  /** It as committed: what a revert puts back. */
+  before: Snapshot;
+  /** How its entries are kept, as the notebook would commit it. */
+  kind: Snapshot['kind'];
+  diff: ObjectDiff;
+}
+
+/** Added to a marked row's context value, so its menu offers Revert to Committed Value. */
+const CHANGED = ' gemdbChanged';
+
+/** What `%pending` last told the view: one notebook's changed objects, and their changed entries. */
+export interface Marked {
+  ownerKey: string;
+  label: string;
+  /** Changed objects, by the names of the rows that lead to them (`rowKey`). */
+  objects: Map<string, MarkedObject>;
+  /** Entries of those objects whose value changes, by the same key. */
+  entries: Map<string, { before: string; after: string }>;
+}
+
+/** A row's place in the view, as the names of the rows down to it; ranges are not counted. */
+export function rowKey(names: string[]): string {
+  return names.join('\u0000');
+}
+
+/**
+ * Mark `object` at the row named by `names`, with its changed entries, in
+ * place of what was marked there; an object with nothing left that differs
+ * is unmarked.
+ */
+export function setMark(marked: Marked, names: string[], object: MarkedObject): void {
+  const key = rowKey(names);
+  const prefix = key === '' ? '' : `${key}\u0000`;
+  for (const k of [...marked.entries.keys()]) {
+    if (k.startsWith(prefix) && !k.slice(prefix.length).includes('\u0000'))
+      marked.entries.delete(k);
+  }
+  const { changed, added, removed } = object.diff;
+  if (!object.diff.notCompared && changed.length + added.length + removed.length === 0) {
+    marked.objects.delete(key);
+    return;
+  }
+  marked.objects.set(key, object);
+  for (const c of changed) {
+    marked.entries.set(rowKey([...names, c.name]), { before: c.before, after: c.after });
+  }
+}
+
+/**
+ * A changed object's row description: its one change, `total: 10 → 15`, or
+ * how many there are of each kind.
+ */
+export function changeSummary(diff: ObjectDiff): string {
+  if (diff.notCompared) return 'changed';
+  const { changed, added, removed } = diff;
+  if (changed.length + added.length + removed.length === 1) {
+    if (changed[0]) return `changed: ${changed[0].name} ${changed[0].before} → ${changed[0].after}`;
+    if (added[0]) return `changed: ${added[0].name} added`;
+    return `changed: ${removed[0].name} removed`;
+  }
+  const parts = [
+    changed.length ? `${changed.length} changed` : '',
+    added.length ? `${added.length} added` : '',
+    removed.length ? `${removed.length} removed` : '',
+  ].filter(Boolean);
+  return parts.length ? `changed: ${parts.join(', ')}` : 'changed';
+}
+
+/** How many entries a changed object's hover lists. */
+const DIFF_ROWS = 30;
+
+/**
+ * A changed object's hover: entry by entry, what is committed and what the
+ * next commit writes, each value labelled where it stands.
+ */
+export function diffMarkdown(object: MarkedObject, label: string): string {
+  const code = (text: string) => '`' + text.replace(/`/g, "'") + '`';
+  const lines = [
+    `**${object.path.replace(/([*_[\]])/g, '\\$1')}**`,
+    '',
+    `Changed in ${label}, not committed yet.`,
+    '',
+  ];
+  if (object.diff.notCompared) {
+    lines.push(`Its entries are not shown: ${object.diff.notCompared}.`);
+    return lines.join('\n');
+  }
+  // Each value says which side it is, beside it: a table's headings sat too far from them to read.
+  const rows = [
+    ...object.diff.changed.map(
+      (c) => `- ${code(c.name)}: committed ${code(c.before)} → next commit ${code(c.after)}`,
+    ),
+    ...object.diff.added.map(
+      (a) => `- ${code(a.name)}: added by the next commit: ${code(a.after)}`,
+    ),
+    ...object.diff.removed.map(
+      (d) => `- ${code(d.name)}: removed by the next commit (committed ${code(d.before)})`,
+    ),
+  ];
+  if (rows.length === 0) {
+    lines.push('Written by the next commit, but no entry of its own differs.');
+    return lines.join('\n');
+  }
+  lines.push(...rows.slice(0, DIFF_ROWS));
+  if (rows.length > DIFF_ROWS) lines.push('', `… and ${rows.length - DIFF_ROWS} more.`);
+  return lines.join('\n');
+}
+
 export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
   private readonly emitter = new vscode.EventEmitter<SavedRow | undefined>();
   readonly onDidChangeTreeData = this.emitter.event;
@@ -613,6 +747,8 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
    * identity, so asking twice must answer the same objects.
    */
   private children = new WeakMap<SavedRow, SavedRow[]>();
+  /** What `%pending` last found changed, shown on the rows it names until it is committed or dropped. */
+  private marked: Marked | undefined;
 
   constructor(private readonly store?: vscode.Memento) {
     this.origins = store?.get<Record<string, Origin>>(ORIGINS_KEY) ?? {};
@@ -675,6 +811,10 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
   }
 
   getTreeItem(row: SavedRow): vscode.TreeItem {
+    return this.markChanged(this.itemFor(row), row);
+  }
+
+  private itemFor(row: SavedRow): vscode.TreeItem {
     const { Collapsed, Expanded, None } = vscode.TreeItemCollapsibleState;
     const opens = openable(row) ? Collapsed : None;
     switch (row.kind) {
@@ -755,6 +895,151 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
     }
   }
 
+  /** The names of the rows down to `row` (`rowKey`), for a row a path can name; else undefined. */
+  private rowNames(row: SavedRow): string[] | undefined {
+    switch (row.kind) {
+      case 'root':
+        return [];
+      case 'entry':
+        return [row.entry.key];
+      case 'range':
+        return this.rowNames(row.parent);
+      case 'field': {
+        const up = this.rowNames(row.parent);
+        return up && [...up, row.field.name];
+      }
+      default:
+        return undefined;
+    }
+  }
+
+  /** What `%pending` marked at this row: a changed object, a changed entry of one, or neither. */
+  private markOf(
+    row: SavedRow,
+  ): { object?: MarkedObject; entry?: { before: string; after: string } } | undefined {
+    const names = this.marked && this.rowNames(row);
+    if (!this.marked || !names) return undefined;
+    const key = rowKey(names);
+    const object = this.marked.objects.get(key);
+    const entry = this.marked.entries.get(key);
+    return object || entry ? { object, entry } : undefined;
+  }
+
+  /**
+   * Mark a row `%pending` found changed: coloured and badged as a modified
+   * file is (`CHANGED_SCHEME`), described by what changes, and for a changed
+   * object, a hover setting what is committed beside what the next commit
+   * writes. The row's own text stays what is committed, which is what the
+   * view reads.
+   */
+  private markChanged(item: vscode.TreeItem, row: SavedRow): vscode.TreeItem {
+    const mark = this.markOf(row);
+    if (!mark || !this.marked) return item;
+    item.contextValue = (item.contextValue ?? 'gemdbRoot') + CHANGED;
+    item.resourceUri = vscode.Uri.from({
+      scheme: CHANGED_SCHEME,
+      path: `/${encodeURIComponent(rowKey(this.rowNames(row) ?? []))}`,
+    });
+    if (mark.object) {
+      item.description = changeSummary(mark.object.diff);
+      item.tooltip = new vscode.MarkdownString(diffMarkdown(mark.object, this.marked.label));
+    } else if (mark.entry) {
+      item.description = `${mark.entry.before} → ${mark.entry.after}`;
+      item.tooltip = `Committed: ${mark.entry.before}\nNext commit: ${mark.entry.after}`;
+    }
+    return item;
+  }
+
+  /**
+   * Mark what `%pending` found changed in `ownerKey`'s session: for each
+   * object, where it is in what is committed, and how it differs, read once
+   * as committed (GemDB's session, in the view this read takes) and once as
+   * the notebook would commit it. Replaces whatever was marked before.
+   */
+  async noteChanges(ownerKey: string, label: string, oops: number[]): Promise<void> {
+    this.refresh();
+    await this.load();
+    const shown = oops.slice(0, MARKED_LIMIT);
+    const paths = parsePaths(orThrow(await extensionQuery(pathsToQuery(shown), { budget: true })));
+    const marked: Marked = { ownerKey, label, objects: new Map(), entries: new Map() };
+    for (const oop of shown) {
+      const steps = paths.get(oop);
+      if (!steps) continue;
+      const before = parseSnapshot(
+        orThrow(await extensionQuery(snapshotQuery(oop), { budget: true })),
+      );
+      const after = parseSnapshot(
+        orThrow(await inNotebook(ownerKey, snapshotQuery(oop), { budget: true })),
+      );
+      setMark(marked, stepNames(steps), {
+        path: pathText(steps),
+        oop,
+        before,
+        kind: after.kind,
+        diff: diffSnapshots(before, after),
+      });
+    }
+    this.marked = marked;
+    this.emitter.fire(undefined);
+  }
+
+  /**
+   * Each object's committed contents (`snapshotQuery`), by number, in the
+   * order asked, read by GemDB's own session in a fresh view.
+   */
+  async committedSnapshots(oops: number[]): Promise<string[]> {
+    await extensionQuery(`System abortTransaction. 'fresh' encodeAsUTF8`);
+    const snapshots: string[] = [];
+    for (const oop of oops) {
+      snapshots.push(orThrow(await extensionQuery(snapshotQuery(oop), { budget: true })));
+    }
+    return snapshots;
+  }
+
+  /**
+   * The changed object a marked row reverts, and the entry of it when the row
+   * is one entry; undefined for a row with no mark.
+   */
+  revertTarget(
+    row: SavedRow,
+  ):
+    | { key: string; object: MarkedObject; entry?: string; ownerKey: string; label: string }
+    | undefined {
+    const names = this.rowNames(row);
+    if (!this.marked || !names) return undefined;
+    const own = this.marked.objects.get(rowKey(names));
+    const { ownerKey, label } = this.marked;
+    if (own) return { key: rowKey(names), object: own, ownerKey, label };
+    const up = rowKey(names.slice(0, -1));
+    const parent = this.marked.objects.get(up);
+    return parent && this.marked.entries.has(rowKey(names))
+      ? { key: up, object: parent, entry: names[names.length - 1], ownerKey, label }
+      : undefined;
+  }
+
+  /**
+   * Put a marked object, or one entry of it, back as committed, in its
+   * notebook's session — undoing the notebook's change there, committing
+   * nothing — then compare it again, so a mark that no longer differs goes.
+   */
+  async revert(row: SavedRow): Promise<void> {
+    const target = this.revertTarget(row);
+    if (!target || !this.marked) return;
+    const { object, entry, ownerKey } = target;
+    const plan = revertPlan(object.kind, object.before, object.diff, entry);
+    orThrow(await inNotebook(ownerKey, revertQuery(object.oop, plan)));
+    const after = parseSnapshot(
+      orThrow(await inNotebook(ownerKey, snapshotQuery(object.oop), { budget: true })),
+    );
+    const names = target.key === '' ? [] : target.key.split('\u0000');
+    setMark(this.marked, names, {
+      ...object,
+      kind: after.kind,
+      diff: diffSnapshots(object.before, after),
+    });
+    this.emitter.fire(undefined);
+  }
+
   /**
    * Inspect a saved object when the pointer rests on it: its type, its text
    * and its first children, read when asked rather than for every row. A
@@ -763,6 +1048,8 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
    */
   async resolveTreeItem(item: vscode.TreeItem, row: SavedRow): Promise<vscode.TreeItem> {
     if (row.kind !== 'entry' && row.kind !== 'pending') return item;
+    // A changed object's hover is its changes.
+    if (this.markOf(row)?.object) return item;
     const key = row.kind === 'entry' ? row.entry.key : row.save.key;
     try {
       const raw = orThrow(
@@ -923,6 +1210,62 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
       }
       const item = rows[index - (at.kind === 'range' ? at.start : 0)];
       return item?.kind === 'field' ? item : undefined;
+    }
+  }
+
+  /**
+   * The row of the committed object whose permanent number is `oop`, found
+   * under `gemdb.root` after a fresh read of the view: each step on its path
+   * is opened as the user would open it, ranges too, so every row on the way
+   * is one `reveal` can find. `reached` is how many steps were opened; fewer
+   * than `steps` holds means the path stopped at `row`, the nearest one shown.
+   * Undefined when the object is not under `gemdb.root` in what is committed.
+   */
+  async objectRow(
+    oop: number,
+  ): Promise<{ row: SavedRow; steps: PathStep[]; reached: number } | undefined> {
+    this.refresh();
+    await this.load();
+    const root = this.rows?.find((r) => r.kind === 'root');
+    if (!root) return undefined;
+    // Read right after the view's own fresh listing, so its positions are the view's.
+    const steps = parseSteps(orThrow(await extensionQuery(pathToQuery(oop), { budget: true })));
+    if (!steps) return undefined;
+    let row: SavedRow = root;
+    let reached = 0;
+    for (const step of steps) {
+      const next = await this.stepFrom(row, step);
+      if (!next) break;
+      row = next;
+      reached++;
+    }
+    return { row, steps, reached };
+  }
+
+  /** The row one step below `row`, opening it (and any ranges on the way); undefined if not shown. */
+  private async stepFrom(row: SavedRow, step: PathStep): Promise<SavedRow | undefined> {
+    switch (step.kind) {
+      case 'root': {
+        if (row.kind !== 'root') return undefined;
+        // gemdb.root lists its entries, or, when it holds more, ranges of them.
+        let at: SavedRow = row;
+        for (;;) {
+          const rows: SavedRow[] = await this.getChildren(at);
+          const entry = rows.find((r) => r.kind === 'entry' && r.entry.key === step.key);
+          if (entry) return entry;
+          const range: SavedRow | undefined = rows.find(
+            (r) => r.kind === 'range' && r.start <= step.position && step.position < r.end,
+          );
+          if (!range) return undefined;
+          at = range;
+        }
+      }
+      case 'attr':
+        return (await this.getChildren(row)).find(
+          (r) => r.kind === 'field' && r.field.name === step.name,
+        );
+      default:
+        return this.itemAt(row, step.position);
     }
   }
 
@@ -1091,6 +1434,19 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
       root = root.map((entry) => (stacks.has(entry.key) ? { ...entry, stack: true } : entry));
     } catch (e) {
       root = `Could not read gemdb.root: ${errorMessage(e)}`;
+    }
+    // What %pending marked stays until its notebook has nothing left to commit, or no session.
+    if (this.marked) {
+      const owner = this.marked.ownerKey;
+      let keep = pauseForOwner(owner) !== undefined || sessionForIfOpen(owner) !== undefined;
+      if (keep) {
+        try {
+          keep = (await inNotebook(owner, needsCommitQuery())) === 'true';
+        } catch {
+          // Running a cell: it cannot be asked now, so its marks stay.
+        }
+      }
+      if (!keep) this.marked = undefined;
     }
     const before = this.pending;
     this.pending = settlePending(this.pending, notebooks);
@@ -1775,6 +2131,70 @@ async function goToItem(
   }
 }
 
+/**
+ * Show the committed object whose permanent number is `oop` in Persisted
+ * Objects, opening the rows down to it and selecting it, in the views showing
+ * Persisted Objects (or the main one, when neither is showing). This is where
+ * `%pending`'s links go: what it selects is the object as committed, so its
+ * row reads the value the next commit replaces.
+ */
+async function showObject(
+  view: SavedObjectsProvider,
+  treeViews: Map<string, vscode.TreeView<SavedRow>>,
+  oop: number,
+): Promise<void> {
+  let found: Awaited<ReturnType<SavedObjectsProvider['objectRow']>>;
+  try {
+    found = await view.objectRow(oop);
+  } catch (e) {
+    void vscode.window.showErrorMessage(`Could not look for that object: ${errorMessage(e)}`);
+    return;
+  }
+  if (!found) {
+    void vscode.window.showWarningMessage(
+      'That object is not under gemdb.root in what is committed: it may have been removed since, ' +
+        'or be further down than the search reaches. Type %pending again for fresh links.',
+    );
+    return;
+  }
+  const showing = [...treeViews.values()].filter((tv) => tv.visible);
+  for (const tv of showing.length > 0 ? showing : [treeViews.get(VIEW_ID)!]) {
+    await tv.reveal(found.row, { select: true, focus: true, expand: false });
+  }
+  if (found.reached < found.steps.length) {
+    void vscode.window.showWarningMessage(
+      `Could not open all of ${pathText(found.steps)}: this is as far down as the view shows.`,
+    );
+  }
+}
+
+/**
+ * Revert to Committed Value: after the user confirms, put a marked object, or
+ * one entry of it, back as committed in its notebook's session. Its change
+ * is discarded and nothing is committed; the notebook can change it again.
+ */
+async function revertChange(view: SavedObjectsProvider, row: SavedRow): Promise<void> {
+  const target = view.revertTarget(row);
+  if (!target) return;
+  const { object, entry, label } = target;
+  const change = entry && object.diff.changed.find((c) => c.name === entry);
+  const what = entry ? `${object.path}'s ${entry}` : object.path;
+  const detail = change
+    ? `It goes back to ${change.before}, discarding ${label}'s change to ${change.after}. Nothing is committed.`
+    : `This discards ${label}'s uncommitted changes to it. Nothing is committed.`;
+  const choice = await vscode.window.showWarningMessage(
+    `Revert ${what} to its committed value?`,
+    { modal: true, detail },
+    'Revert',
+  );
+  if (choice !== 'Revert') return;
+  try {
+    await view.revert(row);
+  } catch (e) {
+    void vscode.window.showErrorMessage(`Could not revert ${what}: ${errorMessage(e)}`);
+  }
+}
+
 export function registerSavedObjects(context: vscode.ExtensionContext): SavedObjectsProvider {
   const view = new SavedObjectsProvider(context.globalState);
   const treeViews = new Map<string, vscode.TreeView<SavedRow>>();
@@ -1816,6 +2236,46 @@ export function registerSavedObjects(context: vscode.ExtensionContext): SavedObj
         }
       },
     ),
+    vscode.commands.registerCommand('gemdb.savedObjects.revert', (row: SavedRow) =>
+      row ? revertChange(view, row) : undefined,
+    ),
+    // Internal, for `%pending` (`debugger.ts`): what is committed, to leave out what reads the same.
+    vscode.commands.registerCommand('gemdb.savedObjects.committedSnapshots', (oops: number[]) =>
+      view.committedSnapshots(oops),
+    ),
+    // Internal, for `%pending` (`debugger.ts`): mark what the notebook's next commit changes.
+    vscode.commands.registerCommand(
+      'gemdb.savedObjects.notePendingChanges',
+      (changes: { ownerKey: string; label: string; oops: number[] }) =>
+        view
+          .noteChanges(changes.ownerKey, changes.label, changes.oops)
+          .catch((e: unknown) => log(`Could not mark the pending changes: ${errorMessage(e)}`)),
+    ),
+    // A changed row reads as a modified file does, in the same colour, with an M.
+    vscode.window.registerFileDecorationProvider({
+      provideFileDecoration(uri: vscode.Uri) {
+        return uri.scheme === CHANGED_SCHEME
+          ? new vscode.FileDecoration(
+              'M',
+              'Changed: the next commit writes it',
+              new vscode.ThemeColor('gitDecoration.modifiedResourceForeground'),
+            )
+          : undefined;
+      },
+    }),
+    // Internal: where `%pending`'s links in the Debug Console go, through the URI handler below.
+    vscode.commands.registerCommand('gemdb.savedObjects.showObject', (oop: number) =>
+      showObject(view, treeViews, oop),
+    ),
+    // GemDB's only URI handler: `objectLink` (`consoleCommands.ts`) writes the links it takes.
+    vscode.window.registerUriHandler({
+      handleUri(uri: vscode.Uri) {
+        const oop = Number(new URLSearchParams(uri.query).get('oop'));
+        if (uri.path === '/persisted' && Number.isSafeInteger(oop) && oop > 0) {
+          void showObject(view, treeViews, oop);
+        }
+      },
+    }),
     vscode.commands.registerCommand('gemdb.saveStack', () => saveStack(view, treeViews)),
     vscode.commands.registerCommand('gemdb.restoreStack', () => restoreStack()),
     vscode.commands.registerCommand('gemdb.savedObjects.openStack', (row: SavedRow) =>

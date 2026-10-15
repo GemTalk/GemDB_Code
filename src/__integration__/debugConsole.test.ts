@@ -10,7 +10,7 @@ import {
   debug,
   workspace,
 } from '../__mocks__/vscode';
-import { PauseDebugAdapter, registerBreakpointDebugger } from '../debugger';
+import { PauseDebugAdapter, pauseForOwner, registerBreakpointDebugger } from '../debugger';
 import { fileOwner } from '../fileOwner';
 import { stageGrail } from '../grail';
 import {
@@ -20,6 +20,16 @@ import {
   needsCommitQuery,
   parseChildren,
   parsePausedStack,
+  diffSnapshots,
+  parsePaths,
+  parseSnapshot,
+  parseSteps,
+  pathText,
+  pathToQuery,
+  pathsToQuery,
+  revertPlan,
+  revertQuery,
+  snapshotQuery,
   pausedStackQuery,
 } from '../pauseVariables';
 import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
@@ -32,7 +42,7 @@ import {
   sessionForIfOpen,
   setHaltHandler,
 } from '../session';
-import { savedStackConsole, stackOwner, stackQuery } from '../savedObjects';
+import { registerSavedObjects, savedStackConsole, stackOwner, stackQuery } from '../savedObjects';
 import {
   SavedFrame,
   openStackQuery,
@@ -1011,13 +1021,216 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
       text: "p: list = [('B400', '2', 'str'), ('A200', 1, 'int')]\n",
     });
     expect(seen.inRoot).toBe("[('B400', '2', 'str'), ('A200', 1, 'int')]");
-    expect(seen.completeCommands).toEqual(['%persist', '%commit', '%names', '%help']);
+    expect(seen.completeCommands).toEqual(['%persist', '%pending', '%commit', '%names', '%help']);
     expect(seen.completeNames).toEqual(['p']);
     expect(seen.commit).toMatchObject({
       ok: true,
       text: expect.stringMatching(/^Committed dc-commands\.ipynb/),
     });
     expect(seen.elsewhere).toContain("'B400'");
+  });
+  it('lists on %pending what the next commit writes, by path, and each is found again by its number', async () => {
+    const nb = notebook('dc-pending');
+    await runPython(
+      [
+        'import gemdb',
+        'gemdb.root["pend_orders"] = [{"total": 10}, {"total": 11}, {"total": 12}]',
+        'gemdb.root["pend_tags"] = {"a": [1]}',
+        'gemdb.commit()',
+      ].join('\n'),
+      nb,
+    );
+    const seen: Record<string, string> = {};
+
+    await inCell(
+      nb,
+      [
+        'import gemdb',
+        'def go():',
+        '    orders = gemdb.root["pend_orders"]',
+        '    orders[2]["total"] = 13',
+        '    orders.append({"total": 14})',
+        '    gemdb.root["pend_tags"]["a"].append(2)',
+        '    scratch = [1, 2, 3]',
+        '    breakpoint()',
+        'go()',
+      ].join('\n'),
+      async (dap) => {
+        const from = dap.sent.length;
+        await dap.evaluate('%pending');
+        seen.said = dap.sent
+          .slice(from)
+          .filter((m) => m.event === 'output')
+          .map((m) => String(m.body?.output ?? ''))
+          .join('');
+        // What Persisted Objects reads for the other side of its marks: the list, as it will be committed.
+        const listOop = /gemdb\.root\["pend_orders"\] .*persisted\?oop=(\d+)/.exec(seen.said)?.[1];
+        seen.listOop = listOop ?? '';
+        seen.listAfter = await pauseForOwner(nb.key)!.query!(snapshotQuery(Number(listOop)));
+        seen.dictAfter = await pauseForOwner(nb.key)!.query!(
+          snapshotQuery(
+            Number(/\["pend_orders"\]\[2\] .*persisted\?oop=(\d+)/.exec(seen.said)?.[1]),
+          ),
+        );
+        // Revert both, as Revert to Committed Value does, then read them again.
+        const q = pauseForOwner(nb.key)!.query!;
+        const dictOop = Number(
+          /\["pend_orders"\]\[2\] .*persisted\?oop=(\d+)/.exec(seen.said)?.[1],
+        );
+        await executeAsync(`System abortTransaction. 'fresh' encodeAsUTF8`);
+        const listBefore = parseSnapshot(await executeAsync(snapshotQuery(Number(listOop))));
+        const dictBefore = parseSnapshot(await executeAsync(snapshotQuery(dictOop)));
+        const plan = (before: typeof listBefore, after: string, kind: 'seq' | 'dict') =>
+          revertPlan(kind, before, diffSnapshots(before, parseSnapshot(after)));
+        seen.revertedDict = await q(revertQuery(dictOop, plan(dictBefore, seen.dictAfter, 'dict')));
+        seen.revertedList = await q(
+          revertQuery(Number(listOop), plan(listBefore, seen.listAfter, 'seq')),
+        );
+        seen.listNow = JSON.stringify(
+          diffSnapshots(listBefore, parseSnapshot(await q(snapshotQuery(Number(listOop))))),
+        );
+        seen.dictNow = JSON.stringify(
+          diffSnapshots(dictBefore, parseSnapshot(await q(snapshotQuery(dictOop)))),
+        );
+        seen.python = await dap.value('gemdb.root["pend_orders"]');
+      },
+    );
+    // The cell ran to its end without committing; its session goes, and its changes with it.
+    closeSessionFor(nb.key);
+    const oop = /gemdb\.root\["pend_orders"\]\[2\] .*persisted\?oop=(\d+)/.exec(seen.said)?.[1];
+    // GemDB's own session, as the Persisted Objects view reads it: a fresh view of what is committed.
+    await executeAsync(`System abortTransaction. 'fresh' encodeAsUTF8`);
+    const steps = parseSteps(await executeAsync(pathToQuery(Number(oop))));
+    const both = parsePaths(await executeAsync(pathsToQuery([Number(seen.listOop), Number(oop)])));
+    const listDiff = diffSnapshots(
+      parseSnapshot(await executeAsync(snapshotQuery(Number(seen.listOop)))),
+      parseSnapshot(seen.listAfter),
+    );
+    const dictDiff = diffSnapshots(
+      parseSnapshot(await executeAsync(snapshotQuery(Number(oop)))),
+      parseSnapshot(seen.dictAfter),
+    );
+
+    // Three of the user's, and, at a database's first pause, some of its own (Grail's module cache).
+    expect(seen.said).toMatch(/^dc-pending\.ipynb's next commit writes \d+ persisted objects:/);
+    expect(seen.said).toMatch(
+      /gemdb\.root\["pend_orders"\] +list = \[\{'total': 10\}.*\{'total': 14\}\]/,
+    );
+    expect(seen.said).toMatch(/gemdb\.root\["pend_orders"\]\[2\] +dict = \{'total': 13\}/);
+    expect(seen.said).toMatch(/gemdb\.root\["pend_tags"\]\['a'\] +list = \[1, 2\]/);
+    expect(seen.said).not.toContain('not found');
+    expect(seen.said).toMatch(
+      /(\+ \d+ internal objects \(.*\): storage inside .*\n)?Objects created/,
+    );
+    expect(oop).toBeDefined();
+    expect(steps && pathText(steps)).toBe('gemdb.root["pend_orders"][2]');
+    // Found together in one search, as Persisted Objects asks.
+    expect([...both.values()].map((p) => p && pathText(p))).toEqual([
+      'gemdb.root["pend_orders"]',
+      'gemdb.root["pend_orders"][2]',
+    ]);
+    // The list gained an item; its [2] is the same dict, changed in place, so it is not a change here.
+    expect(listDiff).toEqual({
+      changed: [],
+      added: [{ name: '[3]', after: "{'total': 14}" }],
+      removed: [],
+    });
+    // Reverted in the paused notebook: both read as committed again, as Python sees them too.
+    expect([seen.revertedDict, seen.revertedList]).toEqual(["'reverted'", "'reverted'"]);
+    const nothing = JSON.stringify({ changed: [], added: [], removed: [] });
+    expect([seen.listNow, seen.dictNow]).toEqual([nothing, nothing]);
+    expect(seen.python).toBe("[{'total': 10}, {'total': 11}, {'total': 12}]");
+    expect(dictDiff).toEqual({
+      changed: [{ name: "'total'", before: '12', after: '13' }],
+      added: [],
+      removed: [],
+    });
+  });
+  it('finds on %pending an object deep down past a big list, and the big list’s changed item', async () => {
+    const nb = notebook('dc-pending-deep');
+    await runPython(
+      [
+        'import gemdb',
+        // As big_persisted.py's warehouse: a long list of small objects, each holding more,
+        // well past the search's limit, and an object ten levels down.
+        'big = [{"i": i, "lines": [{"q": 1}, {"q": 2}]} for i in range(15000)]',
+        'deep = {"total": 1}',
+        'for level in range(10):',
+        '    deep = {"level": level, "inside": deep}',
+        'gemdb.root["pend_store"] = {"big": big, "deep": deep}',
+        'gemdb.commit()',
+      ].join('\n'),
+      nb,
+    );
+    const seen: Record<string, string> = {};
+
+    await inCell(
+      nb,
+      [
+        'import gemdb',
+        'def go():',
+        '    store = gemdb.root["pend_store"]',
+        '    store["big"][14999]["i"] = -1',
+        '    d = store["deep"]',
+        '    while "inside" in d:',
+        '        d = d["inside"]',
+        '    d["total"] = 2',
+        '    breakpoint()',
+        'go()',
+      ].join('\n'),
+      async (dap) => {
+        const from = dap.sent.length;
+        await dap.evaluate('%pending');
+        seen.said = dap.sent
+          .slice(from)
+          .filter((m) => m.event === 'output')
+          .map((m) => String(m.body?.output ?? ''))
+          .join('');
+      },
+    );
+    closeSessionFor(nb.key);
+
+    expect(seen.said).toContain('gemdb.root["pend_store"][\'big\'][14999]');
+    expect(seen.said).toContain('gemdb.root["pend_store"][\'deep\']' + "['inside']".repeat(10));
+    expect(seen.said).not.toContain('(not found under gemdb.root)');
+    // Internal objects are not looked for, so they do not run the search to its limit.
+    expect(seen.said).not.toContain('stopped early');
+  });
+  it('leaves out of %pending an object set back to what is committed', async () => {
+    const nb = notebook('dc-pending-reverted');
+    await runPython('import gemdb\ngemdb.root["pend_rev"] = {"total": 10}\ngemdb.commit()', nb);
+    // Persisted Objects, as the extension registers it: %pending asks it what is committed.
+    registerSavedObjects({
+      subscriptions: [],
+      globalState: { get: () => undefined, update: () => Promise.resolve() },
+    } as unknown as Parameters<typeof registerSavedObjects>[0]);
+    const seen: Record<string, string> = {};
+    const said = async (dap: Dap, line: string) => {
+      const from = dap.sent.length;
+      await dap.evaluate(line);
+      return dap.sent
+        .slice(from)
+        .filter((m) => m.event === 'output')
+        .map((m) => String(m.body?.output ?? ''))
+        .join('');
+    };
+
+    await inCell(
+      nb,
+      'import gemdb\ndef go():\n    gemdb.root["pend_rev"]["total"] = 11\n    breakpoint()\ngo()',
+      async (dap) => {
+        seen.changed = await said(dap, '%pending');
+        await dap.value('gemdb.root["pend_rev"]["total"] = 10');
+        seen.setBack = await said(dap, '%pending');
+      },
+    );
+    closeSessionFor(nb.key);
+
+    expect(seen.changed).toContain('gemdb.root["pend_rev"]  dict = {\'total\': 11}');
+    expect(seen.setBack).not.toContain('pend_rev');
+    expect(seen.setBack).toMatch(
+      /1 written back unchanged \(reverted, or set to what it already held\): not listed|Nothing changes on commit: the object/,
+    );
   });
   it('makes what Persisted Objects holds available by its key at a later pause', async () => {
     const nb = notebook('dc-persisted-names');

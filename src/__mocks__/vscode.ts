@@ -172,6 +172,10 @@ export interface FakeTreeView {
 /** Tree views created so far, by view id. */
 export const __treeViews = new Map<string, FakeTreeView>();
 
+/** The extension's URI handler, as `window.registerUriHandler` was given it. */
+export const __uriHandler: { handler?: { handleUri(uri: { path: string; query: string }): void } } =
+  {};
+
 /** What was last written to the clipboard. */
 export const __clipboard = { text: '' };
 
@@ -193,6 +197,18 @@ export const window = {
       hide: () => {},
       dispose: () => {},
     };
+  },
+  registerFileDecorationProvider(provider: {
+    provideFileDecoration(uri: Uri): unknown;
+  }): Disposable {
+    __fileDecorations.push(provider);
+    return new Disposable(() => __fileDecorations.splice(__fileDecorations.indexOf(provider), 1));
+  },
+  registerUriHandler(handler: {
+    handleUri(uri: { path: string; query: string }): void;
+  }): Disposable {
+    __uriHandler.handler = handler;
+    return new Disposable(() => (__uriHandler.handler = undefined));
   },
   registerTreeDataProvider(_viewId: string, _provider: unknown): Disposable {
     return new Disposable(() => {});
@@ -323,6 +339,7 @@ export class TreeItem {
   description?: string;
   tooltip?: string | MarkdownString;
   iconPath?: unknown;
+  resourceUri?: Uri;
   contextValue?: string;
   command?: unknown;
   constructor(
@@ -334,6 +351,32 @@ export class TreeItem {
 export class ThemeColor {
   constructor(readonly id: string) {}
 }
+
+/** Just a URI's parts, as `Uri.from` takes them. */
+export class Uri {
+  constructor(
+    readonly scheme: string,
+    readonly path: string,
+    readonly query = '',
+  ) {}
+  static from(parts: { scheme: string; path?: string; query?: string }): Uri {
+    return new Uri(parts.scheme, parts.path ?? '', parts.query ?? '');
+  }
+  toString(): string {
+    return `${this.scheme}:${this.path}${this.query ? `?${this.query}` : ''}`;
+  }
+}
+
+export class FileDecoration {
+  constructor(
+    readonly badge?: string,
+    readonly tooltip?: string,
+    readonly color?: ThemeColor,
+  ) {}
+}
+
+/** The file decoration providers registered, as a tree view would ask them. */
+export const __fileDecorations: Array<{ provideFileDecoration(uri: Uri): unknown }> = [];
 
 export class ThemeIcon {
   constructor(

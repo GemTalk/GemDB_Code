@@ -18,7 +18,7 @@ vi.mock('../session', () => ({
 
 const { PauseDebugAdapter, consoleTip, debugConsole, originLine, rowHandles } =
   await import('../debugger');
-const { commitQuery } = await import('../pauseVariables');
+const { commitQuery, pendingQuery } = await import('../pauseVariables');
 
 /** Let the adapter's promises run. */
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
@@ -845,6 +845,58 @@ describe('GemDB’s % commands in the console', () => {
     expect(reply?.success).toBe(true);
   });
 
+  it('lists what the next commit writes on %pending, each object with a link to it', async () => {
+    const F = '\u001f';
+    const R = '\u001e';
+    const query = vi.fn(() =>
+      Promise.resolve(
+        ['\u001dk0:orders', '501', '[1, 2]', 'list', '0', '0', '0', '1', '2', '0', 'seq'].join(F) +
+          R +
+          ['#', '1', '0', '0'].join(F) +
+          R,
+      ),
+    );
+
+    const { reply, said } = await command('%pending', { query, label: 'a.ipynb' });
+
+    expect(query).toHaveBeenCalledWith(pendingQuery());
+    expect(said).toMatch(/^a\.ipynb's next commit writes 1 persisted object:/);
+    expect(said).toContain(
+      'gemdb.root["orders"]  list = [1, 2]  vscode://gemtalksystems.gemdb/persisted?oop=501',
+    );
+    expect(reply?.success).toBe(true);
+  });
+
+  it('sends %pending a line at a time, so VS Code still finds the links in a long list', async () => {
+    const F = '\u001f';
+    const R = '\u001e';
+    const rows = Array.from(
+      { length: 40 },
+      (_, n) =>
+        [
+          `\u001dk${n}:entry_${n}`,
+          String(1000 + n),
+          `[${'x'.repeat(80)}]`,
+          'list',
+          '0',
+          '0',
+          '0',
+          '1',
+          '1',
+          '0',
+          'seq',
+        ].join(F) + R,
+    ).join('');
+    const query = vi.fn(() => Promise.resolve(rows + ['#', '40', '0', '0'].join(F) + R));
+
+    const c = await command('%pending', { query, label: 'a.ipynb' });
+
+    const outputs = c.events('output').map((e) => (e.body as { output: string }).output);
+    // VS Code's Debug Console leaves output longer than this without links.
+    expect(outputs.every((o) => o.length <= 2000)).toBe(true);
+    expect(outputs.filter((o) => o.includes('persisted?oop='))).toHaveLength(40);
+  });
+
   it('commits a saved stack’s own session on %commit, as a notebook’s', async () => {
     vi.spyOn(commands, 'executeCommand').mockReturnValue(Promise.resolve());
     const query = vi.fn((code: string) =>
@@ -898,7 +950,7 @@ describe('GemDB’s % commands in the console', () => {
       (c.responseTo(commandsListed)?.body as { targets: Array<{ label: string }> }).targets.map(
         (t) => t.label,
       ),
-    ).toEqual(['%persist']);
+    ).toEqual(['%persist', '%pending']);
     expect(
       (c.responseTo(namesListed)?.body as { targets: Array<{ label: string }> }).targets.map(
         (t) => t.label,

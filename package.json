@@ -478,6 +478,12 @@
         "category": "GemDB"
       },
       {
+        "command": "gemdb.savedObjects.revert",
+        "title": "Revert to Committed Value",
+        "category": "GemDB",
+        "icon": "$(discard)"
+      },
+      {
         "command": "gemdb.restoreStack",
         "title": "Restore a Saved Stack…",
         "category": "GemDB",
@@ -650,6 +656,10 @@
           "when": "false"
         },
         {
+          "command": "gemdb.savedObjects.revert",
+          "when": "false"
+        },
+        {
           "command": "gemdb.restoreStack",
           "when": "gemdb.running && gemdb.hasSavedStacks"
         },
@@ -682,22 +692,22 @@
       "view/item/context": [
         {
           "command": "gemdb.savedObjects.commit",
-          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /^(gemdbNotebookDirty|gemdbSavedPending)( gemdbContainer)?$/",
+          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /^(gemdbNotebookDirty|gemdbSavedPending)( gemdbContainer)?( gemdbChanged)?$/",
           "group": "inline@1"
         },
         {
           "command": "gemdb.savedObjects.abort",
-          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /^(gemdbNotebookDirty|gemdbSavedPending)( gemdbContainer)?$/",
+          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /^(gemdbNotebookDirty|gemdbSavedPending)( gemdbContainer)?( gemdbChanged)?$/",
           "group": "inline@2"
         },
         {
           "command": "gemdb.savedObjects.copyAccess",
-          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /^(gemdbSavedObject|gemdbSavedPending|gemdbSavedStack)( gemdbContainer)?$/",
+          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /^(gemdbSavedObject|gemdbSavedPending|gemdbSavedStack)( gemdbContainer)?( gemdbChanged)?$/",
           "group": "inline@3"
         },
         {
           "command": "gemdb.savedObjects.remove",
-          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /^(gemdbSavedObject|gemdbSavedPending|gemdbSavedStack)( gemdbContainer)?$/",
+          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /^(gemdbSavedObject|gemdbSavedPending|gemdbSavedStack)( gemdbContainer)?( gemdbChanged)?$/",
           "group": "9_remove@1"
         },
         {
@@ -712,8 +722,13 @@
         },
         {
           "command": "gemdb.savedObjects.goToItem",
-          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /( gemdbContainer|^gemdbRange)$/",
+          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /( gemdbContainer( gemdbChanged)?|^gemdbRange)$/",
           "group": "0_open@2"
+        },
+        {
+          "command": "gemdb.savedObjects.revert",
+          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ / gemdbChanged$/",
+          "group": "8_revert@1"
         }
       ],
       "debug/callstack/context": [

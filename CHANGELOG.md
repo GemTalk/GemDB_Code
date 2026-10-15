@@ -25,6 +25,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ranges down to that item and selects it. For a dict a key is tried first; a number that is no key
   but is a position goes there and says so, and a key that isn't there says so and how keys are
   written.
+- **`%pending` in the Debug Console: what the next commit writes.** At a pause, `%pending` lists
+  every persisted object the notebook's transaction has changed, each by its path under
+  `gemdb.root` (`gemdb.root["orders"][2]`), its type and its value now, with a link. Ctrl+click the
+  link (as every Debug Console link is followed) and Persisted Objects opens the rows down to that
+  object, ranges too, and selects it. VS Code asks once before it lets GemDB open its own links. The search for paths follows narrow, deep paths before
+  big containers, so an object many attributes down is found even beside a list of thousands; one
+  it can't find is listed as not found, without a link.
+  Persisted Objects marks each changed object **M**, in the colour of a modified file: its
+  description says what changes (`changed: total 10 → 15`, or how many entries changed, were added
+  and were removed), its hover sets each changed entry's committed value beside the one the next
+  commit writes, and a changed attribute or item inside it reads `10 → 15`. Right-click a marked
+  row for **Revert to Committed Value**: after asking, it puts that entry, or the whole object, back
+  as committed in the notebook's session — discarding the change, committing nothing — and the mark
+  goes, and `%pending` no longer lists it: an object that reads exactly as committed again
+  (reverted, or set to what it already held) is counted on one line, not listed, though the commit
+  still writes it back unchanged. A value is put back only as a plain literal or as the committed
+  object itself; a set, or a
+  value over 2,000 characters, says it can't be reverted. The marks go once the notebook commits or
+  discards its changes. Objects are matched by their permanent number, so a list
+  that grew still finds the right item. Objects created since the last commit are written as part
+  of the objects that now hold them. Internal objects — storage inside a Python object, such as a
+  big dict's buckets, or the database's own caches — are counted on one line, not listed.
 - **The Debug Console and Watch work at a `breakpoint()` or red dot.** Type Python into the Debug
   Console and it runs in the frame selected in the Call Stack: its locals, closed-over names, its
   module's globals (an imported module's own, not the notebook's) and the builtins, as the paused
@@ -82,6 +104,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Persisted Objects reads again when the database starts or stops.** Opened while the database
+  was stopped, it kept saying "Start GemDB to see persisted objects." after Start until it was
+  closed and opened again; it now follows the status panel, which sees every start and stop.
 - **A classmethod's or staticmethod's frame is named by its class.** The Call Stack read
   `Account class.open` for a paused `@classmethod` or `@staticmethod`; it now reads `Account.open`,
   as CPython names it.

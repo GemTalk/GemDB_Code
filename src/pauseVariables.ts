@@ -1096,6 +1096,665 @@ out contents encodeAsUTF8]`;
 }
 
 // ---------------------------------------------------------------------------
+// What the next commit writes (`%pending`), and where each object is.
+// ---------------------------------------------------------------------------
+
+/** How many changed objects `%pending` lists; it says how many more there were. */
+export const PENDING_ROWS = 200;
+
+/** The most objects the search for paths from `gemdb.root` registers before it gives up. */
+const PATH_SEARCH_LIMIT = 20000;
+
+/** A container with more items than this is searched last (`FIND_PATHS`). */
+const PATH_BIG = 1000;
+
+/** Separates the steps of a path in a query's answer. */
+const STEP = '\u001d';
+
+/**
+ * One step from `gemdb.root` down to an object, as `findPaths` writes it:
+ * an entry of `gemdb.root` (`root`, its key by its text when it is a str,
+ * else by its repr), an attribute (`attr`), a list's or tuple's item
+ * (`index`), a dict's entry (`dictKey`, its key's repr) or a set's item
+ * (`setItem`, in the order the set iterates). `position` is where the step
+ * is among what Persisted Objects lists, from 0, so the view can open
+ * straight to it.
+ */
+export type PathStep =
+  | { kind: 'root'; position: number; key: string; str: boolean }
+  | { kind: 'attr'; name: string }
+  | { kind: 'index'; position: number }
+  | { kind: 'dictKey'; position: number; key: string }
+  | { kind: 'setItem'; position: number };
+
+/** The temps `FIND_PATHS` declares, for a query that uses it. */
+const PATH_TEMPS = 'stepSep cleanStep cut via nameOf findPaths stepsOf';
+
+/**
+ * Smalltalk that finds where objects are under `gemdb.root`: `findPaths`
+ * takes an IdentitySet of targets and answers an IdentityDictionary from
+ * each target it found to the object a path names, and `stepsOf` writes that
+ * object's path from `gemdb.root` (`parseSteps` reads it). Expects
+ * `dispatcher` and `HELPERS`.
+ *
+ * The search goes breadth first from `gemdb.root`'s entries, so a path is as
+ * short as it can be, and it follows only what a Python user can name: list
+ * and tuple items, dict entries, set items and an object's `__dict__`. A
+ * target that is an object's `__dict__` names that object; one that is
+ * `gemdb.root`'s own dict names `gemdb.root`. It reads no getter and runs no
+ * `__repr__` until a path is written. It stops when every target is found,
+ * after `PATH_SEARCH_LIMIT` objects, or at the time budget's soft break;
+ * `cut` says whether it stopped short.
+ *
+ * Two things keep big data from using up the limit before a deep object is
+ * reached (measured: a warehouse's 12,000 orders and their lines filled it,
+ * and an Order ten attributes down `.deep` went unfound). A container of more
+ * than `PATH_BIG` items is opened only once everything else has been
+ * searched, so a narrow, deep path is followed first. And a target is
+ * recognised as it is first seen, not when its turn comes, so the item a big
+ * list holds is found the moment the list is opened.
+ */
+const FIND_PATHS = `
+  stepSep := Character codePoint: 29.
+  cleanStep := [:t | t collect: [:c | (c == field or: [c == record or: [c == stepSep]]) ifTrue: [$?] ifFalse: [c]]].
+  cut := false.
+  via := IdentityDictionary new.
+  nameOf := [:key | (reprOf value: key) ifNil: [key printString]].
+  findPaths := [:targets | | found queue later add backing pairs |
+    found := IdentityDictionary new.
+    queue := OrderedCollection new.
+    later := OrderedCollection new.
+    add := [:child :parent :kind :key |
+      ((isLeaf value: child) or: [child isBehavior or: [via includesKey: child]]) ifFalse: [
+        via size < ${PATH_SEARCH_LIMIT}
+          ifTrue: [
+            via at: child put: { parent. kind. key }.
+            ((targets includes: child) and: [(found includesKey: child) not])
+              ifTrue: [found at: child put: child].
+            (((child isKindOf: Collection) and: [child isString not]) and: [child size > ${PATH_BIG}])
+              ifTrue: [later add: child]
+              ifFalse: [queue add: child]]
+          ifFalse: [cut := true]]].
+    backing := [dispatcher evaluateSource: 'import gemdb
+gemdb.root._peek()' usingModuleScope: SymbolDictionary new]
+      on: AbstractException do: [:e | e return: nil].
+    (backing notNil and: [targets includes: backing]) ifTrue: [found at: backing put: backing].
+    pairs := [dispatcher evaluateSource: 'import gemdb
+list(gemdb.root.items())' usingModuleScope: SymbolDictionary new]
+      on: AbstractException do: [:e | e return: #()].
+    1 to: pairs size do: [:i | | pair |
+      pair := pairs at: i.
+      add value: (pair at: 2) value: nil value: #k value: { i - 1. pair at: 1 }].
+    [[(queue notEmpty or: [later notEmpty]) and: [found size < targets size and: [late not]]] whileTrue: [| node d i |
+      "The big containers held back are opened once nothing else is left."
+      queue isEmpty ifTrue: [queue addAll: later. later := OrderedCollection new].
+      node := queue removeFirst.
+      ((targets includes: node) and: [(found includesKey: node) not]) ifTrue: [found at: node put: node].
+      (node isKindOf: SequenceableCollection)
+        ifTrue: [1 to: node size do: [:k | add value: (node at: k) value: node value: #i value: k - 1]]
+        ifFalse: [
+          (node respondsTo: #keysAndValuesDo:)
+            ifTrue: [
+              i := 0.
+              node keysAndValuesDo: [:key :x | add value: x value: node value: #d value: { i. key }. i := i + 1]]
+            ifFalse: [
+              (node isKindOf: Collection)
+                ifTrue: [
+                  i := 0.
+                  node do: [:x | add value: x value: node value: #s value: i. i := i + 1]]
+                ifFalse: [
+                  d := [node @env1:___pyAttrLoad___: #'__dict__'] on: AbstractException do: [:e | (broke value: e) return: nil].
+                  (d notNil and: [d respondsTo: #keysAndValuesDo:]) ifTrue: [
+                    ((targets includes: d) and: [(found includesKey: d) not]) ifTrue: [found at: d put: node].
+                    d keysAndValuesDo: [:key :x | add value: x value: node value: #a value: key]]]]]]]
+      on: ControlInterrupt do: [:e | late := true. e return: nil].
+    late ifTrue: [cut := true].
+    found].
+  stepsOf := [:node | | at link steps s |
+    steps := OrderedCollection new.
+    at := node.
+    [at notNil and: [(link := via at: at ifAbsent: [nil]) notNil]] whileTrue: [
+      steps addFirst: link.
+      at := link at: 1].
+    s := WriteStream on: Unicode7 new.
+    steps do: [:st | | kind key |
+      kind := st at: 2.
+      key := st at: 3.
+      s nextPut: stepSep.
+      kind == #k ifTrue: [
+        s nextPutAll: ((key at: 2) isString ifTrue: ['k'] ifFalse: ['K']); print: (key at: 1); nextPut: $:;
+          nextPutAll: (cleanStep value: ((key at: 2) isString
+            ifTrue: [(key at: 2) asString]
+            ifFalse: [nameOf value: (key at: 2)]))].
+      kind == #i ifTrue: [s nextPutAll: 'i'; print: key].
+      kind == #s ifTrue: [s nextPutAll: 's'; print: key].
+      kind == #d ifTrue: [
+        s nextPutAll: 'd'; print: (key at: 1); nextPut: $:; nextPutAll: (cleanStep value: (nameOf value: (key at: 2)))].
+      kind == #a ifTrue: [s nextPutAll: 'a'; nextPutAll: (cleanStep value: key asString)]].
+    s contents].`;
+
+/**
+ * Smalltalk, for a notebook's (or a saved stack's) own session, that lists
+ * what its next commit writes: every object its transaction has changed that
+ * was already in the database (`System _writtenObjects`, kept to the
+ * committed ones). An object created since the last commit is not listed on
+ * its own: it is written as part of a committed object that now holds it,
+ * which is listed. A cell's own variables live in the session's SessionTemps
+ * and are never committed, so they never show here.
+ *
+ * Each object is matched to a place under `gemdb.root` (`FIND_PATHS`), read in
+ * this session, so the path is where the object is as the notebook sees it.
+ * One record per object, up to `PENDING_ROWS`, the found ones first: its path
+ * (`?` for a Python object none was found to, `!` for an internal object,
+ * which is not looked for), then its row in `childrenQuery`'s format, named by its permanent
+ * object number.
+ *
+ * A last record, `#`, carries how many were written, how many were left out,
+ * and whether the search stopped short. `parsePending` reads it.
+ *
+ * The `!` ones are internal objects: storage inside a Python object, such as
+ * a big dict's collision buckets (measured: a PyDictCollisionBucket when one
+ * entry of a 1,200-entry dict changed), or the database's own caches (the
+ * first pause in a fresh database writes a SymbolDictionary and four
+ * RcCollisionBuckets as Grail caches the modules the debugger imports). They
+ * are part of the commit like anything else, so they are counted, never left
+ * out. They are not looked for under `gemdb.root`, where they never are: the
+ * search stops once every Python object is found, rather than running on to
+ * its limit (measured: with them looked for, it always said it stopped early).
+ */
+export function pendingQuery(): string {
+  return `| reg out field record none saved describe childrenOf reprOf late clean isLeaf dispatcher written targets internal found shown skipped ${PATH_TEMPS} ${ROW_TEMPS} |
+${PREAMBLE}
+reg := OrderedCollection new.
+${HELPERS}
+${CHILDREN_OF}
+${DESCRIBE}
+dispatcher := System myUserProfile symbolList objectNamed: #'ModuleAst'.
+written := IdentitySet new.
+System _writtenObjects do: [:o | o isCommitted ifTrue: [written add: o]].
+${FIND_PATHS}
+${withQuietConsole(`
+  "Only Python objects are looked for. An internal one, whose class has no __module__
+   (measured: true of SymbolDictionary and RcCollisionBucket, and of no Python type),
+   is never under gemdb.root, so looking for it would only run the search to its limit."
+  targets := IdentitySet new.
+  internal := IdentitySet new.
+  written do: [:o |
+    ([(o @env1:___pyAttrLoad___: #'__class__') @env1:___pyAttrLoad___: #'__module__'. true]
+        on: AbstractException do: [:e | e return: false])
+      ifTrue: [targets add: o]
+      ifFalse: [internal add: o]].
+  found := targets isEmpty ifTrue: [IdentityDictionary new] ifFalse: [findPaths value: targets].
+  shown := IdentitySet new.
+  skipped := IdentitySet new.
+  "An object and its __dict__ can both be written; they name one object, listed once."
+  found keysAndValuesDo: [:t :node |
+    (shown includes: node) ifFalse: [
+      shown size < ${PENDING_ROWS}
+        ifTrue: [
+          shown add: node.
+          out nextPutAll: (stepsOf value: node); nextPut: field.
+          describe value: node asOop printString value: node]
+        ifFalse: [skipped add: node]]].
+  "? for a Python object not found, ! for an internal one."
+  targets do: [:t |
+    (found includesKey: t) ifFalse: [
+      shown size < ${PENDING_ROWS}
+        ifTrue: [
+          shown add: t.
+          out nextPutAll: '?'; nextPut: field.
+          describe value: t asOop printString value: t]
+        ifFalse: [skipped add: t]]].
+  internal do: [:t |
+    shown size < ${PENDING_ROWS}
+      ifTrue: [
+        shown add: t.
+        out nextPutAll: '!'; nextPut: field.
+        describe value: t asOop printString value: t]
+      ifFalse: [skipped add: t]].
+  out nextPutAll: '#'; nextPut: field; print: shown size + skipped size; nextPut: field;
+    print: skipped size; nextPut: field; nextPutAll: (cut ifTrue: ['1'] ifFalse: ['0']); nextPut: record`)}
+out contents encodeAsUTF8`;
+}
+
+/**
+ * Smalltalk, for the extension's session, that answers the path from
+ * `gemdb.root` to the object whose permanent number is `oop`, as
+ * `FIND_PATHS` writes it, or `?` when it is not found. It reads the view the
+ * session already has, so run it right after the Persisted Objects view's own
+ * fresh listing: the positions it answers are then the ones the view shows.
+ */
+export function pathToQuery(oop: number): string {
+  return `| reg out field record none saved reprOf late clean isLeaf dispatcher target found ${PATH_TEMPS} ${ROW_TEMPS} |
+${PREAMBLE}
+${HELPERS}
+dispatcher := System myUserProfile symbolList objectNamed: #'ModuleAst'.
+target := [Object _objectForOop: ${Math.trunc(oop)}] on: AbstractException do: [:e | e return: nil].
+${FIND_PATHS}
+${withQuietConsole(`
+  found := target isNil
+    ifTrue: [IdentityDictionary new]
+    ifFalse: [findPaths value: (IdentitySet with: target)].
+  out nextPutAll: (found isEmpty ifTrue: ['?'] ifFalse: [stepsOf value: found values asArray first])`)}
+out contents encodeAsUTF8`;
+}
+
+/**
+ * Smalltalk, for the extension's session, that answers the path from
+ * `gemdb.root` to each object in `oops` in one search: a record per number,
+ * `oop␟steps`, the steps as `pathToQuery` writes them (`?` for one not
+ * found). Like `pathToQuery`, it reads the view the session already has.
+ */
+export function pathsToQuery(oops: number[]): string {
+  return `| reg out field record none saved reprOf late clean isLeaf dispatcher targets byOop found ${PATH_TEMPS} ${ROW_TEMPS} |
+${PREAMBLE}
+${HELPERS}
+dispatcher := System myUserProfile symbolList objectNamed: #'ModuleAst'.
+targets := IdentitySet new.
+byOop := OrderedCollection new.
+#(${oops.map((o) => Math.trunc(o)).join(' ')}) do: [:oop | | t |
+  t := [Object _objectForOop: oop] on: AbstractException do: [:e | e return: nil].
+  byOop add: oop -> t.
+  t notNil ifTrue: [targets add: t]].
+${FIND_PATHS}
+${withQuietConsole(`
+  found := targets isEmpty ifTrue: [IdentityDictionary new] ifFalse: [findPaths value: targets].
+  byOop do: [:a | | node |
+    node := a value isNil ifTrue: [nil] ifFalse: [found at: a value ifAbsent: [nil]].
+    out print: a key; nextPut: field;
+      nextPutAll: (node isNil ifTrue: ['?'] ifFalse: [stepsOf value: node]); nextPut: record]`)}
+out contents encodeAsUTF8`;
+}
+
+/** `pathsToQuery`'s answer: each number's path, or undefined where none was found. */
+export function parsePaths(raw: string): Map<number, PathStep[] | undefined> {
+  const paths = new Map<number, PathStep[] | undefined>();
+  for (const record of raw.split(RECORD)) {
+    if (!record) continue;
+    const at = record.indexOf(FIELD);
+    paths.set(Number(record.slice(0, at)), parseSteps(record.slice(at + 1)));
+  }
+  return paths;
+}
+
+/** The most entries `snapshotQuery` compares; a bigger container is not compared. */
+export const SNAPSHOT_LIMIT = 20000;
+
+/** Longest value text a snapshot carries for one entry. */
+const SNAPSHOT_CHARS = 120;
+
+/** Longest repr a snapshot keeps whole, so the value can be put back by a revert. */
+const REVERT_CHARS = 2000;
+
+/**
+ * Smalltalk that writes what the object numbered `oop` holds, as this
+ * session sees it, for comparing with another session's: a first record
+ * `#␟kind` (`obj`, `seq`, `dict`, or `set`, `big` and `gone` for what is not
+ * compared), then a record per entry, `name␟key␟text`. Names are what
+ * Persisted Objects calls the rows: an attribute, `[i]`, a dict key's repr.
+ * `key` is what decides whether an entry changed, and what a revert puts
+ * back: `v` and a plain value's whole repr, or `h` with its size and hash
+ * when that repr is over `REVERT_CHARS` (compared, but not put back), or for
+ * any other object `o` and its permanent number, so an object that changed in
+ * place is not reported again by every container holding it. `text` is how
+ * the value reads, a container's or object's repr only when it holds at most
+ * a few entries, else its type name.
+ *
+ * Run in the extension's session it reads what is committed; run in a
+ * notebook's, what its next commit would write.
+ */
+export function snapshotQuery(oop: number): string {
+  return `| reg out field record none saved reprOf late clean isLeaf obj kind emit textOf src ${ROW_TEMPS} |
+${PREAMBLE}
+${HELPERS}
+obj := [Object _objectForOop: ${Math.trunc(oop)}] on: AbstractException do: [:e | e return: nil].
+textOf := [:v | | t n |
+  n := ((v isKindOf: Collection) and: [v isString not]) ifTrue: [v size] ifFalse: [0].
+  t := ((isLeaf value: v) or: [n <= 8])
+    ifTrue: [(v isString and: [v size > ${SNAPSHOT_CHARS}])
+      ifTrue: [(reprOf value: (v copyFrom: 1 to: ${SNAPSHOT_CHARS})) , '...']
+      ifFalse: [reprOf value: v]]
+    ifFalse: [nil].
+  t isNil ifTrue: [t := typeNameOf value: v].
+  t size > ${SNAPSHOT_CHARS} ifTrue: [t := (t copyFrom: 1 to: ${SNAPSHOT_CHARS - 3}) , '...'].
+  clean value: t].
+emit := [:nm :v | | full |
+  out nextPutAll: (clean value: nm); nextPut: field.
+  (isLeaf value: v)
+    ifTrue: [
+      full := (v isString and: [v size > ${REVERT_CHARS}]) ifTrue: [nil] ifFalse: [reprOf value: v].
+      (full notNil and: [full size <= ${REVERT_CHARS}])
+        ifTrue: [out nextPutAll: 'v'; nextPutAll: (clean value: full)]
+        ifFalse: [out nextPutAll: 'h'; print: v size; nextPut: $:; print: v hash]]
+    ifFalse: [out nextPutAll: 'o'; print: v asOop].
+  out nextPut: field; nextPutAll: (textOf value: v); nextPut: record].
+${withQuietConsole(`
+  obj isNil
+    ifTrue: [kind := 'gone']
+    ifFalse: [
+      (obj isKindOf: SequenceableCollection)
+        ifTrue: [kind := 'seq']
+        ifFalse: [
+          (obj respondsTo: #keysAndValuesDo:)
+            ifTrue: [kind := 'dict']
+            ifFalse: [
+              (obj isKindOf: Collection)
+                ifTrue: [kind := 'set']
+                ifFalse: [
+                  kind := 'obj'.
+                  src := [obj @env1:___pyAttrLoad___: #'__dict__'] on: AbstractException do: [:e | e return: nil].
+                  (src notNil and: [src respondsTo: #keysAndValuesDo:]) ifFalse: [kind := 'set']]]].
+      ((kind = 'seq' or: [kind = 'dict']) and: [obj size > ${SNAPSHOT_LIMIT}]) ifTrue: [kind := 'big']].
+  out nextPutAll: '#'; nextPut: field; nextPutAll: kind; nextPut: record.
+  kind = 'seq' ifTrue: [1 to: obj size do: [:k | emit value: '[' , (k - 1) printString , ']' value: (obj at: k)]].
+  kind = 'dict' ifTrue: [obj keysAndValuesDo: [:key :x |
+    emit value: ((reprOf value: key) ifNil: [key printString]) value: x]].
+  kind = 'obj' ifTrue: [src keysAndValuesDo: [:key :x | emit value: key asString value: x]]`)}
+out contents encodeAsUTF8`;
+}
+
+/** What `snapshotQuery` read: its kind, and each entry's key and text by name. */
+export interface Snapshot {
+  kind: 'obj' | 'seq' | 'dict' | 'set' | 'big' | 'gone';
+  entries: Map<string, { key: string; text: string }>;
+}
+
+/** Parse `snapshotQuery`'s answer. */
+export function parseSnapshot(raw: string): Snapshot {
+  const snapshot: Snapshot = { kind: 'gone', entries: new Map() };
+  for (const record of raw.split(RECORD)) {
+    if (!record) continue;
+    const [name = '', key = '', text = ''] = record.split(FIELD);
+    if (name === '#') snapshot.kind = key as Snapshot['kind'];
+    else snapshot.entries.set(name, { key, text });
+  }
+  return snapshot;
+}
+
+/** How one object's next commit differs from what is committed. */
+export interface ObjectDiff {
+  /** Entries whose value changes, by name: its committed text and its new one. */
+  changed: Array<{ name: string; before: string; after: string }>;
+  added: Array<{ name: string; after: string }>;
+  removed: Array<{ name: string; before: string }>;
+  /** Why it was not compared entry by entry, when it was not: a set, or too big. */
+  notCompared?: string;
+}
+
+/**
+ * Compare an object as committed (`before`) with what its next commit writes
+ * (`after`), entry by entry, in `after`'s order then `before`'s leftovers.
+ */
+export function diffSnapshots(before: Snapshot, after: Snapshot): ObjectDiff {
+  const diff: ObjectDiff = { changed: [], added: [], removed: [] };
+  if (after.kind === 'set' || after.kind === 'big' || after.kind === 'gone') {
+    diff.notCompared =
+      after.kind === 'set'
+        ? 'a set, or an object whose attributes are not kept in a __dict__, is not compared entry by entry'
+        : after.kind === 'big'
+          ? `more than ${SNAPSHOT_LIMIT.toLocaleString('en-US')} entries: not compared`
+          : 'it could not be read';
+    return diff;
+  }
+  for (const [name, now] of after.entries) {
+    const was = before.entries.get(name);
+    if (!was) diff.added.push({ name, after: now.text });
+    else if (was.key !== now.key) diff.changed.push({ name, before: was.text, after: now.text });
+  }
+  for (const [name, was] of before.entries) {
+    if (!after.entries.has(name)) diff.removed.push({ name, before: was.text });
+  }
+  return diff;
+}
+
+/**
+ * A repr a revert may write into Python as it is: a str or bytes literal, a
+ * number, `True`, `False` or `None`. Anything else, such as an object's own
+ * repr, could run code if evaluated, so it is never put back this way.
+ */
+export function isLiteral(text: string): boolean {
+  return /^(?:-?\d+(?:\.\d+)?(?:e[-+]?\d+)?|True|False|None|b?'(?:[^'\\\n]|\\.)*'|b?"(?:[^"\\\n]|\\.)*")$/.test(
+    text,
+  );
+}
+
+/** Python that undoes changes to one object, and the committed objects it puts back by number. */
+export interface RevertPlan {
+  source: string;
+  oops: number[];
+}
+
+/**
+ * The Python that puts an object (`_gemdb_obj`) back as `before` holds it:
+ * every change in `diff`, or only the entry named `only`. An attribute is set
+ * or deleted, a dict entry assigned or deleted, a list item assigned, and a
+ * whole list reverted by assigning all its items (`[:]`), so one that grew
+ * or shrank is put back too. A committed object goes back by its number, as
+ * `_gemdb_o<number>`; a plain value as its literal. Throws, saying why, for
+ * an entry that cannot be put back: a key or value that is no plain literal,
+ * a value too long to have been kept, or a set.
+ */
+export function revertPlan(
+  kind: Snapshot['kind'],
+  before: Snapshot,
+  diff: ObjectDiff,
+  only?: string,
+): RevertPlan {
+  if (kind !== 'obj' && kind !== 'dict' && kind !== 'seq') {
+    throw new Error(
+      `it is ${kind === 'set' ? 'a set, which' : 'not something that'} cannot be reverted entry by entry`,
+    );
+  }
+  const oops = new Set<number>();
+  const value = (name: string): string => {
+    const key = before.entries.get(name)?.key ?? '';
+    if (key.startsWith('o')) {
+      oops.add(Number(key.slice(1)));
+      return `_gemdb_o${key.slice(1)}`;
+    }
+    if (key.startsWith('v') && isLiteral(key.slice(1))) return key.slice(1);
+    throw new Error(
+      key.startsWith('h')
+        ? `${name}'s committed value is too long to put back`
+        : `${name}'s committed value is not a plain value that can be put back`,
+    );
+  };
+  const dictKey = (name: string): string => {
+    if (!isLiteral(name)) throw new Error(`the key ${name} is not a plain value that can be named`);
+    return name;
+  };
+  const lines: string[] = [];
+  const wanted = <T extends { name: string }>(list: T[]) =>
+    only === undefined ? list : list.filter((e) => e.name === only);
+  if (kind === 'seq' && only === undefined) {
+    const items = [...before.entries.keys()].map(value);
+    lines.push(`_gemdb_obj[:] = [${items.join(', ')}]`);
+  } else {
+    for (const e of [...wanted(diff.changed), ...wanted(diff.removed)]) {
+      if (kind === 'obj')
+        lines.push(`setattr(_gemdb_obj, ${JSON.stringify(e.name)}, ${value(e.name)})`);
+      else if (kind === 'dict') lines.push(`_gemdb_obj[${dictKey(e.name)}] = ${value(e.name)}`);
+      else lines.push(`_gemdb_obj[${Number(e.name.slice(1, -1))}] = ${value(e.name)}`);
+    }
+    for (const e of wanted(diff.added)) {
+      if (kind === 'obj') lines.push(`delattr(_gemdb_obj, ${JSON.stringify(e.name)})`);
+      else if (kind === 'dict') lines.push(`del _gemdb_obj[${dictKey(e.name)}]`);
+      else throw new Error(`${e.name} was added to a list: revert the whole list instead`);
+    }
+  }
+  if (lines.length === 0) throw new Error('there is nothing to revert');
+  return { source: [...lines, '"reverted"'].join('\n'), oops: [...oops] };
+}
+
+/**
+ * Smalltalk, for a notebook's session, that runs a revert (`revertPlan`) on
+ * the object numbered `oop`: it binds that object as `_gemdb_obj` and each
+ * committed object the plan puts back as `_gemdb_o<number>`, then runs the
+ * plan's Python in a throwaway scope. Answers `'reverted'`, or an `Error: …`
+ * line.
+ */
+export function revertQuery(oop: number, plan: RevertPlan): string {
+  const binds = plan.oops
+    .map(
+      (o) => `scope at: #'_gemdb_o${Math.trunc(o)}' put: (Object _objectForOop: ${Math.trunc(o)}).`,
+    )
+    .join('\n');
+  return `| dispatcher scope r |
+dispatcher := System myUserProfile symbolList objectNamed: #'ModuleAst'.
+scope := SymbolDictionary new.
+scope at: #'_gemdb_obj' put: (Object _objectForOop: ${Math.trunc(oop)}).
+${binds}
+r := [(dispatcher evaluateSource: '${escapeString(plan.source)}' usingModuleScope: scope) printString]
+  on: AbstractException do: [:e | 'Error: ' , e class name , ' - ' , e messageText asString].
+r encodeAsUTF8`;
+}
+
+/** The names of the rows a path opens in Persisted Objects, from `gemdb.root` down. */
+export function stepNames(steps: PathStep[]): string[] {
+  return steps.map((step) => {
+    switch (step.kind) {
+      case 'root':
+        return step.key;
+      case 'attr':
+        return step.name;
+      case 'dictKey':
+        return step.key;
+      default:
+        return `[${step.position}]`;
+    }
+  });
+}
+
+/** A path as `stepsOf` writes it; undefined for `?` or `!`, an object no path was found to. */
+export function parseSteps(text: string): PathStep[] | undefined {
+  if (text === '?' || text === '!') return undefined;
+  return text
+    .split(STEP)
+    .filter((s) => s.length > 0)
+    .map((s): PathStep => {
+      const kind = s[0];
+      const rest = s.slice(1);
+      const colon = rest.indexOf(':');
+      const position = Number.parseInt(colon < 0 ? rest : rest.slice(0, colon), 10) || 0;
+      const after = colon < 0 ? '' : rest.slice(colon + 1);
+      switch (kind) {
+        case 'k':
+        case 'K':
+          return { kind: 'root', position, key: after, str: kind === 'k' };
+        case 'd':
+          return { kind: 'dictKey', position, key: after };
+        case 'i':
+          return { kind: 'index', position };
+        case 's':
+          return { kind: 'setItem', position };
+        default:
+          return { kind: 'attr', name: rest };
+      }
+    });
+}
+
+/**
+ * A path as Python reads it: `gemdb.root["orders"][2].customer`. A set has
+ * no index in Python, so a set's item is written `{n}`, the nth it iterates.
+ */
+export function pathText(steps: PathStep[]): string {
+  return steps.reduce((text, step) => {
+    switch (step.kind) {
+      case 'root':
+        return `${text}[${step.str ? JSON.stringify(step.key) : step.key}]`;
+      case 'attr':
+        return `${text}.${step.name}`;
+      case 'index':
+        return `${text}[${step.position}]`;
+      case 'dictKey':
+        return `${text}[${step.key}]`;
+      case 'setItem':
+        return `${text}{${step.position}}`;
+    }
+  }, 'gemdb.root');
+}
+
+/** One changed object `%pending` lists. */
+export interface PendingChange {
+  /** Where it is under `gemdb.root`; undefined when the search did not find it. */
+  steps?: PathStep[];
+  /** Not found, and not a Python object: internal storage or one of the database's caches. */
+  internal?: boolean;
+  /** Its permanent object number. */
+  oop: number;
+  type: string;
+  value: string;
+}
+
+/** `pendingQuery`'s answer, read. */
+export interface Pending {
+  changes: PendingChange[];
+  /** How many objects the commit writes in all. */
+  total: number;
+  /** How many of those are not in `changes`. */
+  more: number;
+  /** The search for paths stopped before it had looked everywhere. */
+  cut: boolean;
+  /**
+   * How many written objects were left out of `changes` because they read
+   * exactly as committed: reverted, or set to what they already held.
+   */
+  unchanged?: number;
+}
+
+/**
+ * `pending` without the objects that read exactly as committed, by `before`
+ * (each object's committed snapshot, by number) against `after` (as the
+ * notebook would commit it): reverted, or set to what they already held. A
+ * commit still writes them, but nothing about them would change, so they are
+ * counted rather than listed. An object not compared entry by entry, or with
+ * no snapshot either side, stays listed.
+ */
+export function withoutUnchanged(
+  pending: Pending,
+  before: Map<number, Snapshot>,
+  after: Map<number, Snapshot>,
+): Pending {
+  const same = (oop: number): boolean => {
+    const was = before.get(oop);
+    const now = after.get(oop);
+    if (!was || !now || was.kind === 'gone') return false;
+    const diff = diffSnapshots(was, now);
+    return !diff.notCompared && diff.changed.length + diff.added.length + diff.removed.length === 0;
+  };
+  const changes = pending.changes.filter((c) => c.internal || !same(c.oop));
+  return { ...pending, changes, unchanged: pending.changes.length - changes.length };
+}
+
+/** Parse `pendingQuery`'s answer. */
+export function parsePending(raw: string): Pending {
+  const pending: Pending = { changes: [], total: 0, more: 0, cut: false };
+  for (const record of raw.split(RECORD)) {
+    if (!record) continue;
+    const at = record.indexOf(FIELD);
+    const head = record.slice(0, at);
+    if (head === '#') {
+      const [, total, more, cut] = record.split(FIELD);
+      pending.total = Number(total) || 0;
+      pending.more = Number(more) || 0;
+      pending.cut = cut === '1';
+      continue;
+    }
+    const [row] = parseChildren(record.slice(at + 1) + RECORD);
+    if (!row) continue;
+    const steps = parseSteps(head);
+    pending.changes.push({
+      ...(steps ? { steps } : {}),
+      ...(head === '!' ? { internal: true } : {}),
+      oop: Number(row.name),
+      type: row.type,
+      value: row.value,
+    });
+  }
+  return pending;
+}
+
+// ---------------------------------------------------------------------------
 // The Debug Console and the Watch pane.
 // ---------------------------------------------------------------------------
 

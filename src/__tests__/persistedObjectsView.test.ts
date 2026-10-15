@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __clipboard,
   __commands,
+  __fileDecorations,
   __treeViews,
+  __uriHandler,
   MarkdownString,
   TreeItem,
   window,
@@ -57,6 +59,14 @@ class FakeGem {
   lists = new Map<number, number>();
   /** Which of `lists` are dicts, keyed `'k0'`, `'k1'`, … rather than lists. */
   dicts = new Set<number>();
+  /** The path to each object by its permanent number, as `pathToQuery` answers; `?` for any other. */
+  paths = new Map<number, string>();
+  /** What `snapshotQuery` answers, by session and permanent number (`extension:7`). */
+  snapshots = new Map<string, string>();
+  /** The reverts run, by session. */
+  reverts: Array<{ session: string; code: string }> = [];
+  /** Sessions with changes to commit beyond their additions, as a %pending would find them. */
+  dirty = new Set<string>();
 
   /** An entry's row as a listing writes it: with a registry position when it opens. */
   private entryRow(key: string, type: string): string {
@@ -92,6 +102,26 @@ class FakeGem {
         .join('');
     }
     if (code.includes('len(gemdb.root)')) return String(this.committed.size);
+    if (code.includes("#'_gemdb_obj'")) {
+      this.reverts.push({ session, code });
+      const n = /_objectForOop: (\d+)\)\./.exec(code)![1];
+      // As the database would: the notebook's object now reads as committed.
+      this.snapshots.set(`${session}:${n}`, this.snapshots.get(`extension:${n}`) ?? '');
+      return "'reverted'";
+    }
+    if (code.includes('textOf :=')) {
+      const n = /_objectForOop: (\d+)\]/.exec(code)![1];
+      return this.snapshots.get(`${session}:${n}`) ?? `#${F}gone${R}`;
+    }
+    const many = /#\(([\d ]+)\) do: \[:oop/.exec(code);
+    if (many) {
+      return many[1]
+        .split(' ')
+        .map((n) => `${n}${F}${this.paths.get(Number(n)) ?? '?'}${R}`)
+        .join('');
+    }
+    const oop = /_objectForOop: (\d+)\]/.exec(code);
+    if (oop) return this.paths.get(Number(oop[1])) ?? '?';
     const opened =
       /GemDbPersistedRefs' otherwise: nil\.\nobj := \(reg notNil and: \[(\d+) between/.exec(code);
     if (code.includes('want := #(')) {
@@ -129,7 +159,9 @@ class FakeGem {
         .map((key) => this.entryRow(key, additions.get(key)!))
         .join('');
     }
-    if (code.includes('System needsCommit')) return additions.size > 0 ? 'true' : 'false';
+    if (code.includes('System needsCommit')) {
+      return additions.size > 0 || this.dirty.has(session) ? 'true' : 'false';
+    }
     if (code.includes('count := 12.')) {
       return (
         row('value', '<Employee>', 'Employee', 0, 0, 1, 1) +
@@ -1355,5 +1387,202 @@ describe('going to an item', () => {
     // A bare word or number may be a key, which only the database can say.
     expect(check!('99999')).toBeUndefined();
     expect(check!('SKU1')).toBeUndefined();
+  });
+});
+
+describe('showing an object from a %pending link', () => {
+  const S = '\u001d';
+  const revealed = () => __treeViews.get(VIEW_ID)!.reveals.at(-1);
+  /** Follow a link as VS Code hands it to the extension, and wait for what it shows. */
+  async function follow(query: string): Promise<void> {
+    __uriHandler.handler!.handleUri({ path: '/persisted', query });
+    for (let i = 0; i < 40; i++) await settle();
+  }
+
+  it('opens the rows down to the object, ranges too, and selects it', async () => {
+    gem.committed.set('orders', 'list');
+    gem.refs.set('orders', 1);
+    gem.lists.set(1, 1200);
+    gem.paths.set(77, `${S}k0:orders${S}i1100`);
+    const { view } = setUp();
+
+    await follow('oop=77');
+
+    const shown = revealed()!;
+    expect(item(view, shown.element as SavedRow).label).toBe('[1100]');
+    expect(shown.options).toMatchObject({ select: true, focus: true });
+    const range = view.getParent(shown.element as SavedRow)!;
+    expect(item(view, range).label).toBe('[1000 … 1199]');
+    expect(item(view, view.getParent(range)!).label).toBe('orders');
+    // Found in the view the listing just took: no fresh view of its own.
+    const asked = gem.queries.find((q) => q.code.includes('_objectForOop: 77]'))!;
+    expect(asked.session).toBe('extension');
+    expect(asked.code).not.toContain('System abortTransaction.');
+  });
+
+  it('opens an object’s attribute by its name', async () => {
+    gem.committed.set('boss', 'Employee');
+    gem.refs.set('boss', 2);
+    gem.fields.set(
+      2,
+      row('id', '7', 'int', 0, 0, 0, 1) + row('name', "'Barbara'", 'str', 0, 0, 0, 2),
+    );
+    gem.paths.set(5, `${S}k0:boss${S}aname`);
+    const { view } = setUp();
+
+    await follow('oop=5');
+
+    expect(item(view, revealed()!.element as SavedRow).label).toBe('name');
+  });
+
+  it('finds a gemdb.root entry inside its range when gemdb.root has more than it lists', async () => {
+    const { ROOT_LISTING_LIMIT } = await import('../pauseVariables');
+    for (let i = 0; i < ROOT_LISTING_LIMIT + 30; i++) gem.committed.set(`k${i}`, 'int');
+    gem.paths.set(9, `${S}k${ROOT_LISTING_LIMIT + 15}:k${ROOT_LISTING_LIMIT + 15}`);
+    const { view } = setUp();
+
+    await follow('oop=9');
+
+    expect(item(view, revealed()!.element as SavedRow).label).toBe(`k${ROOT_LISTING_LIMIT + 15}`);
+  });
+
+  it('says so when the object is not under gemdb.root in what is committed', async () => {
+    const warned = vi.spyOn(window, 'showWarningMessage');
+    setUp();
+
+    await follow('oop=12');
+
+    expect(warned).toHaveBeenCalledWith(expect.stringMatching(/not under gemdb\.root/));
+    expect(__treeViews.get(VIEW_ID)!.reveals).toHaveLength(0);
+  });
+
+  it('shows the nearest row, and says so, when the path cannot be opened all the way', async () => {
+    gem.committed.set('boss', 'Employee');
+    gem.refs.set('boss', 2);
+    gem.fields.set(2, row('id', '7', 'int', 0, 0, 0, 1));
+    gem.paths.set(5, `${S}k0:boss${S}agone`);
+    const warned = vi.spyOn(window, 'showWarningMessage');
+    const { view } = setUp();
+
+    await follow('oop=5');
+
+    expect(item(view, revealed()!.element as SavedRow).label).toBe('boss');
+    expect(warned).toHaveBeenCalledWith(expect.stringContaining('gemdb.root["boss"].gone'));
+  });
+
+  it('ignores a link it did not write', async () => {
+    setUp();
+
+    await follow('oop=abc');
+    __uriHandler.handler!.handleUri({ path: '/elsewhere', query: 'oop=77' });
+    await settle();
+
+    expect(gem.queries.some((q) => q.code.includes('_objectForOop:'))).toBe(false);
+  });
+});
+
+describe('marking what %pending found changed', () => {
+  const S = '\u001d';
+  /** A snapshot as `snapshotQuery` writes one: an object's attributes, each as name, key, text. */
+  const snap = (...entries: Array<[string, string]>) =>
+    `#${F}obj${R}` +
+    entries.map(([name, value]) => `${name}${F}v${value}${F}${value}${R}`).join('');
+
+  async function marked() {
+    gem.committed.set('boss', 'Employee');
+    gem.refs.set('boss', 2);
+    gem.fields.set(2, row('id', '7', 'int', 0, 0, 0, 1) + row('total', '10', 'int', 0, 0, 0, 2));
+    gem.paths.set(5, `${S}k0:boss`);
+    gem.snapshots.set('extension:5', snap(['id', '7'], ['total', '10']));
+    gem.snapshots.set(`${NB}:5`, snap(['id', '7'], ['total', '15'], ['note', "'late'"]));
+    gem.dirty.add(NB);
+    pauseIn(NB);
+    const { view } = setUp();
+    await command('gemdb.savedObjects.notePendingChanges')({
+      ownerKey: NB,
+      label: 'breakpoint.ipynb',
+      oops: [5],
+    });
+    const [root] = await topOf(view);
+    const [boss] = await view.getChildren(root);
+    return { view, boss };
+  }
+
+  it('marks a changed object’s row M, says what changed, and sets both sides in its hover', async () => {
+    const { view, boss } = await marked();
+    const shown = item(view, boss);
+
+    expect(shown.description).toBe('changed: 1 changed, 1 added');
+    expect(shown.resourceUri?.scheme).toBe('gemdb-changed');
+    expect(__fileDecorations.at(-1)!.provideFileDecoration(shown.resourceUri!)).toMatchObject({
+      badge: 'M',
+    });
+    const hover = (shown.tooltip as MarkdownString).value;
+    expect(hover).toContain('- `total`: committed `10` → next commit `15`');
+    expect(hover).toContain("- `note`: added by the next commit: `'late'`");
+    expect(hover).toContain('Changed in breakpoint.ipynb, not committed yet.');
+  });
+
+  it('marks the changed attribute inside it with what is committed and what will be', async () => {
+    const { view, boss } = await marked();
+    const [id, total] = await view.getChildren(boss);
+
+    expect(item(view, total).description).toBe('10 → 15');
+    expect(item(view, total).resourceUri?.scheme).toBe('gemdb-changed');
+    // An attribute that does not change is left as it was.
+    expect(item(view, id).resourceUri).toBeUndefined();
+    expect(item(view, id).description).toBe('7');
+  });
+
+  it('offers Revert to Committed Value on a changed row, and keeps its other menu items', async () => {
+    const { view, boss } = await marked();
+    const [id, total] = await view.getChildren(boss);
+
+    expect(item(view, boss).contextValue).toBe('gemdbSavedObject gemdbChanged');
+    expect(item(view, total).contextValue).toBe('gemdbPersistedField gemdbChanged');
+    expect(item(view, id).contextValue).toBe('gemdbPersistedField');
+  });
+
+  it('reverts one entry in the notebook after asking, and its mark goes', async () => {
+    const { view, boss } = await marked();
+    const [, total] = await view.getChildren(boss);
+    const asked = vi.spyOn(window, 'showWarningMessage').mockResolvedValue('Revert' as never);
+
+    await command('gemdb.savedObjects.revert')(total);
+
+    expect(asked).toHaveBeenCalledWith(
+      'Revert gemdb.root["boss"]\'s total to its committed value?',
+      expect.objectContaining({ modal: true, detail: expect.stringContaining('goes back to 10') }),
+      'Revert',
+    );
+    expect(gem.reverts).toEqual([
+      { session: NB, code: expect.stringContaining('setattr(_gemdb_obj, "total", 10)') },
+    ]);
+    // Only that entry: the added note is left alone.
+    expect(gem.reverts[0].code).not.toContain('note');
+    // Everything now reads as committed, so nothing is marked.
+    expect(item(view, total).resourceUri).toBeUndefined();
+    expect(item(view, boss).resourceUri).toBeUndefined();
+    expect(item(view, boss).contextValue).toBe('gemdbSavedObject');
+  });
+
+  it('reverts nothing when the user does not confirm', async () => {
+    const { view, boss } = await marked();
+    vi.spyOn(window, 'showWarningMessage').mockResolvedValue(undefined);
+
+    await command('gemdb.savedObjects.revert')(boss);
+
+    expect(gem.reverts).toEqual([]);
+    expect(item(view, boss).resourceUri?.scheme).toBe('gemdb-changed');
+  });
+
+  it('drops the marks once the notebook has nothing left to commit', async () => {
+    const { view } = await marked();
+    gem.dirty.clear();
+
+    const [root] = await topOf(view);
+    const [boss] = await view.getChildren(root);
+
+    expect(item(view, boss).resourceUri).toBeUndefined();
   });
 });
