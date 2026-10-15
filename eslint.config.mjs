@@ -99,6 +99,14 @@ export default tseslint.config(
                 'a report* function in src/telemetry.ts and call it from a file ' +
                 'outside the shell graph (extension.ts, lifecycle.ts, ...).',
             },
+            {
+              group: ['**/scarfTransport'],
+              message:
+                'This file reaches out/gemdb-shell.js, where there is no extension ' +
+                "host to enforce the user's telemetry setting, and scarfTransport " +
+                'sends to Scarf with no consent check of its own. Only ' +
+                'src/telemetry.ts may use it.',
+            },
           ],
         },
       ],

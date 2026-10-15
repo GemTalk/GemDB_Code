@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { TelemetryReporter } from '@vscode/extension-telemetry';
 import type { DiskSnapshot } from './paths';
+import type { ScarfTransport } from './scarfTransport';
 import type { GemDbState } from './statusView';
 
 /**
@@ -10,13 +11,14 @@ import type { GemDbState } from './statusView';
  *
  * Four rules a future edit can break, none visible from a call site:
  *
- * 1. **This module must never reach `out/gemdb-shell.js`** — no extension host
- *    there enforces the user's telemetry setting (CLAUDE.md, "`gemdb` with no
- *    arguments IS the GemDB Shell"). `no-restricted-imports` in
- *    `eslint.config.mjs` denies it to every shell-graph file, `session.ts` and
- *    `pythonQueries.ts` permanently (they get an injected sink instead);
- *    `assertNoTelemetryInShellBundle` in `esbuild.mjs` checks the built graph
- *    and is the guard that actually holds.
+ * 1. **This module, and `scarfTransport.ts` with it, must never reach
+ *    `out/gemdb-shell.js`** — no extension host there enforces the user's
+ *    telemetry setting (CLAUDE.md, "`gemdb` with no arguments IS the GemDB
+ *    Shell"). `no-restricted-imports` in `eslint.config.mjs` denies both to
+ *    every shell-graph file, `session.ts` and `pythonQueries.ts` permanently
+ *    (they get an injected sink instead); `assertNoTelemetryInShellBundle` in
+ *    `esbuild.mjs` checks the built graph and is the guard that actually
+ *    holds.
  * 2. **Never `sendDangerousTelemetryEvent`** or its siblings: they bypass the
  *    user's setting by design, and shipping one violates Marketplace policy.
  * 3. **Events are facts, not funnels: no `first*` events.** First-ness is
@@ -58,6 +60,65 @@ const CONNECTION_STRING =
   'IngestionEndpoint=https://westus2-2.in.applicationinsights.azure.com/;' +
   'LiveEndpoint=https://westus2.livediagnostics.monitor.azure.com/;' +
   'ApplicationId=0459d5a4-2436-4702-9979-c274a9da9b37';
+
+// Not a secret either — anyone can send to a Scarf gateway; it only says
+// where events land.
+const SCARF_ENDPOINT = 'https://gemdb.gateway.scarf.sh/gemdb/code/telemetry';
+
+/**
+ * The `common.*` properties Scarf is sent; VS Code's others stay with App
+ * Insights. An allowlist rather than a denylist, so a property VS Code adds
+ * later never reaches Scarf unreviewed. GemDB's own properties and measures
+ * are not listed: they all go, so a new one needs no change here.
+ *
+ * `common.vscodemachineid` is left out on purpose: without it nothing Scarf
+ * holds identifies an installation, so there is nothing to look up or delete
+ * there on a user's request.
+ */
+const SCARF_COMMON_FIELDS = new Set([
+  'common.extversion',
+  'common.os',
+  'common.vscodeversion',
+  'common.remotename',
+]);
+
+/**
+ * The request that reports one event to Scarf: `event` first, then every
+ * field as a query parameter — so the gateway needs no path template, and
+ * one that matches every event never falls behind `EVENT`. Every value is
+ * sent as a string, measures included.
+ */
+export function scarfUrl(eventName: string, data: Record<string, unknown>): string {
+  const params = [`event=${encodeURIComponent(eventName)}`];
+  for (const [key, value] of Object.entries(data)) {
+    if (value === undefined) continue;
+    if (key.startsWith('common.') && !SCARF_COMMON_FIELDS.has(key)) continue;
+    params.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+  }
+  return `${SCARF_ENDPOINT}?${params.join('&')}`;
+}
+
+/**
+ * Reports each event to Scarf through `transport`, which owns the network
+ * and never throws.
+ *
+ * VS Code prefixes every event name with the extension id
+ * (`gemtalksystems.gemdb/activated`) before a sender sees it; that is
+ * stripped, so Scarf's `event` reads as `EVENT` spells it.
+ *
+ * Exported only so tests can drive it, as `EVENT` is.
+ */
+export class ScarfSender implements vscode.TelemetrySender {
+  constructor(private readonly transport: ScarfTransport) {}
+
+  sendEventData(eventName: string, data?: Record<string, unknown>): void {
+    const name = eventName.slice(eventName.indexOf('/') + 1);
+    this.transport.get(scarfUrl(name, data ?? {}));
+  }
+
+  /** GemDB sends no error telemetry. */
+  sendErrorData(): void {}
+}
 
 /**
  * Every event GemDB can emit. `send` is typed to it, so a name cannot be
