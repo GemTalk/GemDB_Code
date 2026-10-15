@@ -97,6 +97,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now prints only `KeyboardInterrupt`, as Python does. GemStone's own messages from a `gemdb` run are
   shown only when the program could not run to the end, such as a refused login, and a
   `.topazini` file is no longer read.
+- **Closing the terminal ends a `gemdb` run.** Closing the terminal tab of `gemdb app.py`, or of
+  **Run Python File in GemDB**, left the program running out of sight, holding a database session
+  and, for a web app, its port. It is now stopped as Ctrl+C would stop it: its `finally` blocks run
+  and its session is given back.
 
 ## [1.6.0] - 2026-10-07
 

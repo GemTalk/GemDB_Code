@@ -311,35 +311,53 @@ exit [lindex $result 3]
     expect(ran.code).toBe(1);
   });
 
-  it('leaves no temporary files behind, even when its terminal closes mid-run', async () => {
+  it('ends the program, finally blocks and all, when its terminal closes', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gemdb-cli-tmp-'));
     const env = { ...process.env, TMPDIR: tmp };
+    fs.rmSync(path.join(workDir, 'hung-up.txt'), { force: true });
     fs.writeFileSync(
-      path.join(workDir, 'forever.py'),
-      'import time\nprint("serving", flush=True)\nwhile True:\n    time.sleep(0.2)\n',
+      path.join(workDir, 'quiet.py'),
+      'import time\nprint("serving", flush=True)\ntry:\n    while True:\n        time.sleep(0.2)\n' +
+        'finally:\n    open("hung-up.txt", "w").write("finally ran")\n',
     );
     await new Promise((resolve) =>
       execFile('bash', [cliPath(), '-c', 'print(1)'], { cwd: workDir, env }, resolve),
     );
-    // Its own process group, so the hangup reaches the wrapper and topaz
-    // together, as closing a terminal tab does.
-    const child = spawn('bash', [cliPath(), 'forever.py'], { cwd: workDir, env, detached: true });
-    const exited = new Promise((resolve) => child.on('exit', resolve));
-    await new Promise<void>((resolve) => {
-      child.stdout.on('data', (chunk: Buffer) => {
-        if (chunk.toString().includes('serving')) resolve();
-      });
-    });
+    // Closing expect's side of the pty is what closing a terminal tab does:
+    // the kernel hangs up the foreground process group, wrapper and topaz.
+    const scriptPath = path.join(workDir, 'hangup.exp');
+    fs.writeFileSync(
+      scriptPath,
+      `set timeout 90
+spawn bash ${cliPath()} quiet.py
+expect {
+  -ex "serving" {}
+  timeout { puts stderr "TIMEOUT waiting to serve"; exit 9 }
+}
+puts "WRAPPER=[exp_pid] TOPAZ=[exec pgrep -P [exp_pid] -x topaz]"
+close
+`,
+    );
+    // On 'exit', not when its output closes: a topaz left running would hold
+    // expect's pipes open, and the test would time out instead of failing.
+    const expectRun = spawn('/usr/bin/expect', ['-f', scriptPath], { cwd: workDir, env });
+    let transcript = '';
+    expectRun.stdout.on('data', (chunk: Buffer) => (transcript += chunk.toString()));
+    await new Promise((resolve) => expectRun.on('exit', resolve));
+    const topaz = Number(/TOPAZ=(\d+)/.exec(transcript)?.[1]);
+    const wrapper = Number(/WRAPPER=(\d+)/.exec(transcript)?.[1]);
 
-    process.kill(-(child.pid ?? 0), 'SIGHUP');
-    await exited;
+    // topaz ignores SIGHUP, so this is the wrapper's doing: what Ctrl-C sends.
+    // The wrapper goes last, once it has seen topaz go and removed its files.
+    const ended = await waitForProcessToEnd(topaz, 15_000);
+    await waitForProcessToEnd(wrapper, 15_000);
     const left = fs.readdirSync(tmp);
-    // topaz outlives a hangup, as it did before the wrapper had a trap, so it
-    // is ended here: left running it holds a session the next test needs gone.
-    process.kill(-(child.pid ?? 0), 'SIGTERM');
-    await waitForGroupToEnd(child.pid ?? 0);
+    if (!ended) process.kill(topaz, 'SIGTERM');
     fs.rmSync(tmp, { recursive: true, force: true });
 
+    expect(topaz).toBeGreaterThan(0);
+    expect(ended).toBe(true);
+    expect(fs.readFileSync(path.join(workDir, 'hung-up.txt'), 'utf8')).toBe('finally ran');
     expect(left).toEqual([]);
   });
 
@@ -386,15 +404,15 @@ function canMakeFixture(): boolean {
   return probe !== undefined;
 }
 
-/** Resolves once no process in the group is left, polling as `kill -0` does. */
-async function waitForGroupToEnd(pgid: number): Promise<void> {
-  for (let i = 0; i < 100; i++) {
+/** Whether `pid` has exited within `ms`, polling as `kill -0` does. */
+async function waitForProcessToEnd(pid: number, ms: number): Promise<boolean> {
+  for (let waited = 0; waited < ms; waited += 100) {
     try {
-      process.kill(-pgid, 0);
+      process.kill(pid, 0);
     } catch {
-      return;
+      return true;
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`process group ${pgid} still running after 10 s`);
+  return false;
 }
