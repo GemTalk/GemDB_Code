@@ -6,7 +6,13 @@ import { dbPassword, dbUser, rootPath, stoneName } from './config';
 import { platformKey, sharedLibraryExtension } from './platform';
 import { errorMessage, log, logStep } from './log';
 import { engineEnvironment, shimLibraryPath } from './processes';
-import { grailFailurePath, grailPath, grailStampPath, installedGrailStamp } from './paths';
+import {
+  grailDeclinedPath,
+  grailFailurePath,
+  grailPath,
+  grailStampPath,
+  installedGrailStamp,
+} from './paths';
 import { logoutAll } from './session';
 import { writeCliScripts } from './cli';
 
@@ -123,6 +129,34 @@ export function recordGrailInstalled(extensionPath: string): void {
   if (!stamp) return;
   fs.writeFileSync(grailStampPath(), `${stamp}\n`);
   fs.rmSync(grailFailurePath(), { force: true });
+  fs.rmSync(grailDeclinedPath(), { force: true });
+}
+
+/**
+ * Record that the user kept the bundled Grail out of the database, so that
+ * `ensureRunning` does not ask again on every cell for the same build.
+ *
+ * Per build: an update that ships a different one is a new question.
+ */
+export function recordGrailUpdateDeclined(extensionPath: string): void {
+  const stamp = bundledGrailStamp(extensionPath);
+  if (!stamp) return;
+  try {
+    fs.mkdirSync(path.dirname(grailDeclinedPath()), { recursive: true });
+    fs.writeFileSync(grailDeclinedPath(), `${stamp}\n`);
+  } catch (e) {
+    // Costs only a repeat of the question.
+    log(`Could not record that the Python update was declined: ${errorMessage(e)}`);
+  }
+}
+
+/** The Grail build the user last kept out of the database, if any. */
+export function grailUpdateDeclined(): string | undefined {
+  try {
+    return fs.readFileSync(grailDeclinedPath(), 'utf8').trim();
+  } catch {
+    return undefined;
+  }
 }
 
 /** What the status view needs to say that filing Grail in failed. */

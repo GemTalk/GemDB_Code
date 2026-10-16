@@ -271,10 +271,6 @@ export function rootPath(): string {
   return expandHome(vscode.workspace.getConfiguration('gemdb').get<string>('rootPath', '~/GemDB'));
 }
 
-export function reinstallPythonOnUpdate(): boolean {
-  return vscode.workspace.getConfiguration('gemdb').get<boolean>('reinstallPythonOnUpdate', true);
-}
-
 /**
  * The port the bundled MCP server listens on, and why it is not 8000.
  *

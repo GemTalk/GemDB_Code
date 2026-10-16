@@ -1,3 +1,4 @@
+import * as vscode from 'vscode';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { __resetSettings, __setSetting } from '../__mocks__/vscode';
 import { eventsNamed, fakeExtensionContext } from './telemetryTestSupport';
@@ -15,12 +16,16 @@ vi.mock('../account', () => ({ ensureDatabaseAccount: () => {} }));
 const bundledGrailStamp = vi.fn(() => 'grail=0.1-1-gabc\n');
 const grailNeedsUpdate = vi.fn(() => false);
 const fileInGrail = vi.fn(async () => {});
+const grailUpdateDeclined = vi.fn((): string | undefined => undefined);
+const recordGrailUpdateDeclined = vi.fn((_extensionPath: string) => {});
 vi.mock('../grail', () => ({
   grailLabel: () => 'grail 0.1',
   grailNeedsUpdate: () => grailNeedsUpdate(),
   stageGrail: () => {},
   fileInGrail: () => fileInGrail(),
   bundledGrailStamp: () => bundledGrailStamp(),
+  grailUpdateDeclined: () => grailUpdateDeclined(),
+  recordGrailUpdateDeclined: (extensionPath: string) => recordGrailUpdateDeclined(extensionPath),
 }));
 
 const grailInstalled = vi.fn(() => true);
@@ -71,7 +76,7 @@ vi.mock('../autoStart', () => ({
   suppressAutoStart: () => {},
 }));
 
-const { ensureRunning, resumeRunning } = await import('../lifecycle');
+const { ensureRunning, reinstallGrail, resumeRunning } = await import('../lifecycle');
 // Constants on the act side, literals on the assert side: the expectations pin
 // the wire value, so renaming one must fail here rather than silently split a
 // series in App Insights.
@@ -227,22 +232,16 @@ describe('resumeRunning', () => {
     ]);
   });
 
-  it('files in an update when updates are allowed, as a start would', async () => {
+  it('leaves an update for the user to answer: opening the editor never asks', async () => {
     grailNeedsUpdate.mockReturnValue(true);
+    const ask = vi.spyOn(vscode.window, 'showWarningMessage');
 
     await resumeRunning('/ext');
 
-    expect(fileInGrail).toHaveBeenCalledTimes(1);
-  });
-
-  it('leaves an update alone when updates are turned off', async () => {
-    grailNeedsUpdate.mockReturnValue(true);
-    __setSetting('gemdb.reinstallPythonOnUpdate', false);
-
-    await resumeRunning('/ext');
-
+    expect(ask).not.toHaveBeenCalled();
     expect(fileInGrail).not.toHaveBeenCalled();
     expect(eventsNamed('databaseStarted')).toHaveLength(0);
+    ask.mockRestore();
   });
 
   it('leaves a database with current Python support to the MCP server alone', async () => {
@@ -272,5 +271,124 @@ describe('resumeRunning', () => {
     await resumeRunning('/ext');
 
     expect(fileInGrail).not.toHaveBeenCalled();
+  });
+});
+
+// Filing a newer Grail into a database that already has Python support makes
+// what was committed under the old one stop behaving as its type (measured:
+// datetimes, Decimals, tuples, sets, user classes, a stored None). So an
+// update is asked about, by whoever started something, never by GemDB alone.
+describe('an update to Python support', () => {
+  const INSTALL = 'Install Python Support';
+  let ask: ReturnType<typeof vi.spyOn>;
+  const answer = (choice: string | undefined) =>
+    ask.mockImplementation(async () => choice as unknown as vscode.MessageItem);
+
+  beforeEach(() => {
+    __resetSettings();
+    bundledGrailStamp.mockReturnValue('grail=0.2-1-gdef\n');
+    grailNeedsUpdate.mockReturnValue(true);
+    grailInstalled.mockReturnValue(true);
+    grailUpdateDeclined.mockReset().mockReturnValue(undefined);
+    recordGrailUpdateDeclined.mockClear();
+    isInstalled.mockReturnValue(true);
+    ensureOsConfigured.mockReset().mockResolvedValue('alreadyConfigured');
+    isSharedMemoryConfigured.mockReset().mockResolvedValue(true);
+    fileInGrail.mockClear();
+    ensureProcesses.mockReset().mockResolvedValue(nothingStarted);
+    initTelemetry(fakeExtensionContext(), false);
+    ask?.mockRestore();
+    ask = vi.spyOn(vscode.window, 'showWarningMessage');
+  });
+
+  it('asks, with a warning, before installing it', async () => {
+    answer(INSTALL);
+
+    expect(await ensureRunning('/ext', TRIGGER.notebook)).toBe(true);
+
+    expect(ask).toHaveBeenCalledTimes(1);
+    const [message, options] = ask.mock.calls[0] as [string, vscode.MessageOptions];
+    expect(options).toMatchObject({ modal: true });
+    expect(`${message} ${options.detail}`).toMatch(/dates and times/);
+    expect(fileInGrail).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the current Python support, and still starts, when the answer is no', async () => {
+    answer('Keep Current');
+
+    expect(await ensureRunning('/ext', TRIGGER.startCommand)).toBe(true);
+
+    expect(fileInGrail).not.toHaveBeenCalled();
+    expect(recordGrailUpdateDeclined).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts a dismissed question as no', async () => {
+    answer(undefined);
+
+    await ensureRunning('/ext', TRIGGER.shell);
+
+    expect(fileInGrail).not.toHaveBeenCalled();
+    expect(recordGrailUpdateDeclined).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not ask again about a build the user has already kept out', async () => {
+    grailUpdateDeclined.mockReturnValue('grail=0.2-1-gdef\n');
+
+    expect(await ensureRunning('/ext', TRIGGER.notebook)).toBe(true);
+
+    expect(ask).not.toHaveBeenCalled();
+    expect(fileInGrail).not.toHaveBeenCalled();
+  });
+
+  it('asks again when a later update ships a different build', async () => {
+    grailUpdateDeclined.mockReturnValue('grail=0.1-1-gabc\n');
+    answer(INSTALL);
+
+    await ensureRunning('/ext', TRIGGER.notebook);
+
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(fileInGrail).toHaveBeenCalledTimes(1);
+  });
+
+  it('never asks when nobody asked for the database: auto-start and agents', async () => {
+    for (const trigger of [TRIGGER.autoStart, TRIGGER.mcp]) {
+      expect(await ensureRunning('/ext', trigger)).toBe(true);
+    }
+
+    expect(ask).not.toHaveBeenCalled();
+    expect(fileInGrail).not.toHaveBeenCalled();
+    expect(recordGrailUpdateDeclined).not.toHaveBeenCalled();
+  });
+
+  it('ignores the setting that used to install updates unasked', async () => {
+    __setSetting('gemdb.reinstallPythonOnUpdate', true);
+    answer('Keep Current');
+
+    await ensureRunning('/ext', TRIGGER.notebook);
+
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(fileInGrail).not.toHaveBeenCalled();
+  });
+
+  it('installs Python support into a database that has none without asking', async () => {
+    grailInstalled.mockReturnValue(false);
+
+    await ensureRunning('/ext', TRIGGER.autoStart);
+
+    expect(ask).not.toHaveBeenCalled();
+    expect(fileInGrail).toHaveBeenCalledTimes(1);
+  });
+
+  it('warns before reinstalling on request, and reinstalls only on yes', async () => {
+    grailNeedsUpdate.mockReturnValue(false);
+    answer(undefined);
+    await reinstallGrail('/ext');
+    expect(fileInGrail).not.toHaveBeenCalled();
+
+    answer(INSTALL);
+    await reinstallGrail('/ext');
+
+    expect(ask).toHaveBeenCalledTimes(2);
+    expect(fileInGrail).toHaveBeenCalledTimes(1);
   });
 });
