@@ -106,8 +106,34 @@ export const ExtensionMode = { Production: 1, Development: 2, Test: 3 } as const
  * common property, so a call that forgets to pass a properties object (see
  * `telemetry.ts`'s own warning against ever doing that) is regression-tested
  * rather than only commented on.
+ *
+ * Given a real sender — one with `sendEventData` — it hands every event to
+ * it the way VS Code does: the name prefixed with the extension id, and the
+ * common properties mixed in by the same rule, plus any
+ * `additionalCommonProperties` that logger was created with. Only that
+ * logger gets those, as in VS Code, so a sink that needs a property only
+ * another logger adds is caught. Common properties win over the event's own
+ * when a key collides, as VS Code's `mixin` does. Those events never reach
+ * `__telemetry`, which stays the record of what the `TelemetryReporter` mock
+ * (which passes no sender) sent, so a second sink is tested through the
+ * sender's own effects without doubling every event recorded there.
  */
 const FAKE_COMMON_PROPERTIES: Record<string, string> = { 'common.fake': 'yes' };
+
+/** What VS Code puts in front of every event name a sender receives: `<publisher>.<name>/`. */
+export const FAKE_EVENT_NAME_PREFIX = 'gemtalksystems.gemdb/';
+
+interface FakeTelemetrySender {
+  sendEventData(eventName: string, data?: Record<string, unknown>): void;
+}
+
+function isTelemetrySender(sender: unknown): sender is FakeTelemetrySender {
+  return (
+    typeof sender === 'object' &&
+    sender !== null &&
+    typeof (sender as Partial<FakeTelemetrySender>).sendEventData === 'function'
+  );
+}
 
 /** Two-line insurance: nothing here reads `env` today, but `activate()` does. */
 export const env = {
@@ -123,8 +149,8 @@ export const env = {
   },
   uiKind: UIKind.Desktop,
   createTelemetryLogger(
-    _sender: unknown,
-    _options?: unknown,
+    sender: unknown,
+    options?: { additionalCommonProperties?: Record<string, unknown> },
   ): {
     isUsageEnabled: boolean;
     isErrorsEnabled: boolean;
@@ -142,9 +168,19 @@ export const env = {
       onDidChangeEnableStates: () => new Disposable(() => {}),
       logUsage: (name, data) => {
         const properties = data?.properties;
+        const common = { ...options?.additionalCommonProperties, ...FAKE_COMMON_PROPERTIES };
+        if (isTelemetrySender(sender)) {
+          sender.sendEventData(
+            `${FAKE_EVENT_NAME_PREFIX}${name}`,
+            properties
+              ? { ...data, properties: { ...properties, ...common } }
+              : { ...data, ...common },
+          );
+          return;
+        }
         __telemetry.push({
           name,
-          properties: properties ? { ...FAKE_COMMON_PROPERTIES, ...properties } : {},
+          properties: properties ? { ...properties, ...common } : {},
           measurements: data?.measurements,
         });
       },

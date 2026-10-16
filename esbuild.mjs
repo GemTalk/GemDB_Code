@@ -89,9 +89,11 @@ const builds = [
 ];
 
 /**
- * Neither telemetry.ts nor the `@vscode/extension-telemetry` package it wraps
- * may reach the shell bundle: there is no extension host there to enforce the
- * user's telemetry setting (see telemetry.ts). ESLint's `no-restricted-imports`
+ * Neither telemetry.ts, scarfTransport.ts, nor the `@vscode/extension-telemetry`
+ * package may reach the shell bundle: there is no extension host there to
+ * enforce the user's telemetry setting (see telemetry.ts). scarfTransport.ts
+ * sends to Scarf with no consent check of its own; the logger telemetry.ts
+ * wraps it in is what honours the setting. ESLint's `no-restricted-imports`
  * catches a direct import of telemetry.ts, but not a rename, a re-export, or a
  * facade module — checking the graph esbuild actually built catches all of
  * those. The package check is the ultimate guard: it also catches a file that
@@ -103,13 +105,15 @@ const builds = [
 function assertNoTelemetryInShellBundle(result) {
   if (!result.metafile) return;
   const inputs = Object.keys(result.metafile.inputs);
-  const reachedOwnModule = inputs.some((input) => input.endsWith('src/telemetry.ts'));
-  const reachedPackage = inputs.some((input) =>
-    input.includes('node_modules/@vscode/extension-telemetry/'),
-  );
-  if (reachedOwnModule || reachedPackage) {
+  const reached = [
+    inputs.some((input) => input.endsWith('src/telemetry.ts')) && 'src/telemetry.ts',
+    inputs.some((input) => input.endsWith('src/scarfTransport.ts')) && 'src/scarfTransport.ts',
+    inputs.some((input) => input.includes('node_modules/@vscode/extension-telemetry/')) &&
+      '@vscode/extension-telemetry',
+  ].find(Boolean);
+  if (reached) {
     throw new BuildAssertionError(
-      `out/gemdb-shell.js pulled in ${reachedOwnModule ? 'src/telemetry.ts' : '@vscode/extension-telemetry'}. ` +
+      `out/gemdb-shell.js pulled in ${reached}. ` +
         "There is no extension host in the shell to enforce the user's telemetry setting — " +
         'this must never ship.',
     );
