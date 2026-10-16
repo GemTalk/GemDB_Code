@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Open a persisted object in the Persisted Objects view, with nothing paused.** Each entry under
+  `gemdb.root` opens like a Variables row, with its type badges and its special, class and function
+  variables folded, and what is inside it opens in turn. A committed entry is read by GemDB's own
+  session, so it opens any time, in a new window, after a restart; one added and not committed yet
+  is read by its notebook's session, while that notebook is not running a cell. A slow `__repr__`
+  is cut off at two seconds, as in Variables. A saved stack still opens in the debugger instead.
+- **Ranges for a long list in the Persisted Objects view.** A list or dict longer than 500 items
+  opens to ranges of 500 — `[0 … 499]`, `[500 … 999]`, … — each opening to its items and nested for
+  a very long one, as the Variables show them; nothing is read until a range is opened. When
+  `gemdb.root` holds more than 200 entries, it says how many and shows them as ranges of 200.
+- **Go to Item… in the Persisted Objects view.** Right-click a list, set or dict, or one of its
+  ranges, and type a position (a negative one counts from the end; `[42]`, as the ranges write it,
+  works too) or a dict's key — `'SKU0042'`, or just `SKU0042`, or `42` — and the view opens the
+  ranges down to that item and selects it. For a dict a key is tried first; a number that is no key
+  but is a position goes there and says so, and a key that isn't there says so and how keys are
+  written.
+- **`%pending` in the Debug Console: what the next commit writes.** At a pause, `%pending` lists
+  every persisted object the notebook's transaction has changed, each by its path under
+  `gemdb.root` (`gemdb.root["orders"][2]`), its type and its value now, with a link. Ctrl+click the
+  link (as every Debug Console link is followed) and Persisted Objects opens the rows down to that
+  object, ranges too, and selects it. VS Code asks once before it lets GemDB open its own links. The search for paths follows narrow, deep paths before
+  big containers, so an object many attributes down is found even beside a list of thousands; one
+  it can't find is listed as not found, without a link.
+  Persisted Objects marks each changed object **M**, in the colour of a modified file: its
+  description says what changes (`changed: total 10 → 15`, or how many entries changed, were added
+  and were removed), its hover sets each changed entry's committed value beside the one the next
+  commit writes, and a changed attribute or item inside it reads `10 → 15`. Right-click a marked
+  row for **Revert to Committed Value**: after asking, it puts that entry, or the whole object, back
+  as committed in the notebook's session — discarding the change, committing nothing — and the mark
+  goes, and `%pending` no longer lists it: an object that reads exactly as committed again
+  (reverted, or set to what it already held) is counted on one line, not listed, though the commit
+  still writes it back unchanged. A value is put back only as a plain literal or as the committed
+  object itself; a set, or a
+  value over 2,000 characters, says it can't be reverted. The marks go once the notebook commits or
+  discards its changes. Objects are matched by their permanent number, so a list
+  that grew still finds the right item. Objects created since the last commit are written as part
+  of the objects that now hold them. Objects outside `gemdb.root` — Grail's own records (its lists of a class's attribute names,
+  its module cache) and storage inside a Python object, such as a big dict's buckets — are counted
+  on one line, not listed.
+- **Pending changes in Persisted Objects, with nothing paused.** Every notebook with uncommitted
+  changes now has a row in Persisted Objects, with Commit and Abort, whether or not anything was
+  added from the debugger. Under it, **Pending changes** lists what its next commit changes, as
+  `%pending` does in the Debug Console. Click one to go to it under `gemdb.root`, where it is
+  marked **M** and can be reverted.
+
 ### Changed
 
 - **Usage data also goes to Scarf.** The same usage events GemDB already sends now go to
@@ -14,6 +61,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   telemetry off in VS Code turns off both. Scarf is not sent VS Code's machine id, so nothing it
   receives identifies your installation. [USAGE_DATA.md](USAGE_DATA.md) says what Scarf receives
   and how long it keeps it.
+
+### Fixed
+
+- **Typing past the `%` in the Debug Console keeps GemDB's suggestions.** Typing `%` listed the
+  commands, but typing on, as in `%p`, filtered every one of them out, leaving only the console's
+  history. VS Code reads where a suggestion starts as a 0-based position, and GemDB sent it 1-based.
+  The names suggested after `%persist ` and `persisted.` had the same fault.
+- **An untitled notebook is called by its name.** GemDB named a notebook by the last part of its
+  address, so an untitled one read `untitled:Untitled-1.ipynb?jupyter-notebook` wherever its
+  session is named, and a file name with a space read `my%20notes.ipynb`. They now read
+  `Untitled-1.ipynb` and `my notes.ipynb`.
+- **Persisted Objects reads again when the database starts or stops.** Opened while the database
+  was stopped, it kept saying "Start GemDB to see persisted objects." after Start until it was
+  closed and opened again; it now follows the status panel, which sees every start and stop.
 
 ## [1.7.0] - 2026-10-16
 

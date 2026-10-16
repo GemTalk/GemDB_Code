@@ -57,7 +57,7 @@ import { closeSessionFor, logoutAll, setInputHandler } from './session';
 import { GemDbStatusBar } from './statusBar';
 import { registerStatistics } from './statistics';
 import { openTodaysStatistics, startPruningStatistics } from './statmonitor';
-import { StatusViewProvider } from './statusView';
+import { StatusViewProvider, onRunningChange } from './statusView';
 import {
   SETUP_OUTCOME,
   SKIP_REASON,
@@ -104,7 +104,14 @@ export function activate(context: vscode.ExtensionContext): void {
   setContext('gemdb.externalDatabase', isExternalDatabase());
 
   const statusBar = new GemDbStatusBar();
-  const status = new StatusViewProvider(extensionPath, () => statusBar.refresh());
+  // Persisted Objects reads gemdb.root only while the database runs, so it reads again when
+  // the status panel sees the database start or stop; it is registered below.
+  const savedObjectsView: { refresh?: () => void } = {};
+  const runningChanged = onRunningChange(() => savedObjectsView.refresh?.());
+  const status = new StatusViewProvider(extensionPath, (state) => {
+    statusBar.refresh();
+    runningChanged(state);
+  });
   context.subscriptions.push(
     statusBar,
     vscode.window.registerTreeDataProvider('gemdbStatus', status),
@@ -118,6 +125,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Persisted Objects shows what gemdb.root holds and each notebook's pending
   // changes, so it re-reads after every cell: a cell is where commits happen.
   const savedObjects = registerSavedObjects(context);
+  savedObjectsView.refresh = () => savedObjects.refresh();
   const notebooks = new GemDbNotebookController(extensionPath, () => savedObjects.refresh());
   context.subscriptions.push(notebooks);
 

@@ -5,21 +5,26 @@ import { stageGrail } from '../grail';
 import { PythonFrame, parsePythonStack, pythonStackQuery } from '../haltStack';
 import {
   MAIN_MODULE,
+  PAGE,
+  PERSISTED_REGISTRY,
   PauseVariable,
   abortQuery,
   childrenQuery,
   commitQuery,
   freeKeyQuery,
   inspectQuery,
+  keyPositionQuery,
   keyTakenQuery,
   needsCommitQuery,
   parseChildren,
   parsePausedStack,
   parseSaveSuggestion,
   pausedStackQuery,
+  persistedRowsQuery,
   removeCommittedQuery,
   removeSavedQuery,
   rootListingQuery,
+  rootSizeQuery,
   saveSuggestionQuery,
   saveToRootQuery,
   setVariableQuery,
@@ -845,6 +850,94 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
     expect(failed).toBe(true);
     expect(printed.join('')).toBe('still printing\n');
     expect(result.value).toBe("'done'");
+  });
+
+  it('opens a persisted object with nothing paused: an addition in its notebook, then committed, in GemDB’s own', async () => {
+    const nb = notebook('bp-open-persisted');
+    await runPython(
+      [
+        'import gemdb',
+        'class P:',
+        '    def __init__(self, name, report=None):',
+        '        self.name = name',
+        '        self.report = report',
+        '        self.items = list(range(600))',
+        '        self.by_sku = {"SKU%04d" % n: n for n in range(700)}',
+        '        self.by_sku[42] = "an int key"',
+        'gemdb.root["po_draft"] = P("Ada", P("Grace"))',
+      ].join('\n'),
+      nb,
+    );
+    const inNb = (code: string) => sessionForIfOpen(nb.key)!.executeAsync(code);
+    const byName = (rows: PauseVariable[], name: string) => rows.find((r) => r.name === name)!;
+    const open = async (run: (code: string) => Promise<string>, ref: number) =>
+      parseChildren(await run(childrenQuery(ref, 0, PAGE, PERSISTED_REGISTRY)));
+
+    // Not committed: only the notebook's own session sees it, and opens it there.
+    const pending = parseChildren(await inNb(persistedRowsQuery(['po_draft', 'po_not_there'])));
+    const draft = await open(inNb, pending[0].ref);
+    const report = await open(inNb, byName(draft, 'report').ref);
+
+    const commit = unquote(await inNb(commitQuery()));
+    const listed = byName(parseChildren(await executeAsync(rootListingQuery())), 'po_draft');
+    const committed = await open(executeAsync, listed.ref);
+    const items = await open(executeAsync, byName(committed, 'items').ref);
+    // A container's second range: its items from there, from the registry the view already holds.
+    const moreItems = parseChildren(
+      await executeAsync(
+        childrenQuery(byName(committed, 'items').ref, PAGE, PAGE, PERSISTED_REGISTRY),
+      ),
+    );
+    // Go to Item on a dict: where a key is, typed as its repr, bare, or not there at all.
+    const bySku = byName(committed, 'by_sku').ref;
+    const position = async (names: string[]) =>
+      Number(await executeAsync(keyPositionQuery(bySku, names, PERSISTED_REGISTRY)));
+    const strKey = await position(["'SKU0650'"]);
+    const intKey = await position(['42']);
+    const missing = await position(['SKU9999', "'SKU9999'"]);
+    const notADict = await executeAsync(
+      keyPositionQuery(byName(committed, 'items').ref, ['0'], PERSISTED_REGISTRY),
+    );
+    const atStrKey = parseChildren(
+      await executeAsync(childrenQuery(bySku, strKey, 1, PERSISTED_REGISTRY)),
+    );
+    // gemdb.root's ranges: a first listing of one, how many there are, then a range of the rest.
+    const firstPage = parseChildren(await executeAsync(rootListingQuery(0, 1)));
+    const rootSize = Number(await executeAsync(rootSizeQuery()));
+    const rest = parseChildren(await executeAsync(rootListingQuery(1, rootSize, false)));
+    const lastOfRest = rest.filter((r) => r.ref > 0).at(-1);
+    const restOpens = lastOfRest ? await open(executeAsync, lastOfRest.ref) : [];
+    await executeAsync(removeCommittedQuery(['po_draft']));
+    // The database allows only so many sessions, and later tests need theirs.
+    closeSessionFor(nb.key);
+
+    expect(commit).toBe('committed');
+    expect(pending.map((r) => [r.name, r.type])).toEqual([['po_draft', 'P']]);
+    expect(pending[0].ref).toBeGreaterThan(0);
+    expect(byName(draft, 'name').value).toBe("'Ada'");
+    expect(byName(report, 'name').value).toBe("'Grace'");
+    expect(listed.ref).toBeGreaterThan(0);
+    expect(byName(committed, 'name').value).toBe("'Ada'");
+    // A list longer than a page reads its first page; the view says how many more.
+    expect(byName(committed, 'items')).toMatchObject({ indexed: 600, size: 600 });
+    expect(items).toHaveLength(PAGE);
+    expect(items[0]).toMatchObject({ name: '[0]', value: '0' });
+    expect(moreItems.map((r) => r.name)).toEqual(
+      Array.from({ length: 600 - PAGE }, (_, i) => `[${PAGE + i}]`),
+    );
+    expect(strKey).toBe(650);
+    expect(atStrKey.map((r) => r.name)).toEqual(["'SKU0650'"]);
+    expect(intKey).toBe(700);
+    expect(missing).toBe(-1);
+    expect(notADict).toBe('-1');
+    expect(firstPage).toHaveLength(1);
+    expect(rest).toHaveLength(rootSize - 1);
+    expect([...firstPage, ...rest].map((r) => r.name)).toContain('po_draft');
+    // A range adds to the first listing's registry, so the rows of both open.
+    if (lastOfRest) {
+      expect(lastOfRest.ref).toBeGreaterThan(Math.max(0, ...firstPage.map((r) => r.ref)));
+      expect(restOpens.length).toBeGreaterThan(0);
+    }
   });
 
   it('saves a paused object under gemdb.root, for other sessions once the notebook commits', async () => {

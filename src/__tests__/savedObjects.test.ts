@@ -19,6 +19,7 @@ const {
   originOf,
   settleOrigins,
   notebookGuide,
+  shortPlace,
   plainGuide,
   inspectMarkdown,
   keyList,
@@ -27,6 +28,7 @@ const {
   suggestKey,
   topRows,
 } = await import('../savedObjects');
+const { parseSteps } = await import('../pauseVariables');
 
 describe('suggesting a key for a saved object', () => {
   it('names an object by its type and what identifies it', () => {
@@ -94,23 +96,25 @@ describe('the Persisted Objects view', () => {
     ]);
   });
 
-  it('lists gemdb.root first, then a notebook only while it holds additions not yet committed', () => {
+  it('lists gemdb.root first, then each notebook with additions or other changes not yet committed', () => {
     const entries = [{ key: 'ceo', type: 'Employee', value: '<Employee>' }];
 
     const rows = topRows(
       true,
-      [nb('a', true), nb('b', true)],
+      [nb('a', true), nb('b', true), nb('c', false)],
       [save('barbara', 'a'), save('grace', 'a')],
       entries,
     );
 
-    // gemdb.root first; b has uncommitted changes of its own, but nothing added from the debugger.
-    expect(rows.map((r) => r.kind)).toEqual(['root', 'notebook']);
+    // gemdb.root first; b has nothing added from the debugger, but changes of its own to commit,
+    // which its Pending changes list. c has nothing to commit.
+    expect(rows.map((r) => r.kind)).toEqual(['root', 'notebook', 'notebook']);
     expect(rows[0]).toEqual({ kind: 'root', entries });
     expect(rows[1]).toMatchObject({
       notebook: { key: 'a' },
       saves: [{ key: 'barbara' }, { key: 'grace' }],
     });
+    expect(rows[2]).toMatchObject({ notebook: { key: 'b' }, saves: [] });
   });
 
   it('says why gemdb.root could not be read, rather than showing it empty', () => {
@@ -253,12 +257,13 @@ describe('explaining Persisted Objects to someone new', () => {
     expect(ROOT_GUIDE).toContain('del gemdb.root["name"]');
   });
 
-  it('says on a notebook what Commit and Abort do to what it added', () => {
+  it('says on a notebook what Commit and Abort do to what it added and changed', () => {
     const guide = notebookGuide('breakpoint.ipynb');
 
     expect(guide).toMatch(/\*\*Commit\*\* \(✓\) persists/);
     expect(guide).toMatch(/\*\*Abort\*\* \(↺\)\s+discards/);
     expect(guide).toContain('Remove from Persisted Objects');
+    expect(guide).toContain('*Pending changes* lists every persisted object it has changed');
   });
 });
 
@@ -334,5 +339,31 @@ describe('naming several objects at once', () => {
     const keys = Array.from({ length: 11 }, (_, i) => `k${i}`);
 
     expect(keyList(keys)).toBe('k0, k1, k2, k3, k4, k5, k6, k7 and 3 more');
+  });
+});
+
+describe('naming a changed object in Pending changes', () => {
+  const S = '\u001d';
+  const place = (steps: string) => shortPlace(parseSteps(steps)!);
+
+  it('leads with the object’s own name, as its row under gemdb.root is named, then where it is', () => {
+    expect(place(`${S}k0:pending_demo${S}d2:'customer'`)).toEqual({
+      name: "'customer'",
+      within: 'pending_demo',
+    });
+    expect(place(`${S}k0:warehouse${S}aby_sku`)).toEqual({ name: 'by_sku', within: 'warehouse' });
+    expect(place(`${S}k0:boss`)).toEqual({ name: 'boss', within: '' });
+    expect(place('')).toEqual({ name: 'gemdb.root', within: '' });
+  });
+
+  it('names an item with its container, since [1] alone says nothing', () => {
+    expect(place(`${S}k0:warehouse${S}aorders${S}i11999`)).toEqual({
+      name: 'orders[11999]',
+      within: 'warehouse',
+    });
+    expect(place(`${S}k0:pending_demo${S}d1:'orders'${S}i1`)).toEqual({
+      name: "'orders'[1]",
+      within: 'pending_demo',
+    });
   });
 });

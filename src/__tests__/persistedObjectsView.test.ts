@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __clipboard,
   __commands,
+  __fileDecorations,
   __treeViews,
+  __uriHandler,
   MarkdownString,
   TreeItem,
   window,
@@ -46,6 +48,39 @@ class FakeGem {
   /** Committed saved stacks, by key: what the snapshot answers when opened. */
   stacks = new Map<string, string>();
 
+  /**
+   * Objects that open, as the Persisted Objects registry holds them: an
+   * entry's key (or a field's name) to its position there, and each
+   * position's children, as `childrenQuery` answers them.
+   */
+  refs = new Map<string, number>();
+  fields = new Map<number, string>();
+  /** Containers of this many items, by registry position, answered a page at a time as asked. */
+  lists = new Map<number, number>();
+  /** Which of `lists` are dicts, keyed `'k0'`, `'k1'`, … rather than lists. */
+  dicts = new Set<number>();
+  /** The path to each object by its permanent number, as `pathToQuery` answers; `?` for any other. */
+  paths = new Map<number, string>();
+  /** What `snapshotQuery` answers, by session and permanent number (`extension:7`). */
+  snapshots = new Map<string, string>();
+  /** What `pendingQuery` answers, by session; nothing written when absent. */
+  pendingLists = new Map<string, string>();
+  /** The reverts run, by session. */
+  reverts: Array<{ session: string; code: string }> = [];
+  /** Sessions with changes to commit beyond their additions, as a %pending would find them. */
+  dirty = new Set<string>();
+
+  /** An entry's row as a listing writes it: with a registry position when it opens. */
+  private entryRow(key: string, type: string): string {
+    const ref = this.refs.get(key) ?? 0;
+    const items = this.lists.get(ref);
+    if (items !== undefined) {
+      const kind = this.dicts.has(ref) ? 'dict' : 'seq';
+      return row(key, `<${type}>`, type, ref, items, 0, 1, items, 0, kind);
+    }
+    return row(key, `<${type}>`, type, ref, 0, ref ? 2 : 0, 1);
+  }
+
   run(session: string, code: string): string {
     this.queries.push({ session, code });
     const additions = this.additions(session);
@@ -61,12 +96,77 @@ class FakeGem {
     }
     const openStack = /_s = gemdb\.root\["([^"]+)"\]/.exec(code);
     if (openStack) return this.stacks.get(openStack[1]) ?? 'Error: KeyError - ' + openStack[1];
-    if (code.includes('list(gemdb.root.items())')) {
+    const slice = /list\(gemdb\.root\.items\(\)\)\[(\d+):(\d+)\]/.exec(code);
+    if (slice) {
       return [...this.committed]
-        .map(([key, type]) => row(key, `<${type}>`, type, 0, 0, 0, 1))
+        .slice(Number(slice[1]), Number(slice[2]))
+        .map(([key, type]) => this.entryRow(key, type))
         .join('');
     }
-    if (code.includes('System needsCommit')) return additions.size > 0 ? 'true' : 'false';
+    if (code.includes('len(gemdb.root)')) return String(this.committed.size);
+    if (code.includes('System _writtenObjects')) {
+      return this.pendingLists.get(session) ?? `#${F}0${F}0${F}0${R}`;
+    }
+    if (code.includes("#'_gemdb_obj'")) {
+      this.reverts.push({ session, code });
+      const n = /_objectForOop: (\d+)\)\./.exec(code)![1];
+      // As the database would: the notebook's object now reads as committed.
+      this.snapshots.set(`${session}:${n}`, this.snapshots.get(`extension:${n}`) ?? '');
+      return "'reverted'";
+    }
+    if (code.includes('textOf :=')) {
+      const n = /_objectForOop: (\d+)\]/.exec(code)![1];
+      return this.snapshots.get(`${session}:${n}`) ?? `#${F}gone${R}`;
+    }
+    const many = /#\(([\d ]+)\) do: \[:oop/.exec(code);
+    if (many) {
+      return many[1]
+        .split(' ')
+        .map((n) => `${n}${F}${this.paths.get(Number(n)) ?? '?'}${R}`)
+        .join('');
+    }
+    const oop = /_objectForOop: (\d+)\]/.exec(code);
+    if (oop) return this.paths.get(Number(oop[1])) ?? '?';
+    const opened =
+      /GemDbPersistedRefs' otherwise: nil\.\nobj := \(reg notNil and: \[(\d+) between/.exec(code);
+    if (code.includes('want := #(')) {
+      const ref = Number(/reg notNil and: \[(\d+) between/.exec(code)![1]);
+      const names = [...code.matchAll(/'((?:[^']|'')*)'/g)].map((m) => m[1].replace(/''/g, "'"));
+      const total = this.lists.get(ref) ?? 0;
+      const at = Array.from({ length: total }, (_, i) => `'k${i}'`).findIndex((n) =>
+        names.includes(n),
+      );
+      return String(this.dicts.has(ref) ? at : -1);
+    }
+    if (opened) {
+      const total = this.lists.get(Number(opened[1]));
+      if (total === undefined) return this.fields.get(Number(opened[1])) ?? '';
+      const start = Number(/start := (\d+)\./.exec(code)![1]);
+      const count = Number(/count := (\d+)\./.exec(code)![1]);
+      return Array.from({ length: Math.max(0, Math.min(start + count, total) - start) }, (_, i) =>
+        row(
+          this.dicts.has(Number(opened[1])) ? `'k${start + i}'` : `[${start + i}]`,
+          String(start + i),
+          'int',
+          0,
+          0,
+          0,
+          1,
+          -1,
+          0,
+        ),
+      ).join('');
+    }
+    const keys = /for _k in \[(.*?)\] if _k in gemdb\.root/.exec(code);
+    if (keys) {
+      return (JSON.parse(`[${keys[1]}]`) as string[])
+        .filter((key) => additions.has(key))
+        .map((key) => this.entryRow(key, additions.get(key)!))
+        .join('');
+    }
+    if (code.includes('System needsCommit')) {
+      return additions.size > 0 || this.dirty.has(session) ? 'true' : 'false';
+    }
     if (code.includes('count := 12.')) {
       return (
         row('value', '<Employee>', 'Employee', 0, 0, 1, 1) +
@@ -283,7 +383,7 @@ describe('the Persisted Objects view', () => {
     const { view } = setUp();
 
     const [root] = await topOf(view);
-    const entries = view.getChildren(root);
+    const entries = await view.getChildren(root);
 
     expect(item(view, root)).toMatchObject({
       label: 'gemdb.root',
@@ -320,7 +420,7 @@ describe('adding an object from the debugger', () => {
     });
     expect(gem.committed.size).toBe(0);
     const notebook = rows.find((r) => r.kind === 'notebook')!;
-    const [waiting] = view.getChildren(notebook);
+    const [waiting] = await view.getChildren(notebook);
     expect(item(view, waiting)).toMatchObject({
       label: 'employee_barbara',
       description: 'Employee · added, not persisted yet',
@@ -348,7 +448,7 @@ describe('adding an object from the debugger', () => {
     const rows = await topOf(view);
 
     const notebook = rows.find((r) => r.kind === 'notebook')!;
-    const [waiting] = view.getChildren(notebook);
+    const [waiting] = await view.getChildren(notebook);
     expect(item(view, waiting)).toMatchObject({
       label: 'p',
       description: 'list · added, not persisted yet',
@@ -470,7 +570,9 @@ describe('committing and aborting', () => {
     expect(gem.queries.some((q) => q.session === NB && q.code.includes('"committed"'))).toBe(true);
     expect(told).toHaveBeenCalledWith('Committed breakpoint.ipynb.');
     expect(rows.map((r) => r.kind)).toEqual(['root']);
-    expect(view.getChildren(rows[0]).map((e) => item(view, e).label)).toEqual(['employee_barbara']);
+    expect((await view.getChildren(rows[0])).map((e) => item(view, e).label)).toEqual([
+      'employee_barbara',
+    ]);
   });
 
   it('keeps the notebook an addition came from once it is committed, across a restart', async () => {
@@ -480,7 +582,7 @@ describe('committing and aborting', () => {
     await command('gemdb.savedObjects.commitNotebook')();
     const [root] = await topOf(view);
 
-    const [entry] = view.getChildren(root);
+    const [entry] = await view.getChildren(root);
     expect(item(view, entry).description).toBe('from breakpoint.ipynb · Employee = <Employee>');
     expect(store.values.get('gemdb.persistedObjectOrigins')).toMatchObject({
       employee_barbara: { notebook: 'breakpoint.ipynb', type: 'Employee' },
@@ -530,7 +632,7 @@ describe('committing and aborting', () => {
   it('commits from an added object’s row the notebook it waits in', async () => {
     const { view } = await withOneAddition();
     const rows = await topOf(view);
-    const [waiting] = view.getChildren(rows.find((r) => r.kind === 'notebook')!);
+    const [waiting] = await view.getChildren(rows.find((r) => r.kind === 'notebook')!);
 
     await command('gemdb.savedObjects.commit')(waiting);
 
@@ -546,7 +648,7 @@ describe('removing objects', () => {
     vi.spyOn(window, 'showInputBox').mockResolvedValue('draft');
     await command('gemdb.saveVariable')(variable('self', 5));
     const rows = await topOf(view);
-    const [waiting] = view.getChildren(rows.find((r) => r.kind === 'notebook')!);
+    const [waiting] = await view.getChildren(rows.find((r) => r.kind === 'notebook')!);
     const warned = vi.spyOn(window, 'showWarningMessage');
 
     await command('gemdb.savedObjects.remove')(waiting);
@@ -561,7 +663,7 @@ describe('removing objects', () => {
     gem.committed.set('a', 'Employee').set('b', 'Employee').set('c', 'Employee');
     const { view } = setUp();
     const [root] = await topOf(view);
-    const [a, , c] = view.getChildren(root);
+    const [a, , c] = await view.getChildren(root);
     const warned = vi.spyOn(window, 'showWarningMessage').mockResolvedValue('Remove' as never);
 
     await command('gemdb.savedObjects.remove')(a, [a, c]);
@@ -580,7 +682,7 @@ describe('removing objects', () => {
     const [root] = await topOf(view);
     vi.spyOn(window, 'showWarningMessage').mockResolvedValue(undefined as never);
 
-    await command('gemdb.savedObjects.remove')(view.getChildren(root)[0]);
+    await command('gemdb.savedObjects.remove')((await view.getChildren(root))[0]);
 
     expect(gem.committed.has('a')).toBe(true);
   });
@@ -589,7 +691,7 @@ describe('removing objects', () => {
     gem.committed.set('a', 'Employee').set('b', 'Employee');
     const { view } = setUp();
     const [root] = await topOf(view);
-    const [a, b] = view.getChildren(root);
+    const [a, b] = await view.getChildren(root);
     vi.spyOn(window, 'showWarningMessage').mockResolvedValue('Remove' as never);
 
     await command('gemdb.savedObjects.remove')(b, [a]);
@@ -624,7 +726,7 @@ describe('saved stacks', () => {
     const { view } = setUp();
 
     const [root] = await topOf(view);
-    const [entry] = view.getChildren(root);
+    const [entry] = await view.getChildren(root);
 
     expect(item(view, entry)).toMatchObject({
       label: 'stack_bp',
@@ -640,7 +742,7 @@ describe('saved stacks', () => {
     const { view } = setUp();
     const [root] = await topOf(view);
 
-    await command('gemdb.savedObjects.openStack')(view.getChildren(root)[0]);
+    await command('gemdb.savedObjects.openStack')((await view.getChildren(root))[0]);
 
     const [pause] = opened;
     expect(pause).toMatchObject({
@@ -714,7 +816,7 @@ describe('saved stacks', () => {
     const { view } = setUp();
     const [root] = await topOf(view);
 
-    await command('gemdb.savedObjects.openStack')(view.getChildren(root)[0]);
+    await command('gemdb.savedObjects.openStack')((await view.getChildren(root))[0]);
     const [pause] = opened;
     const warned = vi.spyOn(window, 'showWarningMessage');
     pause.answer('stop');
@@ -734,7 +836,7 @@ describe('saved stacks', () => {
     closedSessions.length = 0;
     const { view } = setUp();
     const [root] = await topOf(view);
-    await command('gemdb.savedObjects.openStack')(view.getChildren(root)[0]);
+    await command('gemdb.savedObjects.openStack')((await view.getChildren(root))[0]);
     const warned = vi.spyOn(window, 'showWarningMessage').mockResolvedValue('Commit' as never);
     // A console line changed something in the stack's session.
     gem.pending.set('saved-stack:stack_bp', new Map([['changed', 'Employee']]));
@@ -755,7 +857,7 @@ describe('saved stacks', () => {
     closedSessions.length = 0;
     const { view } = setUp();
     const [root] = await topOf(view);
-    await command('gemdb.savedObjects.openStack')(view.getChildren(root)[0]);
+    await command('gemdb.savedObjects.openStack')((await view.getChildren(root))[0]);
     vi.spyOn(window, 'showWarningMessage').mockResolvedValue(undefined as never);
     gem.pending.set('saved-stack:stack_bp', new Map([['changed', 'Employee']]));
 
@@ -772,7 +874,7 @@ describe('saved stacks', () => {
     const { view } = setUp();
     const [root] = await topOf(view);
     const told = vi.spyOn(window, 'showInformationMessage');
-    const entry = view.getChildren(root)[0];
+    const entry = (await view.getChildren(root))[0];
 
     await command('gemdb.savedObjects.openStack')(entry);
     await command('gemdb.savedObjects.openStack')(entry);
@@ -814,7 +916,10 @@ describe('saved stacks', () => {
       /^Added this stack to Persisted Objects as gemdb\.root\["stack_bp"\]/,
     );
     const notebook = rows.find((r) => r.kind === 'notebook')!;
-    expect(view.getChildren(notebook).map((r) => item(view, r).label)).toEqual(['stack_bp']);
+    expect((await view.getChildren(notebook)).map((r) => item(view, r).label)).toEqual([
+      'stack_bp',
+      'Pending changes',
+    ]);
     debug.activeDebugSession = undefined;
   });
 });
@@ -824,7 +929,7 @@ describe('the other row and title-bar actions', () => {
     gem.committed.set('a', 'Employee').set('b', 'Employee');
     const { view } = setUp();
     const [root] = await topOf(view);
-    const [a, b] = view.getChildren(root);
+    const [a, b] = await view.getChildren(root);
 
     await command('gemdb.savedObjects.copyAccess')(a, [a, b]);
 
@@ -847,7 +952,7 @@ describe('the other row and title-bar actions', () => {
     gem.committed.set('employee_barbara', 'Employee');
     const { view } = setUp();
     const [root] = await topOf(view);
-    const [entry] = view.getChildren(root);
+    const [entry] = await view.getChildren(root);
 
     const resolved = (await view.resolveTreeItem(item(view, entry) as never, entry)) as TreeItem;
 
@@ -864,12 +969,758 @@ describe('the other row and title-bar actions', () => {
     vi.spyOn(window, 'showInputBox').mockResolvedValue('draft');
     await command('gemdb.saveVariable')(variable('self', 5));
     const rows = await topOf(view);
-    const [waiting] = view.getChildren(rows.find((r) => r.kind === 'notebook')!);
+    const [waiting] = await view.getChildren(rows.find((r) => r.kind === 'notebook')!);
 
     await view.resolveTreeItem(item(view, waiting) as never, waiting);
 
     const hover = gem.queries.find((q) => q.code.includes('count := 12.'))!;
     expect(hover.session).toBe(NB);
     expect(hover.code).not.toContain('System abortTransaction.');
+  });
+});
+
+describe('opening a persisted object in the view', () => {
+  const COLLAPSED = 1;
+  const LEAF = 0;
+
+  /** gemdb.root holding `ceo`, an Employee whose `boss` opens in turn. */
+  function withCeo(): void {
+    gem.committed.set('ceo', 'Employee');
+    gem.refs.set('ceo', 1);
+    gem.fields.set(
+      1,
+      row('special variables', '', '', 2, 0, 3, 0, -1, 1) +
+        row('boss', '<Employee>', 'Employee', 3, 0, 1, 3, -1, 0, 'obj') +
+        row('name', "'Ada'", 'str', 0, 0, 0, 4, -1, 0),
+    );
+    gem.fields.set(3, row('name', "'Grace'", 'str', 0, 0, 0, 5, -1, 0));
+  }
+
+  const labels = (view: ReturnType<typeof setUp>['view'], rows: SavedRow[]) =>
+    rows.map((r) => [item(view, r).label, item(view, r).description]);
+
+  it('opens a committed entry with nothing paused, through GemDB’s own session', async () => {
+    withCeo();
+    const { view } = setUp();
+    const [root] = await topOf(view);
+    const [ceo] = await view.getChildren(root);
+
+    expect(item(view, ceo).collapsibleState).toBe(COLLAPSED);
+    const fields = await view.getChildren(ceo);
+
+    expect(labels(view, fields)).toEqual([
+      ['special variables', ''],
+      ['boss', '<Employee>'],
+      ['name', "'Ada'"],
+    ]);
+    const read = gem.queries.find((q) => q.code.includes("GemDbPersistedRefs' otherwise: nil"))!;
+    expect(read.session).toBe('extension');
+    // Not the pause's registry, which is dropped at every resume.
+    expect(read.code).not.toContain('GemDbPauseRefs');
+  });
+
+  it('opens a field that has children of its own, and leaves a plain value a leaf', async () => {
+    withCeo();
+    const { view } = setUp();
+    const [root] = await topOf(view);
+    const [ceo] = await view.getChildren(root);
+    const [, boss, name] = await view.getChildren(ceo);
+
+    expect(item(view, boss).collapsibleState).toBe(COLLAPSED);
+    expect(item(view, name).collapsibleState).toBe(LEAF);
+    expect(labels(view, await view.getChildren(boss))).toEqual([['name', "'Grace'"]]);
+    expect(view.getParent(boss)).toBe(ceo);
+  });
+
+  it('reads an opened object once, until the view is read again', async () => {
+    withCeo();
+    const { view } = setUp();
+    const [root] = await topOf(view);
+    const [ceo] = await view.getChildren(root);
+    const opens = () => gem.queries.filter((q) => q.code.includes("GemDbPersistedRefs' otherwise"));
+
+    const first = await view.getChildren(ceo);
+    const again = await view.getChildren(ceo);
+
+    expect(again).toBe(first);
+    expect(opens()).toHaveLength(1);
+  });
+
+  it('reads nothing for a row from before the view was read again, whose position no longer holds', async () => {
+    withCeo();
+    const { view } = setUp();
+    const [root] = await topOf(view);
+    const [ceo] = await view.getChildren(root);
+
+    await topOf(view);
+
+    expect(await view.getChildren(ceo)).toEqual([]);
+    expect(gem.queries.some((q) => q.code.includes("GemDbPersistedRefs' otherwise"))).toBe(false);
+  });
+
+  it('leaves an entry with no children, and a saved stack, closed', async () => {
+    gem.committed.set('count', 'int').set('stack_bp', 'dict');
+    gem.refs.set('stack_bp', 2);
+    gem.stacks.set('stack_bp', '');
+    const { view } = setUp();
+    const [root] = await topOf(view);
+    const [count, stack] = await view.getChildren(root);
+
+    expect(item(view, count).collapsibleState).toBe(LEAF);
+    // A saved stack opens in the debugger, from its own button.
+    expect(item(view, stack).collapsibleState).toBe(LEAF);
+  });
+
+  it('opens an addition not committed yet in its own notebook, where alone it exists', async () => {
+    pauseIn(NB);
+    connected.push({ key: NB, label: 'breakpoint.ipynb' });
+    gem.refs.set('draft', 1);
+    gem.fields.set(1, row('name', "'Barbara'", 'str', 0, 0, 0, 2, -1, 0));
+    const { view } = setUp();
+    vi.spyOn(window, 'showInputBox').mockResolvedValue('draft');
+    await command('gemdb.saveVariable')(variable('self', 5));
+    const rows = await topOf(view);
+    const [waiting] = await view.getChildren(rows.find((r) => r.kind === 'notebook')!);
+
+    expect(item(view, waiting).collapsibleState).toBe(COLLAPSED);
+    expect(labels(view, await view.getChildren(waiting))).toEqual([['name', "'Barbara'"]]);
+    // Both what it holds and what it opens to are read where it is, with no fresh view.
+    const listed = gem.queries.filter((q) => q.code.includes('if _k in gemdb.root'));
+    const opened = gem.queries.filter((q) => q.code.includes("GemDbPersistedRefs' otherwise"));
+    expect(new Set([...listed, ...opened].map((q) => q.session))).toEqual(new Set([NB]));
+    expect(opened).toHaveLength(1);
+    expect([...listed, ...opened].some((q) => q.code.includes('System abortTransaction.'))).toBe(
+      false,
+    );
+  });
+
+  it('says why an object could not be read, and tries again when opened again', async () => {
+    withCeo();
+    const { view } = setUp();
+    const [root] = await topOf(view);
+    const [ceo] = await view.getChildren(root);
+    gem.fields.set(1, 'Error: the gem is busy');
+
+    const [failed] = await view.getChildren(ceo);
+    gem.fields.set(1, row('name', "'Ada'", 'str', 0, 0, 0, 4, -1, 0));
+
+    expect(item(view, failed).label).toBe('Could not read it: the gem is busy');
+    expect(labels(view, await view.getChildren(ceo))).toEqual([['name', "'Ada'"]]);
+  });
+});
+
+describe('the ranges of a long container', () => {
+  const parent: SavedRow = { kind: 'message', text: 'parent' };
+  const spans = (rows: SavedRow[]) =>
+    rows.map((r) => (r.kind === 'range' ? [r.start, r.end] : undefined));
+
+  it('divides it into ranges of a page, nesting them when there are too many', async () => {
+    const { PAGE } = await import('../pauseVariables');
+    const { rangeRows } = await import('../savedObjects');
+
+    expect(spans(rangeRows(parent, 0, 1200))).toEqual([
+      [0, PAGE],
+      [PAGE, 2 * PAGE],
+      [2 * PAGE, 1200],
+    ]);
+    expect(spans(rangeRows(parent, 0, PAGE * PAGE + 1))).toEqual([
+      [0, PAGE * PAGE],
+      [PAGE * PAGE, PAGE * PAGE + 1],
+    ]);
+  });
+
+  it('takes the page it is given, as gemdb.root gives its own', async () => {
+    const { rangeRows } = await import('../savedObjects');
+
+    expect(spans(rangeRows(parent, 0, 230, 200))).toEqual([
+      [0, 200],
+      [200, 230],
+    ]);
+  });
+});
+
+describe('a list longer than a page', () => {
+  const COLLAPSED = 1;
+
+  /** gemdb.root holding `orders`, a list of `n` items. */
+  async function withOrders(n: number) {
+    gem.committed.set('orders', 'list');
+    gem.refs.set('orders', 1);
+    gem.lists.set(1, n);
+    const { view } = setUp();
+    const [root] = await topOf(view);
+    const [orders] = await view.getChildren(root);
+    return { view, orders };
+  }
+
+  const labels = (view: ReturnType<typeof setUp>['view'], rows: SavedRow[]) =>
+    rows.map((r) => item(view, r).label);
+  const reads = () => gem.queries.filter((q) => q.code.includes("GemDbPersistedRefs' otherwise"));
+
+  it('opens straight to its ranges, reading nothing until one is opened', async () => {
+    const { PAGE } = await import('../pauseVariables');
+    const { view, orders } = await withOrders(1200);
+
+    const ranges = await view.getChildren(orders);
+
+    expect(labels(view, ranges)).toEqual([
+      `[0 … ${PAGE - 1}]`,
+      `[${PAGE} … ${2 * PAGE - 1}]`,
+      `[${2 * PAGE} … 1199]`,
+    ]);
+    expect(item(view, ranges[0]).collapsibleState).toBe(COLLAPSED);
+    expect(reads()).toHaveLength(0);
+  });
+
+  it('reads a range’s items when it is opened, from where the range starts', async () => {
+    const { PAGE } = await import('../pauseVariables');
+    const { view, orders } = await withOrders(1200);
+    const ranges = await view.getChildren(orders);
+
+    const items = await view.getChildren(ranges[2]);
+    const again = await view.getChildren(ranges[2]);
+
+    expect(labels(view, items)).toEqual(
+      Array.from({ length: 1200 - 2 * PAGE }, (_, i) => `[${2 * PAGE + i}]`),
+    );
+    expect(again).toBe(items);
+    expect(reads()).toHaveLength(1);
+    expect(reads()[0].code).toContain(`start := ${2 * PAGE}.`);
+    // So a row deep in a range can be revealed: each knows the row it is under.
+    expect(view.getParent(items[0])).toBe(ranges[2]);
+    expect(view.getParent(ranges[2])).toBe(orders);
+  });
+
+  it('nests the ranges of a very long list', async () => {
+    const { PAGE } = await import('../pauseVariables');
+    const { view, orders } = await withOrders(PAGE * PAGE + 10);
+    const [first, last] = await view.getChildren(orders);
+
+    const inner = await view.getChildren(first);
+
+    expect(labels(view, [first, last])).toEqual([
+      `[0 … ${PAGE * PAGE - 1}]`,
+      `[${PAGE * PAGE} … ${PAGE * PAGE + 9}]`,
+    ]);
+    expect(inner).toHaveLength(PAGE);
+    expect(labels(view, await view.getChildren(inner[1]))[0]).toBe(`[${PAGE}]`);
+  });
+
+  it('leaves a list of exactly a page as its items', async () => {
+    const { PAGE } = await import('../pauseVariables');
+    const { view, orders } = await withOrders(PAGE);
+
+    const rows = await view.getChildren(orders);
+
+    expect(rows).toHaveLength(PAGE);
+    expect(rows.every((r) => r.kind === 'field')).toBe(true);
+  });
+
+  it('reads nothing for a range from before the view was read again', async () => {
+    const { view, orders } = await withOrders(1200);
+    const ranges = await view.getChildren(orders);
+    await topOf(view);
+
+    expect(await view.getChildren(ranges[0])).toEqual([]);
+    expect(reads()).toHaveLength(0);
+  });
+});
+
+describe('gemdb.root with more entries than it lists at first', () => {
+  it('counts them all and shows them as ranges, each read in the view the listing took', async () => {
+    const { ROOT_LISTING_LIMIT } = await import('../pauseVariables');
+    for (let i = 0; i < ROOT_LISTING_LIMIT + 30; i++) gem.committed.set(`k${i}`, 'int');
+    const { view } = setUp();
+    const [root] = await topOf(view);
+
+    expect(item(view, root).description).toBe(`persisted · ${ROOT_LISTING_LIMIT + 30} objects`);
+    const ranges = await view.getChildren(root);
+    expect(ranges.map((r) => item(view, r).label)).toEqual([
+      `[0 … ${ROOT_LISTING_LIMIT - 1}]`,
+      `[${ROOT_LISTING_LIMIT} … ${ROOT_LISTING_LIMIT + 29}]`,
+    ]);
+
+    const entries = await view.getChildren(ranges[1]);
+
+    expect(entries.map((r) => item(view, r).label)).toEqual(
+      Array.from({ length: 30 }, (_, i) => `k${ROOT_LISTING_LIMIT + i}`),
+    );
+    // A range adds to the first listing's registry and view, rather than starting afresh.
+    const read = gem.queries.find((q) => q.code.includes(`[${ROOT_LISTING_LIMIT}:`))!;
+    expect(read.code).not.toContain('System abortTransaction.');
+    expect(view.getParent(entries[0])).toBe(ranges[1]);
+    expect(view.getParent(ranges[1])).toBe(root);
+  });
+
+  it('lists them as before when they all fit', async () => {
+    gem.committed.set('a', 'int').set('b', 'int');
+    const { view } = setUp();
+    const [root] = await topOf(view);
+
+    expect((await view.getChildren(root)).map((r) => r.kind)).toEqual(['entry', 'entry']);
+    expect(gem.queries.some((q) => q.code.includes('len(gemdb.root)'))).toBe(false);
+  });
+});
+
+describe('going to an item', () => {
+  /** gemdb.root holding `orders`, a list (or a dict, keyed 'k0'…) of `n` items. */
+  async function withOrders(n: number, dict = false) {
+    gem.committed.set('orders', dict ? 'dict' : 'list');
+    gem.refs.set('orders', 1);
+    gem.lists.set(1, n);
+    if (dict) gem.dicts.add(1);
+    const { view } = setUp();
+    const [root] = await topOf(view);
+    const [orders] = await view.getChildren(root);
+    return { view, orders };
+  }
+
+  const revealed = () => __treeViews.get(VIEW_ID)!.reveals.at(-1);
+  const typing = (text: string) => vi.spyOn(window, 'showInputBox').mockResolvedValue(text);
+
+  it('offers Go to Item… on a list, a set or a dict and on its ranges, not on other rows', async () => {
+    const { view, orders } = await withOrders(1200);
+    const [range] = await view.getChildren(orders);
+
+    expect(item(view, orders).contextValue).toBe('gemdbSavedObject gemdbContainer');
+    expect(item(view, range).contextValue).toBe('gemdbRange');
+  });
+
+  it('opens the ranges down to an index and selects that item', async () => {
+    const { view, orders } = await withOrders(1200);
+    typing('1100');
+
+    await command('gemdb.savedObjects.goToItem')(orders);
+
+    const shown = revealed()!;
+    expect(item(view, shown.element as SavedRow).label).toBe('[1100]');
+    expect(shown.options).toMatchObject({ select: true, focus: true });
+    // Every row on the way is one VS Code can find by its parent.
+    const range = view.getParent(shown.element as SavedRow)!;
+    expect(item(view, range).label).toBe('[1000 … 1199]');
+    expect(view.getParent(range)).toBe(orders);
+  });
+
+  it('counts a negative index from the end, and works from a range too', async () => {
+    const { view, orders } = await withOrders(1200);
+    const [first] = await view.getChildren(orders);
+    typing('-1');
+
+    await command('gemdb.savedObjects.goToItem')(first);
+
+    expect(item(view, revealed()!.element as SavedRow).label).toBe('[1199]');
+  });
+
+  it('refuses an index outside the list before going anywhere', async () => {
+    const { orders } = await withOrders(1200);
+    let check: ((text: string) => unknown) | undefined;
+    vi.spyOn(window, 'showInputBox').mockImplementation((options) => {
+      check = (options as { validateInput: (text: string) => unknown }).validateInput;
+      return Promise.resolve(undefined);
+    });
+
+    await command('gemdb.savedObjects.goToItem')(orders);
+
+    expect(check!('1200')).toMatch(/from 0 to 1,199/);
+    expect(check!('-1201')).toMatch(/from 0 to 1,199/);
+    expect(check!('3.5')).toMatch(/from 0 to 1,199/);
+    expect(check!('-1200')).toBeUndefined();
+    expect(check!('[7]')).toBeUndefined();
+    expect(__treeViews.get(VIEW_ID)!.reveals).toHaveLength(0);
+  });
+
+  it('finds a dict’s key where the dict holds it, typed with or without quotes', async () => {
+    const { view, orders } = await withOrders(1200, true);
+    typing('k742');
+
+    await command('gemdb.savedObjects.goToItem')(orders);
+
+    expect(item(view, revealed()!.element as SavedRow).label).toBe("'k742'");
+    const asked = gem.queries.find((q) => q.code.includes('want := #('))!;
+    expect(asked.session).toBe('extension');
+    expect(asked.code).toContain("'''k742'''");
+  });
+
+  it('says so, and how keys are written, when a dict has no such key', async () => {
+    const { orders } = await withOrders(1200, true);
+    typing('nope');
+    const warn = vi.spyOn(window, 'showWarningMessage');
+
+    await command('gemdb.savedObjects.goToItem')(orders);
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/^This dict has no key nope\. Keys are/),
+    );
+    expect(warn.mock.calls[0][0]).toContain('type [0] to [1,199]');
+    expect(__treeViews.get(VIEW_ID)!.reveals).toHaveLength(0);
+  });
+
+  it('goes to a dict’s item by position in brackets, as its ranges are labelled', async () => {
+    const { view, orders } = await withOrders(1200, true);
+    typing('[742]');
+
+    await command('gemdb.savedObjects.goToItem')(orders);
+
+    expect(item(view, revealed()!.element as SavedRow).label).toBe("'k742'");
+    // A position needs no lookup.
+    expect(gem.queries.some((q) => q.code.includes('want := #('))).toBe(false);
+  });
+
+  it('takes a bare number a dict has no key for as a position, and says so', async () => {
+    const { view, orders } = await withOrders(1200, true);
+    typing('-1');
+    const info = vi.spyOn(window, 'showInformationMessage');
+
+    await command('gemdb.savedObjects.goToItem')(orders);
+
+    expect(item(view, revealed()!.element as SavedRow).label).toBe("'k1199'");
+    expect(info).toHaveBeenCalledWith(
+      expect.stringMatching(/no key -1, so this is the item at position -1/),
+    );
+  });
+
+  it('refuses a bracketed position outside the dict before going anywhere', async () => {
+    const { orders } = await withOrders(1200, true);
+    let check: ((text: string) => unknown) | undefined;
+    vi.spyOn(window, 'showInputBox').mockImplementation((options) => {
+      check = (options as { validateInput: (text: string) => unknown }).validateInput;
+      return Promise.resolve(undefined);
+    });
+
+    await command('gemdb.savedObjects.goToItem')(orders);
+
+    expect(check!('[1200]')).toMatch(/from 0 to 1,199/);
+    // A bare word or number may be a key, which only the database can say.
+    expect(check!('99999')).toBeUndefined();
+    expect(check!('SKU1')).toBeUndefined();
+  });
+});
+
+describe('showing an object from a %pending link', () => {
+  const S = '\u001d';
+  const revealed = () => __treeViews.get(VIEW_ID)!.reveals.at(-1);
+  /** Follow a link as VS Code hands it to the extension, and wait for what it shows. */
+  async function follow(query: string): Promise<void> {
+    __uriHandler.handler!.handleUri({ path: '/persisted', query });
+    for (let i = 0; i < 40; i++) await settle();
+  }
+
+  it('opens the rows down to the object, ranges too, and selects it', async () => {
+    gem.committed.set('orders', 'list');
+    gem.refs.set('orders', 1);
+    gem.lists.set(1, 1200);
+    gem.paths.set(77, `${S}k0:orders${S}i1100`);
+    const { view } = setUp();
+
+    await follow('oop=77');
+
+    const shown = revealed()!;
+    expect(item(view, shown.element as SavedRow).label).toBe('[1100]');
+    expect(shown.options).toMatchObject({ select: true, focus: true });
+    const range = view.getParent(shown.element as SavedRow)!;
+    expect(item(view, range).label).toBe('[1000 … 1199]');
+    expect(item(view, view.getParent(range)!).label).toBe('orders');
+    // Found in the view the listing just took: no fresh view of its own.
+    const asked = gem.queries.find((q) => q.code.includes('_objectForOop: 77]'))!;
+    expect(asked.session).toBe('extension');
+    expect(asked.code).not.toContain('System abortTransaction.');
+  });
+
+  it('opens an object’s attribute by its name', async () => {
+    gem.committed.set('boss', 'Employee');
+    gem.refs.set('boss', 2);
+    gem.fields.set(
+      2,
+      row('id', '7', 'int', 0, 0, 0, 1) + row('name', "'Barbara'", 'str', 0, 0, 0, 2),
+    );
+    gem.paths.set(5, `${S}k0:boss${S}aname`);
+    const { view } = setUp();
+
+    await follow('oop=5');
+
+    expect(item(view, revealed()!.element as SavedRow).label).toBe('name');
+  });
+
+  it('finds a gemdb.root entry inside its range when gemdb.root has more than it lists', async () => {
+    const { ROOT_LISTING_LIMIT } = await import('../pauseVariables');
+    for (let i = 0; i < ROOT_LISTING_LIMIT + 30; i++) gem.committed.set(`k${i}`, 'int');
+    gem.paths.set(9, `${S}k${ROOT_LISTING_LIMIT + 15}:k${ROOT_LISTING_LIMIT + 15}`);
+    const { view } = setUp();
+
+    await follow('oop=9');
+
+    expect(item(view, revealed()!.element as SavedRow).label).toBe(`k${ROOT_LISTING_LIMIT + 15}`);
+  });
+
+  it('says so when the object is not under gemdb.root in what is committed', async () => {
+    const warned = vi.spyOn(window, 'showWarningMessage');
+    setUp();
+
+    await follow('oop=12');
+
+    expect(warned).toHaveBeenCalledWith(expect.stringMatching(/not under gemdb\.root/));
+    expect(__treeViews.get(VIEW_ID)!.reveals).toHaveLength(0);
+  });
+
+  it('shows the nearest row, and says so, when the path cannot be opened all the way', async () => {
+    gem.committed.set('boss', 'Employee');
+    gem.refs.set('boss', 2);
+    gem.fields.set(2, row('id', '7', 'int', 0, 0, 0, 1));
+    gem.paths.set(5, `${S}k0:boss${S}agone`);
+    const warned = vi.spyOn(window, 'showWarningMessage');
+    const { view } = setUp();
+
+    await follow('oop=5');
+
+    expect(item(view, revealed()!.element as SavedRow).label).toBe('boss');
+    expect(warned).toHaveBeenCalledWith(expect.stringContaining('gemdb.root["boss"].gone'));
+  });
+
+  it('ignores a link it did not write', async () => {
+    setUp();
+
+    await follow('oop=abc');
+    __uriHandler.handler!.handleUri({ path: '/elsewhere', query: 'oop=77' });
+    await settle();
+
+    expect(gem.queries.some((q) => q.code.includes('_objectForOop:'))).toBe(false);
+  });
+});
+
+describe('marking what %pending found changed', () => {
+  const S = '\u001d';
+  /** A snapshot as `snapshotQuery` writes one: an object's attributes, each as name, key, text. */
+  const snap = (...entries: Array<[string, string]>) =>
+    `#${F}obj${R}` +
+    entries.map(([name, value]) => `${name}${F}v${value}${F}${value}${R}`).join('');
+
+  async function marked() {
+    gem.committed.set('boss', 'Employee');
+    gem.refs.set('boss', 2);
+    gem.fields.set(2, row('id', '7', 'int', 0, 0, 0, 1) + row('total', '10', 'int', 0, 0, 0, 2));
+    gem.paths.set(5, `${S}k0:boss`);
+    gem.snapshots.set('extension:5', snap(['id', '7'], ['total', '10']));
+    gem.snapshots.set(`${NB}:5`, snap(['id', '7'], ['total', '15'], ['note', "'late'"]));
+    gem.dirty.add(NB);
+    pauseIn(NB);
+    const { view } = setUp();
+    await command('gemdb.savedObjects.notePendingChanges')({
+      ownerKey: NB,
+      label: 'breakpoint.ipynb',
+      oops: [5],
+    });
+    const [root] = await topOf(view);
+    const [boss] = await view.getChildren(root);
+    return { view, boss };
+  }
+
+  it('marks a changed object’s row M, says what changed, and sets both sides in its hover', async () => {
+    const { view, boss } = await marked();
+    const shown = item(view, boss);
+
+    expect(shown.description).toBe('changed: 1 changed, 1 added');
+    expect(shown.resourceUri?.scheme).toBe('gemdb-changed');
+    expect(__fileDecorations.at(-1)!.provideFileDecoration(shown.resourceUri!)).toMatchObject({
+      badge: 'M',
+    });
+    const hover = (shown.tooltip as MarkdownString).value;
+    expect(hover).toContain('- `total`: committed `10` → next commit `15`');
+    expect(hover).toContain("- `note`: added by the next commit: `'late'`");
+    expect(hover).toContain('Changed in breakpoint.ipynb, not committed yet.');
+  });
+
+  it('marks the changed attribute inside it with what is committed and what will be', async () => {
+    const { view, boss } = await marked();
+    const [id, total] = await view.getChildren(boss);
+
+    expect(item(view, total).description).toBe('10 → 15');
+    expect(item(view, total).resourceUri?.scheme).toBe('gemdb-changed');
+    // An attribute that does not change is left as it was.
+    expect(item(view, id).resourceUri).toBeUndefined();
+    expect(item(view, id).description).toBe('7');
+  });
+
+  it('offers Revert to Committed Value on a changed row, and keeps its other menu items', async () => {
+    const { view, boss } = await marked();
+    const [id, total] = await view.getChildren(boss);
+
+    expect(item(view, boss).contextValue).toBe('gemdbSavedObject gemdbChanged');
+    expect(item(view, total).contextValue).toBe('gemdbPersistedField gemdbChanged');
+    expect(item(view, id).contextValue).toBe('gemdbPersistedField');
+  });
+
+  it('reverts one entry in the notebook after asking, and its mark goes', async () => {
+    const { view, boss } = await marked();
+    const [, total] = await view.getChildren(boss);
+    const asked = vi.spyOn(window, 'showWarningMessage').mockResolvedValue('Revert' as never);
+
+    await command('gemdb.savedObjects.revert')(total);
+
+    expect(asked).toHaveBeenCalledWith(
+      'Revert gemdb.root["boss"]\'s total to its committed value?',
+      expect.objectContaining({ modal: true, detail: expect.stringContaining('goes back to 10') }),
+      'Revert',
+    );
+    expect(gem.reverts).toEqual([
+      { session: NB, code: expect.stringContaining('setattr(_gemdb_obj, "total", 10)') },
+    ]);
+    // Only that entry: the added note is left alone.
+    expect(gem.reverts[0].code).not.toContain('note');
+    // Everything now reads as committed, so nothing is marked.
+    expect(item(view, total).resourceUri).toBeUndefined();
+    expect(item(view, boss).resourceUri).toBeUndefined();
+    expect(item(view, boss).contextValue).toBe('gemdbSavedObject');
+  });
+
+  it('reverts nothing when the user does not confirm', async () => {
+    const { view, boss } = await marked();
+    vi.spyOn(window, 'showWarningMessage').mockResolvedValue(undefined);
+
+    await command('gemdb.savedObjects.revert')(boss);
+
+    expect(gem.reverts).toEqual([]);
+    expect(item(view, boss).resourceUri?.scheme).toBe('gemdb-changed');
+  });
+
+  it('drops the marks once the notebook has nothing left to commit', async () => {
+    const { view } = await marked();
+    gem.dirty.clear();
+
+    const [root] = await topOf(view);
+    const [boss] = await view.getChildren(root);
+
+    expect(item(view, boss).resourceUri).toBeUndefined();
+  });
+});
+
+describe('a notebook’s Pending changes, with nothing paused', () => {
+  const S = '\u001d';
+  const change = (steps: string, oop: number, type: string, value: string) =>
+    [steps, String(oop), value, type, '0', '0', '0', '1', '-1', '0', ''].join(F) + R;
+  const snap = (...entries: Array<[string, string]>) =>
+    `#${F}obj${R}` +
+    entries.map(([name, value]) => `${name}${F}v${value}${F}${value}${R}`).join('');
+
+  /** other.ipynb, connected and idle, having changed boss in a cell and set note back as it was. */
+  async function changedInACell() {
+    connected.push({ key: OTHER, label: 'other.ipynb' });
+    gem.dirty.add(OTHER);
+    gem.committed.set('boss', 'Employee');
+    gem.refs.set('boss', 2);
+    gem.fields.set(2, row('total', '10', 'int', 0, 0, 0, 1));
+    gem.paths.set(5, `${S}k0:boss`);
+    gem.pendingLists.set(
+      OTHER,
+      change(`${S}k0:boss`, 5, 'Employee', '<Employee>') +
+        change(`${S}k1:note`, 6, 'Note', '<Note>') +
+        change('!', 7, 'RcCollisionBucket', '[...]') +
+        ['#', '3', '0', '0'].join(F) +
+        R,
+    );
+    gem.snapshots.set('extension:5', snap(['total', '10']));
+    gem.snapshots.set(`${OTHER}:5`, snap(['total', '15']));
+    gem.snapshots.set('extension:6', snap(['text', "'hi'"]));
+    gem.snapshots.set(`${OTHER}:6`, snap(['text', "'hi'"]));
+    const { view } = setUp();
+    const rows = await topOf(view);
+    const notebook = rows.find((r) => r.kind === 'notebook')!;
+    return { view, rows, notebook };
+  }
+
+  it('shows a notebook with changes to commit, though nothing was added from the debugger', async () => {
+    const { view, notebook } = await changedInACell();
+
+    expect(item(view, notebook).label).toBe('other.ipynb');
+    expect(item(view, notebook).description).toBe('uncommitted changes');
+    // Its Commit and Abort buttons come with it.
+    expect(item(view, notebook).contextValue).toBe('gemdbNotebookDirty');
+    expect((await view.getChildren(notebook)).map((r) => item(view, r).label)).toEqual([
+      'Pending changes',
+    ]);
+  });
+
+  it('lists what the next commit changes, each a row that shows the object when clicked', async () => {
+    const { view, notebook } = await changedInACell();
+    const [group] = await view.getChildren(notebook);
+
+    const rows = await view.getChildren(group);
+
+    expect(rows.map((r) => item(view, r).label)).toEqual([
+      'boss',
+      "+ 1 outside gemdb.root: Grail's own records and storage",
+      '+ 1 written back unchanged (reverted, or set to what it held)',
+    ]);
+    const boss = item(view, rows[0]);
+    // What changes, rather than a path cut off before the part that differs.
+    expect(boss.description).toBe('total 10 → 15');
+    expect((boss.tooltip as MarkdownString).value).toContain(
+      '- `total`: committed `10` → next commit `15`',
+    );
+    expect(boss.command).toMatchObject({
+      command: 'gemdb.savedObjects.showObject',
+      arguments: [5, { fromPendingChanges: true }],
+    });
+    // Read in the notebook's own session, with nothing paused.
+    expect(gem.queries.some((q) => q.session === OTHER && q.code.includes('_writtenObjects'))).toBe(
+      true,
+    );
+
+    await command('gemdb.savedObjects.showObject')(5);
+
+    expect(item(view, __treeViews.get(VIEW_ID)!.reveals.at(-1)!.element as SavedRow).label).toBe(
+      'boss',
+    );
+  });
+
+  it('keeps Pending changes open when one of its objects is clicked', async () => {
+    const { view, notebook } = await changedInACell();
+    const [group] = await view.getChildren(notebook);
+    __treeViews.get(VIEW_ID)!.toggle(group, true);
+    const reads = gem.queries.length;
+
+    await command('gemdb.savedObjects.showObject')(5, { fromPendingChanges: true });
+
+    // Gone to in the view as it is: nothing re-read, so VS Code keeps every open row open.
+    // (A fresh reading starts the view's registry afresh; finding the object's path does not.)
+    expect(
+      gem.queries.slice(reads).some((q) => q.code.includes("#'GemDbPersistedRefs' put:")),
+    ).toBe(false);
+    const shown = __treeViews.get(VIEW_ID)!.reveals.at(-1)!.element as SavedRow;
+    expect(item(view, shown).label).toBe('boss');
+    expect(item(view, group).collapsibleState).toBe(2);
+  });
+
+  it('draws Pending changes open again after the view is re-read, while the user keeps it open', async () => {
+    const { view, notebook } = await changedInACell();
+    const [group] = await view.getChildren(notebook);
+    const id = item(view, group).id;
+    __treeViews.get(VIEW_ID)!.toggle(group, true);
+
+    const again = (
+      await view.getChildren((await topOf(view)).find((r) => r.kind === 'notebook')!)
+    )[0];
+
+    expect(item(view, again).id).toBe(id);
+    expect(item(view, again).collapsibleState).toBe(2);
+    __treeViews.get(VIEW_ID)!.toggle(again, false);
+    expect(item(view, again).collapsibleState).toBe(1);
+  });
+
+  it('marks the objects it lists M under gemdb.root, as %pending does', async () => {
+    const { view, rows, notebook } = await changedInACell();
+    const [group] = await view.getChildren(notebook);
+    await view.getChildren(group);
+    for (let i = 0; i < 10; i++) await settle();
+
+    const root = rows.find((r) => r.kind === 'root')!;
+    const [boss] = await view.getChildren(root);
+    expect(item(view, boss).description).toBe('changed: total 10 → 15');
+  });
+
+  it('leaves out a notebook with nothing to commit', async () => {
+    connected.push({ key: OTHER, label: 'other.ipynb' });
+    const { view } = setUp();
+
+    expect((await topOf(view)).map((r) => r.kind)).toEqual(['root']);
   });
 });
