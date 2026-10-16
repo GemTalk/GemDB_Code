@@ -1111,6 +1111,9 @@ export const PENDING_ROWS = 200;
  */
 const PATH_SEARCH_LIMIT = 200000;
 
+/** How many of the time budget's soft breaks the search for paths carries on through (`FIND_PATHS`). */
+const SEARCH_BREAKS = 5;
+
 /** A container with more items than this is searched last (`FIND_PATHS`). */
 const PATH_BIG = 1000;
 
@@ -1134,7 +1137,7 @@ export type PathStep =
   | { kind: 'setItem'; position: number };
 
 /** The temps `FIND_PATHS` declares, for a query that uses it. */
-const PATH_TEMPS = 'stepSep cleanStep cut via nameOf findPaths stepsOf';
+const PATH_TEMPS = 'stepSep cleanStep cut via nameOf findPaths stepsOf breaks pastBreak orResume';
 
 /**
  * Smalltalk that finds where objects are under `gemdb.root`: `findPaths`
@@ -1166,6 +1169,18 @@ const FIND_PATHS = `
   cut := false.
   via := IdentityDictionary new.
   nameOf := [:key | (reprOf value: key) ifNil: [key printString]].
+  "The search runs none of the user's code, so the time budget's soft break, there to stop a slow
+   __repr__, does not stop it: it carries on through ${SEARCH_BREAKS} of them, and only then counts
+   as cut short. Measured: on CI's machines, beside the suite's other data, the 2 s budget cut it
+   before it had looked everywhere, and Grail's records then showed as not found."
+  breaks := 0.
+  pastBreak := [:e | breaks := breaks + 1. breaks <= ${SEARCH_BREAKS}].
+  "For a handler around a read that must not fail: resume past the budget's soft break, as the
+   search does, and answer fallback only for a real error (or a break past the allowance)."
+  orResume := [:e :fallback |
+    ((e isKindOf: ControlInterrupt) and: [pastBreak value: e])
+      ifTrue: [e resume: nil]
+      ifFalse: [e return: fallback]].
   findPaths := [:targets | | found queue later add backing pairs |
     found := IdentityDictionary new.
     queue := OrderedCollection new.
@@ -1183,11 +1198,11 @@ const FIND_PATHS = `
           ifFalse: [cut := true]]].
     backing := [dispatcher evaluateSource: 'import gemdb
 gemdb.root._peek()' usingModuleScope: SymbolDictionary new]
-      on: AbstractException do: [:e | e return: nil].
+      on: AbstractException do: [:e | orResume value: e value: nil].
     (backing notNil and: [targets includes: backing]) ifTrue: [found at: backing put: backing].
     pairs := [dispatcher evaluateSource: 'import gemdb
 list(gemdb.root.items())' usingModuleScope: SymbolDictionary new]
-      on: AbstractException do: [:e | e return: #()].
+      on: AbstractException do: [:e | orResume value: e value: #()].
     1 to: pairs size do: [:i | | pair |
       pair := pairs at: i.
       add value: (pair at: 2) value: nil value: #k value: { i - 1. pair at: 1 }].
@@ -1209,11 +1224,14 @@ list(gemdb.root.items())' usingModuleScope: SymbolDictionary new]
                   i := 0.
                   node do: [:x | add value: x value: node value: #s value: i. i := i + 1]]
                 ifFalse: [
-                  d := [node @env1:___pyAttrLoad___: #'__dict__'] on: AbstractException do: [:e | (broke value: e) return: nil].
+                  d := [node @env1:___pyAttrLoad___: #'__dict__'] on: AbstractException do: [:e |
+                    ((e isKindOf: ControlInterrupt) and: [pastBreak value: e])
+                      ifTrue: [e resume: nil]
+                      ifFalse: [(broke value: e) return: nil]].
                   (d notNil and: [d respondsTo: #keysAndValuesDo:]) ifTrue: [
                     ((targets includes: d) and: [(found includesKey: d) not]) ifTrue: [found at: d put: node].
                     d keysAndValuesDo: [:key :x | add value: x value: node value: #a value: key]]]]]]]
-      on: ControlInterrupt do: [:e | late := true. e return: nil].
+      on: ControlInterrupt do: [:e | (pastBreak value: e) ifTrue: [e resume: nil] ifFalse: [late := true. e return: nil]].
     late ifTrue: [cut := true].
     found].
   stepsOf := [:node | | at link steps s |
@@ -1288,7 +1306,7 @@ ${withQuietConsole(`
   internal := IdentitySet new.
   written do: [:o |
     ([(o @env1:___pyAttrLoad___: #'__class__') @env1:___pyAttrLoad___: #'__module__'. true]
-        on: AbstractException do: [:e | e return: false])
+        on: AbstractException do: [:e | orResume value: e value: false])
       ifTrue: [targets add: o]
       ifFalse: [internal add: o]].
   found := targets isEmpty ifTrue: [IdentityDictionary new] ifFalse: [findPaths value: targets].

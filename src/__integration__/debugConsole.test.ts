@@ -1298,8 +1298,16 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
     const row = top.find((r) => r.kind === 'notebook' && r.notebook.key === nb.key)!;
     const [group] = await view.getChildren(row);
     const shown = (await view.getChildren(group)).map((r) => view.getTreeItem(r));
-    // Let the M marking the group starts finish before the session goes.
-    for (let i = 0; i < 40; i++) await new Promise((resolve) => setTimeout(resolve, 50));
+    // Opening it marks gemdb.root M in the background, reading this notebook's session: wait for
+    // the mark, not a fixed time, before the session goes (measured: 2 s was too short on CI).
+    const rootRow = view.getChildren().find((r) => r.kind === 'root')!;
+    for (
+      let i = 0;
+      i < 400 && !String(view.getTreeItem(rootRow).description).startsWith('changed');
+      i++
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
     closeSessionFor(nb.key);
 
     const labels = shown.map((i) => String(i.label));
