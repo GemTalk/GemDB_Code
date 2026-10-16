@@ -56,6 +56,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Typing past the `%` in the Debug Console keeps GemDB's suggestions.** Typing `%` listed the
+  commands, but typing on, as in `%p`, filtered every one of them out, leaving only the console's
+  history. VS Code reads where a suggestion starts as a 0-based position, and GemDB sent it 1-based.
+  The names suggested after `%persist ` and `persisted.` had the same fault.
+- **An untitled notebook is called by its name.** GemDB named a notebook by the last part of its
+  address, so an untitled one read `untitled:Untitled-1.ipynb?jupyter-notebook` wherever its
+  session is named, and a file name with a space read `my%20notes.ipynb`. They now read
+  `Untitled-1.ipynb` and `my notes.ipynb`.
 - **Persisted Objects reads again when the database starts or stops.** Opened while the database
   was stopped, it kept saying "Start GemDB to see persisted objects." after Start until it was
   closed and opened again; it now follows the status panel, which sees every start and stop.
