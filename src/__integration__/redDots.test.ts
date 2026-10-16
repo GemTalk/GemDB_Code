@@ -11,7 +11,7 @@ import {
   parsePausedStack,
   pausedStackQuery,
 } from '../pauseVariables';
-import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
+import { ensureProcesses, isRunning, stopNetldi, stopStone } from '../processes';
 import { runPython, runPythonFile } from '../pythonQueries';
 import { DotsByFile } from '../redDots';
 import {
@@ -122,8 +122,7 @@ beforeAll(async () => {
   if (!fixture) return;
   createDatabaseWithPython(fixture);
   stageGrail(ext);
-  await startStone();
-  await startNetldi();
+  await ensureProcesses();
 });
 
 afterEach(() => {

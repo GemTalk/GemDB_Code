@@ -5,6 +5,7 @@ import { __setSetting } from '../__mocks__/vscode';
 import { STONE_NAME, databasePasswordPath } from '../config';
 import { createDatabase } from '../database';
 import { databaseConfPath, ensureRootPath, expectedEnginePath, extentPath } from '../paths';
+import { ensureProcesses, stopNetldi } from '../processes';
 
 /**
  * A database of GemDB's own making, in a directory of its own, on the real
@@ -148,4 +149,15 @@ export function createDatabaseWithPython(fixture: Fixture): void {
   fs.chmodSync(extentPath(), 0o644);
   fs.copyFileSync(testExtentPasswordPath(), databasePasswordPath());
   fs.chmodSync(databasePasswordPath(), 0o600);
+}
+
+/**
+ * Bring the stone up without leaving a session listener this call started,
+ * for tests of what needs no listener (linked sessions) or of starting one.
+ * Through `ensureProcesses`, the one way GemDB starts processes, rather than a
+ * stone-only start of the tests' own.
+ */
+export async function startStoneAlone(): Promise<void> {
+  const { startedNetldi } = await ensureProcesses();
+  if (startedNetldi) await stopNetldi();
 }

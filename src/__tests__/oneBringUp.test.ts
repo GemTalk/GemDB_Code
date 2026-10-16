@@ -52,8 +52,8 @@ vi.mock('../osConfig', async (importOriginal) => {
 
 const findStone = vi.fn(() => true);
 const findNetldi = vi.fn(() => true);
+// The stone start inside `ensureProcesses`, which starts only what is down.
 const startStone = vi.fn(async () => {});
-const startNetldi = vi.fn(async () => {});
 const stopStone = vi.fn(async (_force: boolean) => {
   findStone.mockReturnValue(false);
 });
@@ -61,8 +61,11 @@ vi.mock('../processes', () => ({
   listProcesses: () => [],
   findStone: () => findStone(),
   findNetldi: () => findNetldi(),
-  startStone: () => startStone(),
-  startNetldi: () => startNetldi(),
+  ensureProcesses: async () => {
+    const startedStone = !findStone();
+    if (startedStone) await startStone();
+    return { startedStone, startedNetldi: false };
+  },
   isListening: () => true,
   isRunning: () => findStone(),
   stopNetldi: async () => {},

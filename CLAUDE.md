@@ -55,6 +55,16 @@ in progress and gets its result, and only the first caller reports telemetry —
 except after a Stop: a caller other than auto-start arriving once a Stop began
 during that bring-up waits for the Stop and starts again.
 
+Below it, the processes themselves start only through `ensureProcesses` in
+`processes.ts`, which checks and starts under the stone lock (NetLDI cannot be
+started any other way; `ensureListener` is the listener-only door a declined
+force-stop uses), and "ready" means gslist status `OK`, not "listed": a
+stone at `Startup` is listed and refuses logins, so wait on it, never start it.
+`stoneState` reads the rest, case-insensitively since the engine prints mixed
+case: `Shutdown` fails at once, and any other listed status (`exe deleted`,
+`frozen`, ...) goes on to the login as it always did. The wrapper in `cli.ts`
+makes the same calls in shell; change both together.
+
 ## CI
 
 `.github/workflows/ci.yml`, two jobs split on what they need. `checks` runs
@@ -240,8 +250,9 @@ something GemDB could do on a user's behalf. The guard reads the repository's
 version with
 `copydbf -i` and refuses, naming both versions and the directory to delete.
 Checked in two places, and both are needed: `prepareFiles`, which is the
-first-install path, and `startProcesses` before the stone starts, because an
-extension update reaches that line without preparing anything — engine
+first-install path, and `assertSafeToStart` before the stone starts (the
+`beforeStoneStart` that `ensureProcesses` runs inside the stone lock), because
+an extension update reaches that line without preparing anything — engine
 downloaded, database present, Grail staged, so `isInstalled()` is true.
 
 **Below its free-space threshold the stone stops collecting garbage.** GemDB

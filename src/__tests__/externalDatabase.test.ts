@@ -22,10 +22,9 @@ import {
   EngineProcess,
   ExternalDatabaseError,
   engineEnvironment,
+  ensureProcesses,
   findNetldi,
   findStone,
-  startNetldi,
-  startStone,
   stopNetldi,
   stopStone,
 } from '../processes';
@@ -227,8 +226,7 @@ describe('processes', () => {
 
   it('are never started or stopped by GemDB', async () => {
     useExternal();
-    await expect(startStone()).rejects.toBeInstanceOf(ExternalDatabaseError);
-    await expect(startNetldi()).rejects.toBeInstanceOf(ExternalDatabaseError);
+    await expect(ensureProcesses()).rejects.toBeInstanceOf(ExternalDatabaseError);
     await expect(stopStone()).rejects.toBeInstanceOf(ExternalDatabaseError);
     await expect(stopNetldi()).rejects.toBeInstanceOf(ExternalDatabaseError);
   });

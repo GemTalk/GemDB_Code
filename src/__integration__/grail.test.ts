@@ -5,7 +5,7 @@ import { createDatabase } from '../database';
 import { bundledGrailStamp, installGrail, recordGrailInstalled, stageGrail } from '../grail';
 import { isSharedMemoryConfigured } from '../osConfig';
 import { grailInstalled, grailStagedOnDisk } from '../paths';
-import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
+import { ensureProcesses, isRunning, stopNetldi, stopStone } from '../processes';
 import {
   isErrorResult,
   isGrailInstalled,
@@ -61,8 +61,7 @@ beforeAll(async () => {
 
   createDatabase(fixture.engine);
   limitTestDatabase();
-  await startStone();
-  await startNetldi();
+  await ensureProcesses();
   // Grail installs into the gemdb account, as `ensureRunning` creates it.
   ensureDatabaseAccount();
 });
@@ -115,6 +114,21 @@ describe.skipIf(!havePayload || !canMakeFixture())('Grail in a real database', (
     // import would dirty the session and gemdb's transaction() entry check
     // would blame the user for it.
     const result = await runPython('import gemdb\ngemdb.needs_commit()', nb('notebook-gemdb'));
+    expect(result.value).toBe('False');
+  });
+
+  it('builds the Unicode tables during the file-in: first use leaves nothing to commit', async () => {
+    // install-grail.sh's scripts/deployUnicodedata.gs step. Without it the
+    // first normalize or category call in a session builds the tables and
+    // caches them in a module global: half a second, and a dirty session.
+    const code = [
+      'import unicodedata, gemdb',
+      "unicodedata.normalize('NFKC', '\\ufb01') + unicodedata.ucd_3_2_0.category('A')",
+      'gemdb.needs_commit()',
+    ].join('\n');
+
+    const result = await runPython(code, nb('notebook-unicodedata'));
+
     expect(result.value).toBe('False');
   });
 
