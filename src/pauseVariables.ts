@@ -1102,8 +1102,14 @@ out contents encodeAsUTF8]`;
 /** How many changed objects `%pending` lists; it says how many more there were. */
 export const PENDING_ROWS = 200;
 
-/** The most objects the search for paths from `gemdb.root` registers before it gives up. */
-const PATH_SEARCH_LIMIT = 20000;
+/**
+ * The most objects the search for paths from `gemdb.root` registers before it
+ * gives up. A complete search of a warehouse of 12,000 orders, their 36,000
+ * lines, a 300,000-float list, a 1,200-key dict and a 2,000-item set took
+ * about 0.7 s (measured); the limit is what keeps a far bigger database from
+ * filling the session's memory.
+ */
+const PATH_SEARCH_LIMIT = 200000;
 
 /** A container with more items than this is searched last (`FIND_PATHS`). */
 const PATH_BIG = 1000;
@@ -1245,8 +1251,9 @@ list(gemdb.root.items())' usingModuleScope: SymbolDictionary new]
  * Each object is matched to a place under `gemdb.root` (`FIND_PATHS`), read in
  * this session, so the path is where the object is as the notebook sees it.
  * One record per object, up to `PENDING_ROWS`, the found ones first: its path
- * (`?` for a Python object none was found to, `!` for an internal object,
- * which is not looked for), then its row in `childrenQuery`'s format, named by its permanent
+ * (`?` for a Python object the search stopped short of, `!` for an internal
+ * object, which is not looked for, or one a complete search did not find
+ * under `gemdb.root`), then its row in `childrenQuery`'s format, named by its permanent
  * object number.
  *
  * A last record, `#`, carries how many were written, how many were left out,
@@ -1296,13 +1303,16 @@ ${withQuietConsole(`
           out nextPutAll: (stepsOf value: node); nextPut: field.
           describe value: node asOop printString value: node]
         ifFalse: [skipped add: node]]].
-  "? for a Python object not found, ! for an internal one."
+  "? for a Python object not found because the search stopped short, ! for an internal one.
+   Once the search has looked everywhere, a Python object it did not find is not under
+   gemdb.root at all — measured: lists of a class's attribute names and a dict of exception
+   classes, which Grail keeps as ordinary Python objects — so it counts as internal too."
   targets do: [:t |
     (found includesKey: t) ifFalse: [
       shown size < ${PENDING_ROWS}
         ifTrue: [
           shown add: t.
-          out nextPutAll: '?'; nextPut: field.
+          out nextPutAll: (cut ifTrue: ['?'] ifFalse: ['!']); nextPut: field.
           describe value: t asOop printString value: t]
         ifFalse: [skipped add: t]]].
   internal do: [:t |

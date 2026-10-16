@@ -245,7 +245,7 @@ describe('%pending', () => {
     );
 
     expect(text).toContain(
-      "  + 3 internal objects (SymbolDictionary, RcCollisionBucket ×2): storage inside the objects above, or the database's own caches",
+      "  + 3 outside gemdb.root (SymbolDictionary, RcCollisionBucket ×2): Grail's own records and storage, which Persisted Objects does not show",
     );
     expect(text).not.toContain('oop=3');
     expect(text).not.toContain('not found');

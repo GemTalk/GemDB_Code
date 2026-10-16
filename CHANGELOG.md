@@ -45,8 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value over 2,000 characters, says it can't be reverted. The marks go once the notebook commits or
   discards its changes. Objects are matched by their permanent number, so a list
   that grew still finds the right item. Objects created since the last commit are written as part
-  of the objects that now hold them. Internal objects — storage inside a Python object, such as a
-  big dict's buckets, or the database's own caches — are counted on one line, not listed.
+  of the objects that now hold them. Objects outside `gemdb.root` — Grail's own records (its lists of a class's attribute names,
+  its module cache) and storage inside a Python object, such as a big dict's buckets — are counted
+  on one line, not listed.
 - **Pending changes in Persisted Objects, with nothing paused.** Every notebook with uncommitted
   changes now has a row in Persisted Objects, with Commit and Abort, whether or not anything was
   added from the debugger. Under it, **Pending changes** lists what its next commit changes, as

@@ -299,8 +299,8 @@ export function pendingText(
     for (const change of internal) types.set(change.type, (types.get(change.type) ?? 0) + 1);
     const named = [...types].map(([type, count]) => (count > 1 ? `${type} ×${count}` : type));
     lines.push(
-      `  + ${internal.length} internal ${internal.length === 1 ? 'object' : 'objects'} ` +
-        `(${named.join(', ')}): storage inside the objects above, or the database's own caches`,
+      `  + ${internal.length} outside gemdb.root (${named.join(', ')}): ` +
+        "Grail's own records and storage, which Persisted Objects does not show",
     );
   }
   if (unchanged > 0) {

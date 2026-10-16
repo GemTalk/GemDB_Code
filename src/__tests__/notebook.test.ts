@@ -445,3 +445,20 @@ describe('Refresh Notebook View', () => {
     );
   });
 });
+
+describe('what a notebook is called', () => {
+  it('is its file name, decoded, and an untitled one’s name rather than its whole URI', async () => {
+    const { notebookLabel } = await import('../notebook');
+    const uri = (path: string, text: string) => ({ path, toString: () => text });
+
+    expect(notebookLabel(uri('/home/me/notes.ipynb', 'file:///home/me/notes.ipynb'))).toBe(
+      'notes.ipynb',
+    );
+    expect(notebookLabel(uri('/home/me/my notes.ipynb', 'file:///home/me/my%20notes.ipynb'))).toBe(
+      'my notes.ipynb',
+    );
+    expect(
+      notebookLabel(uri('Untitled-1.ipynb', 'untitled:Untitled-1.ipynb?jupyter-notebook')),
+    ).toBe('Untitled-1.ipynb');
+  });
+});

@@ -34,11 +34,17 @@ export function notebookOwner(notebook: vscode.NotebookDocument): SessionOwner {
  */
 export function notebookOwnerForUri(uri: vscode.Uri): SessionOwner {
   const key = uri.toString();
-  return {
-    key,
-    kind: 'notebook',
-    label: key.split('/').pop() || 'notebook',
-  };
+  return { key, kind: 'notebook', label: notebookLabel(uri) };
+}
+
+/**
+ * What to call a notebook: its file name, from the URI's path, so it is
+ * decoded (`my notes.ipynb`, not `my%20notes.ipynb`) and an untitled one reads
+ * `Untitled-1.ipynb` rather than its whole URI,
+ * `untitled:Untitled-1.ipynb?jupyter-notebook`, which has no `/` to split at.
+ */
+export function notebookLabel(uri: { path?: string; toString(): string }): string {
+  return (uri.path || uri.toString()).split('/').pop() || 'notebook';
 }
 
 /**

@@ -784,11 +784,7 @@ export function changeRows(
   const notes: SavedRow[] = [];
   const internal = pending.changes.filter((c) => c.internal).length;
   if (internal > 0) {
-    notes.push(
-      note(
-        `+ ${internal} internal ${internal === 1 ? 'object' : 'objects'}: storage inside these, or the database's caches`,
-      ),
-    );
+    notes.push(note(`+ ${internal} outside gemdb.root: Grail's own records and storage`));
   }
   const unchanged = pending.unchanged ?? 0;
   if (unchanged > 0) {

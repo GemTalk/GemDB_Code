@@ -1647,7 +1647,7 @@ describe('a notebook’s Pending changes, with nothing paused', () => {
 
     expect(rows.map((r) => item(view, r).label)).toEqual([
       'boss',
-      "+ 1 internal object: storage inside these, or the database's caches",
+      "+ 1 outside gemdb.root: Grail's own records and storage",
       '+ 1 written back unchanged (reverted, or set to what it held)',
     ]);
     const boss = item(view, rows[0]);

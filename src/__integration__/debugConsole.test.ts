@@ -1120,7 +1120,7 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
     expect(seen.said).toMatch(/gemdb\.root\["pend_tags"\]\['a'\] +list = \[1, 2\]/);
     expect(seen.said).not.toContain('not found');
     expect(seen.said).toMatch(
-      /(\+ \d+ internal objects \(.*\): storage inside .*\n)?Objects created/,
+      /(\+ \d+ outside gemdb\.root \(.*\): Grail's own records .*\n)?Objects created/,
     );
     expect(oop).toBeDefined();
     expect(steps && pathText(steps)).toBe('gemdb.root["pend_orders"][2]');
@@ -1268,6 +1268,45 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
     const shown = changes.map((r) => view.getTreeItem(r));
     expect(shown.map((i) => i.label)).toContain('pend_idle');
     expect(shown.find((i) => i.label === 'pend_idle')?.description).toBe("'total' 10 → 11");
+  });
+  it('counts what a first run writes outside gemdb.root, rather than listing it as not found', async () => {
+    // Beside a warehouse-sized entry, so a search that did not finish would show.
+    await runPython(
+      [
+        'import gemdb',
+        'gemdb.root["pend_warehouse"] = {"orders": [{"n": n, "lines": [{"q": k} for k in range(3)]} for n in range(12000)]}',
+        'gemdb.commit()',
+      ].join('\n'),
+      notebook('po-pending-setup'),
+    );
+    closeSessionFor(notebook('po-pending-setup').key);
+    const nb = notebook('po-pending-first');
+    // As typed in a new notebook, with no commit after: deep_demo is new, so gemdb.root is what changes.
+    await runPython(
+      'import gemdb; d = gemdb.root.setdefault("deep_demo", {"a": {"b": {"c": {"total": 0}}}}); d["a"]["b"]["c"]["total"] += 1',
+      nb,
+    );
+    const view = registerSavedObjects({
+      subscriptions: [],
+      globalState: { get: () => undefined, update: () => Promise.resolve() },
+    } as unknown as Parameters<typeof registerSavedObjects>[0]);
+    view.getChildren();
+    let top = view.getChildren();
+    for (let i = 0; i < 200 && top.length === 1 && top[0].kind === 'message'; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      top = view.getChildren();
+    }
+    const row = top.find((r) => r.kind === 'notebook' && r.notebook.key === nb.key)!;
+    const [group] = await view.getChildren(row);
+    const shown = (await view.getChildren(group)).map((r) => view.getTreeItem(r));
+    // Let the M marking the group starts finish before the session goes.
+    for (let i = 0; i < 40; i++) await new Promise((resolve) => setTimeout(resolve, 50));
+    closeSessionFor(nb.key);
+
+    const labels = shown.map((i) => String(i.label));
+    expect(labels[0]).toBe('gemdb.root');
+    expect(shown[0].description).toBe("'deep_demo' added");
+    expect(labels.join('\n')).not.toMatch(/not found|stopped early/);
   });
   it('makes what Persisted Objects holds available by its key at a later pause', async () => {
     const nb = notebook('dc-persisted-names');
