@@ -7,12 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.7.0] - 2026-10-15
+## [1.7.0] - 2026-10-16
 
-The engine is unchanged at GemStone 4.0.0.a4, but start with a fresh database: delete
-`~/GemDB/db` before starting this release. The bundled Python runtime moves forward, and an update
-reinstalls it, after which much of what an earlier release committed no longer behaves as its type:
-dates and times, decimals, tuples and sets, instances of your own classes, even a stored `None`.
+The engine is unchanged at GemStone 4.0.0.a4, and the bundled Python runtime moves forward. Start
+with a fresh database: delete `~/GemDB/db` before starting this release. Installing the new Python
+runtime into a database an earlier release wrote leaves much of what it committed no longer
+behaving as its type, so GemDB Code now asks before doing it.
 
 ### Added
 
@@ -73,6 +73,16 @@ dates and times, decimals, tuples and sets, instances of your own classes, even 
 
 ### Changed
 
+- **GemDB asks before installing newer Python support into your database.** Installing it into a
+  database that already has Python support makes what was committed with the old version stop
+  working as its type: dates and times, decimals, tuples and sets, instances of your own classes,
+  even a stored `None` no longer compare, calculate or pass `isinstance`. So when an update ships
+  newer Python support, starting the database, running a cell or opening the GemDB Shell asks
+  first, with that warning; it was installed unasked before. Keep the current version and GemDB
+  does not ask again for that update, and the database starts on the Python support it has. The
+  **Python** row in the GemDB panel, or **GemDB: Reinstall the Python Execution Engine**, installs
+  it later, and that command now gives the same warning. Opening the editor and AI agents never
+  ask. `gemdb.reinstallPythonOnUpdate` is no longer used.
 - **A newer Python runtime.** 388 commits across 175 pull requests since 1.6.0. FastAPI serves sync
   endpoints as well as async ones, `import numpy` completes and its operators work, and enough is
   in place for boto3, SQLAlchemy and pytest's test collection. Names follow CPython's Unicode
