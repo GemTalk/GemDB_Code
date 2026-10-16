@@ -6,7 +6,6 @@ import {
   externalDatabase,
   isExternalDatabase,
   mcpEnabled,
-  reinstallPythonOnUpdate,
   rootPath,
 } from './config';
 import { ensureDatabaseAccount } from './account';
@@ -23,7 +22,15 @@ import {
   removeDatabase,
 } from './database';
 import { Progress, installEngine, removeEngine } from './engine';
-import { bundledGrailStamp, fileInGrail, grailLabel, grailNeedsUpdate, stageGrail } from './grail';
+import {
+  bundledGrailStamp,
+  fileInGrail,
+  grailLabel,
+  grailNeedsUpdate,
+  grailUpdateDeclined,
+  recordGrailUpdateDeclined,
+  stageGrail,
+} from './grail';
 import { errorMessage, log, logStep, showLog } from './log';
 import {
   bundledMcpStamp,
@@ -627,7 +634,7 @@ async function ensureRunningOnce(extensionPath: string, trigger: Trigger): Promi
         // build on disk differs from the one recorded in the database.
         const firstTime = !grailInstalled();
         let filedGrail: FiledGrail = FILED_GRAIL.no;
-        if (grailFileInDue(extensionPath)) {
+        if (await grailFileInAgreed(extensionPath, trigger)) {
           const stamp = bundledGrailStamp(extensionPath);
           log(
             firstTime
@@ -661,11 +668,86 @@ async function ensureRunningOnce(extensionPath: string, trigger: Trigger): Promi
 }
 
 /**
- * Whether `ensureRunning` would file Grail in: never filed in yet, or an update
- * the user lets through (`reinstallPythonOnUpdate`).
+ * Whether the database has no Python support yet. Filing it in then is
+ * automated: there is nothing in the database for it to break.
  */
-function grailFileInDue(extensionPath: string): boolean {
-  return grailNeedsUpdate(extensionPath) && (!grailInstalled() || reinstallPythonOnUpdate());
+function grailFirstInstallDue(extensionPath: string): boolean {
+  return grailNeedsUpdate(extensionPath) && !grailInstalled();
+}
+
+/**
+ * Triggers that are someone asking for the database. The others are GemDB's
+ * own doing (auto-start, the first-run pass) or an AI agent's tool call, which
+ * a modal would leave hanging until someone noticed it.
+ */
+const ASKS_ABOUT_PYTHON_UPDATES = new Set<Trigger>([
+  TRIGGER.installCommand,
+  TRIGGER.startCommand,
+  TRIGGER.sharedMemoryCommand,
+  TRIGGER.removeIpcCommand,
+  TRIGGER.notebook,
+  TRIGGER.shell,
+  TRIGGER.runFile,
+  TRIGGER.debugFile,
+]);
+
+/**
+ * Whether `ensureRunning` files Grail in: always into a database that has none,
+ * and an update only when the user says so.
+ *
+ * Filing a newer Grail into a database that already has Python support leaves
+ * much of what was committed under the old one no longer behaving as its type
+ * (measured on 1.6.0 -> 1.7.0, and the same on a reinstall of the same build:
+ * install.gs rebuilds every runtime class, and committed objects keep the old
+ * ones). That is persistent and not undoable, so it is asked, never automated,
+ * whatever `gemdb.reinstallPythonOnUpdate` says. A "keep" is remembered per
+ * build, so a notebook's every cell does not ask again; the status view's row
+ * and Reinstall the Python Execution Engine take the update later.
+ */
+async function grailFileInAgreed(extensionPath: string, trigger: Trigger): Promise<boolean> {
+  if (!grailNeedsUpdate(extensionPath)) return false;
+  if (!grailInstalled()) return true;
+  const bundled = bundledGrailStamp(extensionPath);
+  if (!ASKS_ABOUT_PYTHON_UPDATES.has(trigger) || grailUpdateDeclined() === bundled) {
+    log(
+      `Python support ${grailLabel(bundled)} is not installed; the database keeps its current one.`,
+    );
+    return false;
+  }
+  const agreed = await confirmGrailInstall(
+    `This GemDB update ships newer Python support (${grailLabel(bundled)}). Install it into your database?`,
+  );
+  if (!agreed) {
+    recordGrailUpdateDeclined(extensionPath);
+    log(`Kept the current Python support; ${grailLabel(bundled)} was not installed.`);
+  }
+  return agreed;
+}
+
+const INSTALL_PYTHON = 'Install Python Support';
+
+/**
+ * The warning before Grail is filed into a database that already has Python
+ * support, for an update and for a reinstall on request alike.
+ */
+async function confirmGrailInstall(question: string): Promise<boolean> {
+  const choice = await vscode.window.showWarningMessage(
+    question,
+    {
+      modal: true,
+      detail:
+        'Data your programs committed with the Python support installed now stops working ' +
+        'as its type: dates and times, decimals, tuples and sets, instances of your own ' +
+        'classes, even a stored None no longer compare, calculate or pass isinstance. ' +
+        'Dictionaries, lists, numbers and strings are unaffected.\n\n' +
+        'If the database holds nothing you need, installing is safe. Otherwise keep the ' +
+        'current Python support: GemDB will not ask again for this version, and ' +
+        'Reinstall the Python Execution Engine installs it later.',
+    },
+    INSTALL_PYTHON,
+    'Keep Current',
+  );
+  return choice === INSTALL_PYTHON;
 }
 
 /**
@@ -792,14 +874,10 @@ export async function resumeMcpServing(extensionPath: string): Promise<boolean> 
 export async function resumeRunning(extensionPath: string): Promise<boolean> {
   if (
     !isExternalDatabase() &&
-    grailFileInDue(extensionPath) &&
+    grailFirstInstallDue(extensionPath) &&
     (await isSharedMemoryConfigured())
   ) {
-    log(
-      grailInstalled()
-        ? 'The database is already running, but Python support in it is not up to date.'
-        : 'The database is already running, but Python support has not been installed into it.',
-    );
+    log('The database is already running, but Python support has not been installed into it.');
     return ensureRunning(extensionPath, TRIGGER.autoStart);
   }
   return resumeMcpServing(extensionPath);
@@ -998,6 +1076,13 @@ export async function reinstallGrail(extensionPath: string): Promise<void> {
     void vscode.window.showErrorMessage(
       'Start GemDB first — installing Python support needs a running database.',
     );
+    return;
+  }
+  const label = grailLabel(bundledGrailStamp(extensionPath));
+  if (
+    grailInstalled() &&
+    !(await confirmGrailInstall(`Reinstall Python support ${label} into your database?`))
+  ) {
     return;
   }
   await vscode.window.withProgress(

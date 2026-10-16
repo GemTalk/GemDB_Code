@@ -179,6 +179,13 @@ The first time the database starts, usually right after setup, GemDB Code instal
 into it. This takes a few minutes and shows its progress in a notification. If the database cannot
 start yet, this happens the first time you open a shell or run a notebook cell instead.
 
+When a GemDB Code update ships newer Python support, GemDB Code asks before installing it into a
+database that already has Python support. Data committed with the old version stops working as its
+type afterwards (dates and times, decimals, tuples and sets, and instances of your own classes), so
+install it into a database that holds nothing you need. If you keep the current version, GemDB Code
+does not ask again for that update; **GemDB: Reinstall the Python Execution Engine** installs it
+later.
+
 #### Changes that need your permission
 
 GemDB Code automates what is inert and reversible: files under `~/GemDB`, starting the database
@@ -583,8 +590,8 @@ To keep your data, copy out anything you need before you update GemDB Code.
 ### Settings
 
 The default GemDB Code settings are designed to work on most systems, so most users do not need to
-change them. These include settings for locating where GemDB Code stores files, controlling how
-Python support is updated, and setting up the MCP server for AI agents.
+change them. These include settings for locating where GemDB Code stores files and setting up the
+MCP server for AI agents.
 
 If you want to review them, open VS Code's Settings (Ctrl+, on Linux, or Cmd+, on macOS) and search
 for `gemdb`, or go to **Extensions** > **GemDB Code** in the list on the left. If you need to
@@ -592,20 +599,19 @@ customize your setup, change them in your **User** settings. They apply to the o
 this computer, so a value set in a workspace or folder is ignored, and Settings Sync does not copy
 them to other computers. The following table lists all of the settings and the defaults.
 
-| Setting                                  | Default         | What it does                                                                       |
-| ---------------------------------------- | --------------- | ---------------------------------------------------------------------------------- |
-| `gemdb.rootPath`                         | `~/GemDB`       | Where GemDB Code keeps everything; must be on a local disk                         |
-| `gemdb.engineVersion`                    | _(empty)_       | Advanced: override the pinned engine version                                       |
-| `gemdb.reinstallPythonOnUpdate`          | `true`          | Refresh Python support in your database when a GemDB Code update ships a newer one |
-| `gemdb.mcp.enabled`                      | `false`         | Run the MCP server, so AI agents can reach your database                           |
-| `gemdb.mcp.port`                         | `50390`         | The port it listens on, always on `127.0.0.1`                                      |
-| `gemdb.mcp.readOnly`                     | `false`         | Log agents in as a database user that cannot commit                                |
-| `gemdb.externalDatabase.gemstone`        | _(empty)_       | Advanced: use a database someone else runs, whose engine is here                   |
-| `gemdb.externalDatabase.globalDirectory` | `/opt/gemstone` | That database's lock directory (`GEMSTONE_GLOBAL_DIR`)                             |
-| `gemdb.externalDatabase.stone`           | `gs64stone`     | Its stone                                                                          |
-| `gemdb.externalDatabase.netldi`          | `gs64ldi`       | Its NetLDI                                                                         |
-| `gemdb.externalDatabase.user`            | `DataCurator`   | The account GemDB Code logs in as                                                  |
-| `gemdb.externalDatabase.passwordFile`    | _(empty)_       | A file holding that account's password                                             |
+| Setting                                  | Default         | What it does                                                     |
+| ---------------------------------------- | --------------- | ---------------------------------------------------------------- |
+| `gemdb.rootPath`                         | `~/GemDB`       | Where GemDB Code keeps everything; must be on a local disk       |
+| `gemdb.engineVersion`                    | _(empty)_       | Advanced: override the pinned engine version                     |
+| `gemdb.mcp.enabled`                      | `false`         | Run the MCP server, so AI agents can reach your database         |
+| `gemdb.mcp.port`                         | `50390`         | The port it listens on, always on `127.0.0.1`                    |
+| `gemdb.mcp.readOnly`                     | `false`         | Log agents in as a database user that cannot commit              |
+| `gemdb.externalDatabase.gemstone`        | _(empty)_       | Advanced: use a database someone else runs, whose engine is here |
+| `gemdb.externalDatabase.globalDirectory` | `/opt/gemstone` | That database's lock directory (`GEMSTONE_GLOBAL_DIR`)           |
+| `gemdb.externalDatabase.stone`           | `gs64stone`     | Its stone                                                        |
+| `gemdb.externalDatabase.netldi`          | `gs64ldi`       | Its NetLDI                                                       |
+| `gemdb.externalDatabase.user`            | `DataCurator`   | The account GemDB Code logs in as                                |
+| `gemdb.externalDatabase.passwordFile`    | _(empty)_       | A file holding that account's password                           |
 
 Before you change the following settings, note these important details:
 
