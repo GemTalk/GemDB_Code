@@ -142,4 +142,25 @@ run_topaz src/smalltalk/install.gs
 echo "== Deploying gemdb"
 run_topaz scripts/deployGemdb.gs
 
+# ---------------------------------------------------------------------------
+# Step 4: build unicodedata's tables, for the same reason.
+# ---------------------------------------------------------------------------
+# The first normalize/category/... call in a session parses the Unicode tables
+# into a database cached in a module global: about a second for both versions,
+# and the session is left with something to commit. Built and committed here, a
+# fresh session's first call costs milliseconds and writes nothing. Since Grail
+# #1512, compiling an identifier NFKC can change (`µ`) reaches it too.
+#
+# A failure is a warning, as in Grail's install.sh: Python works without it,
+# only slower and dirtier on first use, which is no reason to fail a setup.
+echo "== Building unicodedata"
+if LC_ALL=C topaz -lq -S scripts/deployUnicodedata.gs < /dev/null \
+     | grep -E 'deployUnicodedata: both databases built'; then
+    :
+else
+    echo "WARNING: building unicodedata's tables failed. Grail is installed, but each" >&2
+    echo "         session's first unicodedata call will rebuild them and leave the" >&2
+    echo "         session with something to commit." >&2
+fi
+
 echo "== Grail installed"
