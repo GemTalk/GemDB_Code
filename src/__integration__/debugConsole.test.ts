@@ -32,7 +32,7 @@ import {
   snapshotQuery,
   pausedStackQuery,
 } from '../pauseVariables';
-import { isRunning, startNetldi, startStone, stopNetldi, stopStone } from '../processes';
+import { ensureProcesses, isRunning, stopNetldi, stopStone } from '../processes';
 import { PyResult, runPython, runPythonFile } from '../pythonQueries';
 import {
   SessionOwner,
@@ -102,8 +102,7 @@ beforeAll(async () => {
   fs.writeFileSync(path.join(fixture.root, 'dcmod.py'), DCMOD);
   createDatabaseWithPython(fixture);
   stageGrail(ext);
-  await startStone();
-  await startNetldi();
+  await ensureProcesses();
 });
 
 afterAll(async () => {

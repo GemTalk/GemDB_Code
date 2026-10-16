@@ -51,7 +51,7 @@ DBF_PRE_GROW = TRUE;
   numbers and a way out rather than the stone's log line: `assertRoomForSetup`
   before setup downloads anything (the cap plus the engine), and
   `assertRoomForExtent` before every start (what the extent still needs), and
-  `startStone` explains a startup that failed with "No space left on device"
+  `runStartstone` explains a startup that failed with "No space left on device"
   anyway. With the extent pregrown, `SystemRepository freeSpace` alone is the
   room left, for every tool that reads it.
 - **The test suite reserves 1 GB, not 10.** Each integration file makes a

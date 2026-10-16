@@ -26,7 +26,7 @@ import * as path from 'path';
  * be created. Anything that cannot be read answers false. A wrong "NFS" blocks
  * setup on a machine that could run it; a wrong "local" costs what happened
  * before this check existed, and the stone's refusal is recognised then too
- * (see `startStone`).
+ * (see `refusedNfs`).
  */
 export function isOnNfs(dir: string, world: FileSystemWorld = realWorld): boolean {
   const existing = nearestExisting(path.resolve(dir), world);

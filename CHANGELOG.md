@@ -53,6 +53,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   added from the debugger. Under it, **Pending changes** lists what its next commit changes, as
   `%pending` does in the Debug Console. Click one to go to it under `gemdb.root`, where it is
   marked **M** and can be reverted.
+
+### Fixed
+
+- **Persisted Objects reads again when the database starts or stops.** Opened while the database
+  was stopped, it kept saying "Start GemDB to see persisted objects." after Start until it was
+  closed and opened again; it now follows the status panel, which sees every start and stop.
+
+## [1.7.0] - 2026-10-16
+
+The engine is unchanged at GemStone 4.0.0.a4, and the bundled Python runtime moves forward. Start
+with a fresh database: delete `~/GemDB/db` before starting this release. Installing the new Python
+runtime into a database an earlier release wrote leaves much of what it committed no longer
+behaving as its type, so GemDB Code now asks before doing it.
+
+### Added
+
 - **The Debug Console and Watch work at a `breakpoint()` or red dot.** Type Python into the Debug
   Console and it runs in the frame selected in the Call Stack: its locals, closed-over names, its
   module's globals (an imported module's own, not the notebook's) and the builtins, as the paused
@@ -67,34 +83,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deep in the tree, and **Show in Debug Console** opens the console with that object in it: an
   object with its attributes listed beneath, each by name; a list, set or dict, or an object with
   more than 20 attributes, as one row that opens like the Variables row. Its name is left at the
-  console's prompt, or `_` bound to it for a row whose name means nothing there, such as a list item. **Evaluate with self…** asks for an expression and shows what it gives
-  with `self` bound to the row's object, in the frame selected in Call Stack.
+  console's prompt, or `_` bound to it for a row whose name means nothing there, such as a list
+  item. **Evaluate with self…** asks for an expression and shows what it gives with `self` bound to
+  the row's object, in the frame selected in Call Stack.
 - **Variables shows each value's type, and opens objects whole.** Every row starts with its type,
   and a container's with its size too, as PyCharm shows them: `{Point} Point(3, 4)`,
   `{list: 3} […]`, `{list: 150}` for one too big to show. **Copy Value** copies the value alone,
   without the type. An object with attributes, its own or its class's, now opens on everything
-  `dir()` lists: its own attributes, its class's, its
-  properties (read through their getters) and its `__slots__`, which before did not open at all.
-  Its methods are folded under **function variables** and its dunders under
-  **special variables**, as in VS Code's Python debugger, so a class no longer buries its own
-  methods under `__module__`, `__dict__` and the rest. A getter that runs past the time limit reads
-  `<getter took too long>`, and the getters after it are not run. Modules now land under
-  **module variables**; before, they were listed with the data.
+  `dir()` lists: its own attributes, its class's, its properties (read through their getters) and
+  its `__slots__`, which before did not open at all. Its methods are folded under **function
+  variables** and its dunders under **special variables**, as in VS Code's Python debugger, so a
+  class no longer buries its own methods under `__module__`, `__dict__` and the rest. A getter that
+  runs past the time limit reads `<getter took too long>`, and the getters after it are not run.
+  Modules now land under **module variables**; before, they were listed with the data.
 - **Set Value in Variables.** Right-click a row while paused and choose **Set Value** to change a
-  local, a global, an attribute, a list item or a dict entry. The value is a Python expression,
-  and on any row it can use the notebook's globals, or a `.py` file's (`Point(1, 2)`, `g + 1`). In
+  local, a global, an attribute, a list item or a dict entry. The value is a Python expression, and
+  on any row it can use the notebook's globals, or a `.py` file's (`Point(1, 2)`, `g + 1`). In
   Locals it can use the frame's locals too (`n + 1`), and a local wins over a global of the same
-  name. A statement such as `n = 5` is
-  refused rather than stored as None. A local is written into the paused frame, so the run
-  continues with it. What Python refuses is refused with Python's reason, such as a property with
-  no setter. A method's receiver (`self`, or whatever the def calls it), a tuple's items, group
-  rows and a saved stack's values cannot be changed, and VS Code does not offer Set Value on them.
+  name. A statement such as `n = 5` is refused rather than stored as None. A local is written into
+  the paused frame, so the run continues with it. What Python refuses is refused with Python's
+  reason, such as a property with no setter. A method's receiver (`self`, or whatever the def calls
+  it), a tuple's items, group rows and a saved stack's values cannot be changed, and VS Code does
+  not offer Set Value on them.
 - **GemDB commands in the Debug Console.** A line starting with `%` is a GemDB command rather than
   Python: `%persist p` adds `p` to Persisted Objects (or `%persist expr as key`), shown there as
   added until the notebook commits; `%commit` commits the notebook; `%names` lists the names you
-  have bound in the console at this pause; `%help` lists the commands. Typing `%` suggests them,
-  and `%persist ` suggests your console names. The first pause in a window says so, once. `gemdb`
-  is available in the console without an import, so a line copied from Persisted Objects
+  have bound in the console at this pause; `%help` lists the commands. Typing `%` suggests them, and
+  `%persist ` suggests your console names. The first pause in a window says so, once. `gemdb` is
+  available in the console without an import, so a line copied from Persisted Objects
   (`gemdb.root["orders"]`) works in any program, and each persisted entry is there by its key
   (`orders`) at every pause, unless the paused code has a name of its own spelled so, and is
   labelled `orders is gemdb.root["orders"]` when typed; `persisted.orders` reaches it whatever
@@ -103,21 +119,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The Debug Console on a saved stack.** A stack reopened with **Restore a Saved Stack…** now has a
   Debug Console, in each frame, on the saved objects: evaluate, call methods, bind names, change
   objects, `%names`, `%persist`, `%commit`, Show in Debug Console and Evaluate with self…. The stack
-  opens in a database session of its own, so a change waits there uncommitted, as a notebook's
-  does. When the stack opens, the console warns that `%commit` (or ✓ in Persisted Objects) would
-  write a change into the saved stack, which then no longer holds the values it was saved with. Closing the stack
-  with changes pending asks whether to commit them; otherwise they are discarded.
+  opens in a database session of its own, so a change waits there uncommitted, as a notebook's does.
+  When the stack opens, the console warns that `%commit` (or ✓ in Persisted Objects) would write a
+  change into the saved stack, which then no longer holds the values it was saved with. Closing the
+  stack with changes pending asks whether to commit them; otherwise they are discarded.
+
+### Changed
+
+- **GemDB asks before installing newer Python support into your database.** Installing it into a
+  database that already has Python support makes what was committed with the old version stop
+  working as its type: dates and times, decimals, tuples and sets, instances of your own classes,
+  even a stored `None` no longer compare, calculate or pass `isinstance`. So when an update ships
+  newer Python support, starting the database, running a cell or opening the GemDB Shell asks
+  first, with that warning; it was installed unasked before. Keep the current version and GemDB
+  does not ask again for that update, and the database starts on the Python support it has. The
+  **Python** row in the GemDB panel, or **GemDB: Reinstall the Python Execution Engine**, installs
+  it later, and that command now gives the same warning. Opening the editor and AI agents never
+  ask. `gemdb.reinstallPythonOnUpdate` is no longer used.
+- **A newer Python runtime.** 388 commits across 175 pull requests since 1.6.0. FastAPI serves sync
+  endpoints as well as async ones, `import numpy` completes and its operators work, and enough is
+  in place for boto3, SQLAlchemy and pytest's test collection. Names follow CPython's Unicode
+  rules, so `µ` and `μ` are one name; `except*` works; tracebacks stop at the frame that caught the
+  exception and report CPython's line numbers. A session's first `unicodedata` call takes
+  milliseconds and leaves nothing to commit, where it took about a second and left the session
+  needing a commit. Some code CPython refuses is now refused here too: a lambda given extra
+  arguments, or an argument given both by position and by keyword, raises `TypeError`; an
+  exception in a decorator propagates instead of leaving the function undecorated; and comparing a
+  `date` with a `datetime` is `False` for `==` and raises for `<`. `vars(obj)` is now a live view
+  of the object, so writing through it changes the object. `click` and `requests` are no longer
+  importable unless you install them; Flask still works without them.
+- **The new GemDB brand.** The Marketplace and Extensions view icon is GemDB's dark-mode favicon,
+  the gem on a blue gradient, and the activity bar shows the gem, recoloured to fit your theme with
+  its right face lighter as in the logo. The Marketplace page's banner is the brand's Core Purple.
+- **Usage data now records which editor GemDB runs in** (VS Code, Cursor, …), so a fork's users are
+  not mistaken for VS Code users on an old release. `USAGE_DATA.md` lists it.
 
 ### Fixed
 
-- **Persisted Objects reads again when the database starts or stops.** Opened while the database
-  was stopped, it kept saying "Start GemDB to see persisted objects." after Start until it was
-  closed and opened again; it now follows the status panel, which sees every start and stop.
 - **A classmethod's or staticmethod's frame is named by its class.** The Call Stack read
   `Account class.open` for a paused `@classmethod` or `@staticmethod`; it now reads `Account.open`,
   as CPython names it.
-
-### Fixed
 
 - **Starting GemDB from two places at once starts it once.** A cell run while the database was
   starting on its own, cells in two notebooks, or a cell and **GemDB: Start** each ran the whole
@@ -126,12 +167,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   database was stopped while it started: then it waits for the stop and starts the database again.
 - **GemDB asks about shared memory once, even when two things need it.** A cell run while the
   first-run question about shared memory was still open queued a second copy of it, and answering
-  both could open two `sudo` terminals. Now the second waits for the first answer. Running
-  **GemDB: Configure Shared Memory** while that setup is already running uses its terminal instead
-  of opening another, and so does answering the question while the command's setup is running.
+  both could open two `sudo` terminals. Now the second waits for the first answer. Running **GemDB:
+  Configure Shared Memory** while that setup is already running uses its terminal instead of opening
+  another, and so does answering the question while the command's setup is running.
 - **The MCP server is installed and started once when GemDB starts.** Opening a window on a running
   database while a cell started it could install the MCP server's classes twice and start two
   servers on one port. Now the second waits for the first.
+- **Ctrl+C ends a `gemdb` run without an error.** Stopping `gemdb app.py` printed
+  `[Sending soft break]`, a line number in GemDB's own script,
+  `ERROR 3004 , a ExitClientError occurred` and `Logging out session 1.` around the
+  `KeyboardInterrupt`, which read as a failure. It now prints only `KeyboardInterrupt`, as Python
+  does. GemStone's own messages from a `gemdb` run are shown only when the program could not run to
+  the end, such as a refused login, and a `.topazini` file is no longer read.
+
+- **Starting GemDB while something else is starting it no longer reports a failure.** Pressing
+  Start, running a notebook cell or opening the GemDB Shell while another window or terminal was
+  bringing the database up could end in "Start session listener failed (exit code 1)", although the
+  database and its session listener were both running. GemDB now checks for and starts the session
+  listener under the same lock as the database, so one start waits for the other, and a listener
+  started by an older GemDB in another editor counts as started.
+- **GemDB waits for a database that is still starting before logging in to it.** After a crash the
+  database takes a while to recover before it accepts logins, and GemDB treated it as running as
+  soon as it appeared, so the first notebook cell, the GemDB Shell or a `gemdb` command could fail
+  to log in. GemDB and the `gemdb` command now wait for the database to finish starting, for up to a
+  minute, and then name the database's log if it has not.
+- **The GemDB Shell checks the database before starting it, as the window does.** Opening the Shell
+  with the database stopped started it without the checks the window makes first, so a database the
+  installed engine cannot read started and then refused every login, and one on a network drive or a
+  disk without room for it failed with the engine's own error. The Shell now refuses with the same
+  explanation the window gives, and applies the space limits a database from an earlier GemDB is
+  missing.
+- **On Linux, Survives logout takes effect at once.** Clicking the row wrote `RemoveIPC=no` to
+  logind's configuration and the row went away, but logind kept the setting it had loaded, so the
+  next logout still removed the database's shared memory. GemDB now has logind reload its
+  configuration and waits for the new setting to be in effect. The row reads logind's live setting,
+  and says **not yet applied** if the file is written but not loaded, instead of disappearing.
 
 ## [1.6.0] - 2026-10-07
 
@@ -220,8 +290,6 @@ Python runtime moves forward.
   `gemdb.admin.garbage_collect()`, `gemdb.admin.backup()` and `gemdb.sessions.all()` now raise a
   security error; **Collect Garbage Now** and **Stop a Database Session…** cover the first and
   last.
-- **Usage data now records which editor GemDB runs in** (VS Code, Cursor, …), so a
-  fork's users are not mistaken for VS Code users on an old release. `USAGE_DATA.md` lists it.
 
 ### Fixed
 
@@ -1011,7 +1079,8 @@ gets out of the way.
 - **`sys.exit(n)` exits 1 rather than `n`**, and **`input()` is not yet
   supported**. Both are upstream in Grail.
 
-[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.4...v1.6.0
 [1.5.4]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.2...v1.5.3

@@ -2,7 +2,7 @@
   "name": "gemdb",
   "displayName": "GemDB Code",
   "description": "Python with built-in transactional persistence (using true ACID semantics). When you have critical, complex data that must be consistent, use GemDB.",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "publisher": "gemtalksystems",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -16,7 +16,7 @@
   "homepage": "https://github.com/GemTalk/GemDB_Code#readme",
   "qna": "https://github.com/GemTalk/GemDB_Code/issues",
   "galleryBanner": {
-    "color": "#1E2A38",
+    "color": "#0B0F38",
     "theme": "dark"
   },
   "engines": {
@@ -63,7 +63,8 @@
           "scope": "machine",
           "type": "boolean",
           "default": true,
-          "description": "When a GemDB Code update ships a newer Python execution engine, reinstall it into your database automatically the next time GemDB Code starts."
+          "description": "No longer used: GemDB Code asks before installing a newer Python execution engine into your database.",
+          "deprecationMessage": "No longer used. Installing a newer Python execution engine makes data committed with the current one stop working as its type, so GemDB Code now asks first, whatever this says."
         },
         "gemdb.maintenance.abortIdleSessionsAfterMinutes": {
           "scope": "machine",

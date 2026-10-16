@@ -5,19 +5,18 @@ import { createDatabase } from '../database';
 import { isSharedMemoryConfigured } from '../osConfig';
 import { databaseExists, databaseStatPath, extentPath } from '../paths';
 import {
+  ensureProcesses,
   findNetldi,
   findStone,
   isListening,
   isRunning,
   listProcesses,
-  startNetldi,
-  startStone,
   stopNetldi,
   stopStone,
 } from '../processes';
 import { execute, isConnected, logout } from '../session';
 import { ensureStatmonitor, recordedFiles } from '../statmonitor';
-import { Fixture, TEST_CAP_MB, limitTestDatabase, makeFixture } from './fixture';
+import { Fixture, TEST_CAP_MB, limitTestDatabase, makeFixture, startStoneAlone } from './fixture';
 
 /**
  * The parts of GemDB that are only interesting against a real database.
@@ -81,8 +80,7 @@ describe.skipIf(!makeFixtureIsPossible())('a real database', () => {
   it('starts, and reports itself through gslist', async () => {
     // As startProcesses does before every start.
     ensureStatmonitor();
-    await startStone();
-    await startNetldi();
+    await ensureProcesses();
     ensureDatabaseAccount();
 
     const processes = listProcesses();
@@ -163,7 +161,7 @@ describe.skipIf(!makeFixtureIsPossible())('a real database', () => {
 
   it('stops cleanly once nothing is logged in', async () => {
     logout();
-    await startStone();
+    await startStoneAlone();
     expect(isRunning()).toBe(true);
 
     await stopStone(false);

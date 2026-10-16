@@ -64,6 +64,16 @@ export function grailFailurePath(): string {
   return path.join(databasePath(), '.gemdb-grail-failed');
 }
 
+/**
+ * Record of the Grail build the user chose not to file into the database.
+ *
+ * Beside the database for the same reason as the failure record: the answer is
+ * about this database's data, so a fresh database starts without it.
+ */
+export function grailDeclinedPath(): string {
+  return path.join(databasePath(), '.gemdb-grail-declined');
+}
+
 export function databaseConfPath(): string {
   return path.join(databasePath(), 'conf');
 }

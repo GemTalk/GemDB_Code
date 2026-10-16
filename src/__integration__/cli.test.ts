@@ -1,12 +1,18 @@
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cliPath } from '../cli';
 import { bundledGrailStamp, stageGrail } from '../grail';
-import { isRunning, startStone, stopStone } from '../processes';
-import { createDatabaseWithPython, Fixture, haveTestExtent, makeFixture } from './fixture';
+import { isRunning, stopStone } from '../processes';
+import {
+  createDatabaseWithPython,
+  Fixture,
+  haveTestExtent,
+  makeFixture,
+  startStoneAlone,
+} from './fixture';
 
 /**
  * The `gemdb` shell command, run the way a user runs it: bash, a file
@@ -69,7 +75,7 @@ beforeAll(async () => {
 
   createDatabaseWithPython(fixture); // Python already filed in — see testExtentPath
   stageGrail(ext); // stages Grail and generates the CLI
-  await startStone();
+  await startStoneAlone();
 
   fs.writeFileSync(path.join(workDir, 'hello.py'), 'print("hello from", 6 * 7)\n');
   fs.writeFileSync(path.join(workDir, 'both.py'), 'print("partial")\n1 / 0\n');
@@ -222,7 +228,7 @@ describe.skipIf(!ready || !canMakeFixture())('the gemdb command', () => {
     expect(ran.code).toBe(0);
   });
 
-  it('stops on Ctrl-C, after finally blocks, rather than at a topaz prompt', async () => {
+  it('stops on Ctrl-C as python3 does, after finally blocks, with nothing from topaz', async () => {
     // A real Ctrl-C needs a real terminal: the line discipline turns ^C into
     // SIGINT for topaz, which sends the gem a soft break. expect(1) owns the
     // pty, as in repl.test.ts. The script blocks in a primitive, where a web
@@ -268,10 +274,79 @@ exit [lindex $result 3]
         },
       );
     });
-    expect(ran.transcript).toContain('cleaned up');
-    expect(ran.transcript).toContain('KeyboardInterrupt');
-    expect(ran.transcript).not.toContain('topaz 1>');
+    // Everything the terminal showed after expect's own spawn line, less the
+    // ^C the line discipline echoes. Topaz used to add a soft-break notice,
+    // the driver line it stopped at, ERROR 3004 and a logout (#131).
+    const shown = ran.transcript
+      .replaceAll('^C', '')
+      .split(/\r?\n/)
+      .slice(1)
+      .map((line) => line.trim())
+      .filter((line) => line !== '');
+
+    expect(shown).toEqual(['serving', 'cleaned up', 'KeyboardInterrupt']);
     expect(ran.code).toBe(130);
+  });
+
+  it('says why when the database refuses the login, and runs nothing piped to it', async () => {
+    const driver = path.join(path.dirname(cliPath()), 'gemdb-run.tpz');
+    const good = fs.readFileSync(driver, 'utf8');
+    fs.writeFileSync(driver, good.replace(/^(set user \S+ pass )\S*$/m, '$1not-the-password'));
+    let ran: Ran;
+    try {
+      ran = await run(['hello.py'], 'shell echo LEAKED\n');
+    } finally {
+      fs.writeFileSync(driver, good);
+    }
+
+    // Exactly GemStone's report of the refusal: none of the driver, which
+    // topaz echoes into the log and the wrapper strips, nothing about the run
+    // block topaz goes on through with no session, and not the piped line.
+    // stdout is not pinned: the gem sometimes writes a line of its own there
+    // about the failed login, which is not topaz's to keep quiet.
+    expect(ran.stderr.trimEnd().split('\n')).toEqual([
+      expect.stringMatching(/^-+$/),
+      'GemStone: Error         Fatal',
+      'Login failed:  the userId/password combination is invalid or expired.',
+      expect.stringContaining('Number: 4051'),
+      'Arg 1: nil',
+    ]);
+    expect(ran.stdout).not.toContain('LEAKED');
+    expect(ran.stdout).not.toContain('hello from');
+    // topaz's own status, which the wrapper passes on when there is no other.
+    expect(ran.code).toBe(1);
+  });
+
+  it('leaves no temporary files behind, even when its terminal closes mid-run', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gemdb-cli-tmp-'));
+    const env = { ...process.env, TMPDIR: tmp };
+    fs.writeFileSync(
+      path.join(workDir, 'forever.py'),
+      'import time\nprint("serving", flush=True)\nwhile True:\n    time.sleep(0.2)\n',
+    );
+    await new Promise((resolve) =>
+      execFile('bash', [cliPath(), '-c', 'print(1)'], { cwd: workDir, env }, resolve),
+    );
+    // Its own process group, so the hangup reaches the wrapper and topaz
+    // together, as closing a terminal tab does.
+    const child = spawn('bash', [cliPath(), 'forever.py'], { cwd: workDir, env, detached: true });
+    const exited = new Promise((resolve) => child.on('exit', resolve));
+    await new Promise<void>((resolve) => {
+      child.stdout.on('data', (chunk: Buffer) => {
+        if (chunk.toString().includes('serving')) resolve();
+      });
+    });
+
+    process.kill(-(child.pid ?? 0), 'SIGHUP');
+    await exited;
+    const left = fs.readdirSync(tmp);
+    // topaz outlives a hangup, as it did before the wrapper had a trap, so it
+    // is ended here: left running it holds a session the next test needs gone.
+    process.kill(-(child.pid ?? 0), 'SIGTERM');
+    await waitForGroupToEnd(child.pid ?? 0);
+    fs.rmSync(tmp, { recursive: true, force: true });
+
+    expect(left).toEqual([]);
   });
 
   it('raises EOFError when stdin runs dry', async () => {
@@ -315,4 +390,17 @@ function canMakeFixture(): boolean {
   const probe = makeFixture();
   probe?.remove();
   return probe !== undefined;
+}
+
+/** Resolves once no process in the group is left, polling as `kill -0` does. */
+async function waitForGroupToEnd(pgid: number): Promise<void> {
+  for (let i = 0; i < 100; i++) {
+    try {
+      process.kill(-pgid, 0);
+    } catch {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`process group ${pgid} still running after 10 s`);
 }

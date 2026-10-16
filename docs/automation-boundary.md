@@ -216,6 +216,42 @@ confirms) or Leave It. Only once the notebook is at least 20 commits behind
 (`STN_SIGNAL_ABORT_CR_BACKLOG`'s default): a dirty notebook that nothing else
 commits past holds nothing back, and a prompt then would be noise.
 
+**Installing a newer Grail into a database that already has Python support —
+asked, once per build, and only by someone who asked for the database**
+(`grailFileInAgreed` in `lifecycle.ts`). It used to be automated, behind
+`gemdb.reinstallPythonOnUpdate` (default on), on the reasoning that Grail is
+GemDB's own code. It is not inert: `install.gs` removes Grail's dictionaries and
+rebuilds every runtime class, and committed objects keep pointing at the old
+ones. Measured 2026-10-15 on a database populated under 1.6.0's Grail
+(`beef473`), Brain Freeze included: after filing in `9fb5d23`, committed
+datetimes, dates, timedeltas, Decimals, tuples, sets, instances of user classes
+and a stored `None` no longer pass `isinstance` or compare, some comparisons end
+the script with an error `except BaseException` cannot catch, and Brain Freeze
+dies on its first request. Filing the _same_ build in again does exactly the
+same, so this is the reinstall, not any one pin. A fresh database on the new
+build passed every check. Dictionaries, lists, numbers and strings survive.
+
+So the setting is ignored (kept in the manifest, deprecated, so existing values
+are not reported as unknown) and the question is a modal warning. Placement:
+
+- Asked from `ensureRunning` for the triggers that are a person asking for the
+  database (Start, a cell, the Shell, Run or Debug File, the setup commands).
+  Never from auto-start or the first-run pass, which never prompt, and never
+  from an MCP tool call, which a modal would leave hanging. Those start the
+  database on the Grail it already has.
+- "Keep" (or dismissing the modal) is recorded per bundled build beside the
+  database (`.gemdb-grail-declined`), so a notebook's every cell does not ask
+  again; an update shipping a different build asks afresh, and a new database
+  starts without the record.
+- The status view's Python row and **Reinstall the Python Execution Engine**
+  take the update later. That command now carries the same warning, since a
+  reinstall does the same damage.
+- A first install is still automated: there is nothing in the database yet.
+
+Declining is safe because staging happens only on first setup and inside
+`fileInGrail`, so the Grail on disk and the Grail in the database stay the
+same build.
+
 **Stopping a database session — asked, every time** (`gemdb.stopSession`).
 Whatever the session has not committed is lost, so it is a modal with the
 session named. It is never automated, and neither of the stone's automatic

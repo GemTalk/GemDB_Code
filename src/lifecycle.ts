@@ -6,7 +6,6 @@ import {
   externalDatabase,
   isExternalDatabase,
   mcpEnabled,
-  reinstallPythonOnUpdate,
   rootPath,
 } from './config';
 import { ensureDatabaseAccount } from './account';
@@ -18,13 +17,20 @@ import {
   DatabaseOnNfsError,
   DatabaseVersionError,
   DiskSpaceError,
-  assertRoomForExtent,
   assertRoomForSetup,
-  ensureSpaceLimits,
+  assertSafeToStart,
   removeDatabase,
 } from './database';
 import { Progress, installEngine, removeEngine } from './engine';
-import { bundledGrailStamp, fileInGrail, grailLabel, grailNeedsUpdate, stageGrail } from './grail';
+import {
+  bundledGrailStamp,
+  fileInGrail,
+  grailLabel,
+  grailNeedsUpdate,
+  grailUpdateDeclined,
+  recordGrailUpdateDeclined,
+  stageGrail,
+} from './grail';
 import { errorMessage, log, logStep, showLog } from './log';
 import {
   bundledMcpStamp,
@@ -53,14 +59,14 @@ import {
   mcpPath,
 } from './paths';
 import {
-  ExternalDatabaseError,
+  ensureListener,
+  ensureProcesses,
+  externalDatabaseDownError,
   findNetldi,
   findStone,
   isListening,
   isRunning,
   listProcesses,
-  startNetldi,
-  startStone,
   stopNetldi,
   stopStone,
 } from './processes';
@@ -628,7 +634,7 @@ async function ensureRunningOnce(extensionPath: string, trigger: Trigger): Promi
         // build on disk differs from the one recorded in the database.
         const firstTime = !grailInstalled();
         let filedGrail: FiledGrail = FILED_GRAIL.no;
-        if (grailFileInDue(extensionPath)) {
+        if (await grailFileInAgreed(extensionPath, trigger)) {
           const stamp = bundledGrailStamp(extensionPath);
           log(
             firstTime
@@ -662,11 +668,86 @@ async function ensureRunningOnce(extensionPath: string, trigger: Trigger): Promi
 }
 
 /**
- * Whether `ensureRunning` would file Grail in: never filed in yet, or an update
- * the user lets through (`reinstallPythonOnUpdate`).
+ * Whether the database has no Python support yet. Filing it in then is
+ * automated: there is nothing in the database for it to break.
  */
-function grailFileInDue(extensionPath: string): boolean {
-  return grailNeedsUpdate(extensionPath) && (!grailInstalled() || reinstallPythonOnUpdate());
+function grailFirstInstallDue(extensionPath: string): boolean {
+  return grailNeedsUpdate(extensionPath) && !grailInstalled();
+}
+
+/**
+ * Triggers that are someone asking for the database. The others are GemDB's
+ * own doing (auto-start, the first-run pass) or an AI agent's tool call, which
+ * a modal would leave hanging until someone noticed it.
+ */
+const ASKS_ABOUT_PYTHON_UPDATES = new Set<Trigger>([
+  TRIGGER.installCommand,
+  TRIGGER.startCommand,
+  TRIGGER.sharedMemoryCommand,
+  TRIGGER.removeIpcCommand,
+  TRIGGER.notebook,
+  TRIGGER.shell,
+  TRIGGER.runFile,
+  TRIGGER.debugFile,
+]);
+
+/**
+ * Whether `ensureRunning` files Grail in: always into a database that has none,
+ * and an update only when the user says so.
+ *
+ * Filing a newer Grail into a database that already has Python support leaves
+ * much of what was committed under the old one no longer behaving as its type
+ * (measured on 1.6.0 -> 1.7.0, and the same on a reinstall of the same build:
+ * install.gs rebuilds every runtime class, and committed objects keep the old
+ * ones). That is persistent and not undoable, so it is asked, never automated,
+ * whatever `gemdb.reinstallPythonOnUpdate` says. A "keep" is remembered per
+ * build, so a notebook's every cell does not ask again; the status view's row
+ * and Reinstall the Python Execution Engine take the update later.
+ */
+async function grailFileInAgreed(extensionPath: string, trigger: Trigger): Promise<boolean> {
+  if (!grailNeedsUpdate(extensionPath)) return false;
+  if (!grailInstalled()) return true;
+  const bundled = bundledGrailStamp(extensionPath);
+  if (!ASKS_ABOUT_PYTHON_UPDATES.has(trigger) || grailUpdateDeclined() === bundled) {
+    log(
+      `Python support ${grailLabel(bundled)} is not installed; the database keeps its current one.`,
+    );
+    return false;
+  }
+  const agreed = await confirmGrailInstall(
+    `This GemDB update ships newer Python support (${grailLabel(bundled)}). Install it into your database?`,
+  );
+  if (!agreed) {
+    recordGrailUpdateDeclined(extensionPath);
+    log(`Kept the current Python support; ${grailLabel(bundled)} was not installed.`);
+  }
+  return agreed;
+}
+
+const INSTALL_PYTHON = 'Install Python Support';
+
+/**
+ * The warning before Grail is filed into a database that already has Python
+ * support, for an update and for a reinstall on request alike.
+ */
+async function confirmGrailInstall(question: string): Promise<boolean> {
+  const choice = await vscode.window.showWarningMessage(
+    question,
+    {
+      modal: true,
+      detail:
+        'Data your programs committed with the Python support installed now stops working ' +
+        'as its type: dates and times, decimals, tuples and sets, instances of your own ' +
+        'classes, even a stored None no longer compare, calculate or pass isinstance. ' +
+        'Dictionaries, lists, numbers and strings are unaffected.\n\n' +
+        'If the database holds nothing you need, installing is safe. Otherwise keep the ' +
+        'current Python support: GemDB will not ask again for this version, and ' +
+        'Reinstall the Python Execution Engine installs it later.',
+    },
+    INSTALL_PYTHON,
+    'Keep Current',
+  );
+  return choice === INSTALL_PYTHON;
 }
 
 /**
@@ -793,14 +874,10 @@ export async function resumeMcpServing(extensionPath: string): Promise<boolean> 
 export async function resumeRunning(extensionPath: string): Promise<boolean> {
   if (
     !isExternalDatabase() &&
-    grailFileInDue(extensionPath) &&
+    grailFirstInstallDue(extensionPath) &&
     (await isSharedMemoryConfigured())
   ) {
-    log(
-      grailInstalled()
-        ? 'The database is already running, but Python support in it is not up to date.'
-        : 'The database is already running, but Python support has not been installed into it.',
-    );
+    log('The database is already running, but Python support has not been installed into it.');
     return ensureRunning(extensionPath, TRIGGER.autoStart);
   }
   return resumeMcpServing(extensionPath);
@@ -810,54 +887,24 @@ export async function resumeRunning(extensionPath: string): Promise<boolean> {
 async function startProcesses(
   progress?: vscode.Progress<{ message?: string }>,
 ): Promise<{ startedStone: boolean; startedNetldi: boolean }> {
-  const running = listProcesses();
-  let startedStone = false;
-  let startedNetldi = false;
-
   // Nothing to start for an external database — only whether it is up, said
   // in terms of what to do about it.
   const external = externalDatabase();
   if (external) {
-    if (!findStone(running) || !findNetldi(running)) {
-      throw new ExternalDatabaseError(
-        `The database is not running: GemDB expects stone ${external.stone} and NetLDI ` +
-          `${external.netldi}, which this machine's administrator runs. Ask them to start it.`,
-      );
-    }
+    const running = listProcesses();
+    if (!findStone(running) || !findNetldi(running)) throw externalDatabaseDownError(external);
     log('The database is running.');
-    return { startedStone, startedNetldi };
+    return { startedStone: false, startedNetldi: false };
   }
 
-  if (!findStone(running)) {
-    // Checked here as well as in `prepareFiles`, because an extension update
-    // reaches this line without going through preparation at all: the engine
-    // is downloaded, the database exists, Grail is staged, so `isInstalled()`
-    // is true and the first thing that happens is a stone starting on a
-    // repository the new engine cannot read.
-    // NFS likewise: a database set up there before setup checked for it.
-    assertDatabaseIsLocal();
-    const engine = enginePath();
-    if (engine) assertDatabaseMatchesEngine(engine, engineVersion());
-    // A database an earlier GemDB created has no space limits yet, and the
-    // stone reserves the extent's full size as it starts.
-    ensureSpaceLimits();
-    // Every start, not once: the settings it is written from may have changed.
-    ensureStatmonitor();
-    assertRoomForExtent();
-    progress?.report({ message: 'Starting the database…' });
-    await startStone();
-    startedStone = true;
-  } else {
-    log('The database is already running.');
-  }
-  if (!findNetldi(running)) {
-    progress?.report({ message: 'Starting the session listener…' });
-    await startNetldi();
-    startedNetldi = true;
-  } else {
-    log('The session listener is already running.');
-  }
-  return { startedStone, startedNetldi };
+  return ensureProcesses({
+    beforeStoneStart: () => {
+      assertSafeToStart();
+      // Every start, not once: the settings it is written from may have changed.
+      ensureStatmonitor();
+    },
+    report: (message) => progress?.report({ message }),
+  });
 }
 
 /**
@@ -884,7 +931,7 @@ export interface StopWorld {
   listenerUp: () => boolean;
   stopStone: (force: boolean) => Promise<void>;
   stopNetldi: () => Promise<void>;
-  startNetldi: () => Promise<void>;
+  startNetldi: () => Promise<unknown>;
   /** Ask whether to disconnect the sessions that are in the way. */
   confirmForce: (reason: string) => Promise<boolean>;
   log: (message: string) => void;
@@ -933,7 +980,12 @@ export async function runStop(world: StopWorld): Promise<void> {
     if (!(await world.confirmForce(reason))) {
       // Declining means "leave it running", and a running database with no
       // listener accepts no new sessions — so put back what we stopped on the
-      // way in rather than leaving a half-stopped machine behind.
+      // way in rather than leaving a half-stopped machine behind. Unless it
+      // finished stopping while the question was up: then it is stopped.
+      if (!world.stoneUp()) {
+        world.log('GemDB stopped.');
+        return;
+      }
       if (!world.listenerUp()) await world.startNetldi();
       world.log('GemDB is still running.');
       return;
@@ -976,7 +1028,10 @@ async function stopOnce(): Promise<void> {
           listenerUp: () => isListening(),
           stopStone,
           stopNetldi,
-          startNetldi,
+          // Through the lock, like every other start: the window that declined
+          // is not the only one that may be putting the listener back. The
+          // listener only: a stone gone by now is not this call's to restart.
+          startNetldi: () => ensureListener(),
           confirmForce,
           log,
         });
@@ -1021,6 +1076,13 @@ export async function reinstallGrail(extensionPath: string): Promise<void> {
     void vscode.window.showErrorMessage(
       'Start GemDB first — installing Python support needs a running database.',
     );
+    return;
+  }
+  const label = grailLabel(bundledGrailStamp(extensionPath));
+  if (
+    grailInstalled() &&
+    !(await confirmGrailInstall(`Reinstall Python support ${label} into your database?`))
+  ) {
     return;
   }
   await vscode.window.withProgress(

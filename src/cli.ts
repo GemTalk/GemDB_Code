@@ -26,11 +26,14 @@ import { sharedLibraryExtension } from './platform';
  * Generated files under `<rootPath>/bin`, rewritten on every staging so they
  * always match the installed engine and the staged Grail:
  *
- *   `gemdb`            the wrapper. Sets the whole engine environment itself,
- *                      so it works from any shell with no setup beyond PATH.
- *   `gemdb-run.tpz`    the topaz driver for running a file or module.
- *   `gemdb-shell.js`   the GemDB Shell, staged out of the extension's build
- *                      together with `node_modules/koffi` beside it.
+ *   `gemdb`               the wrapper. Sets the whole engine environment
+ *                         itself, so it works from any shell with no setup
+ *                         beyond PATH.
+ *   `gemdb-run.tpz`       the topaz driver for running a file or module.
+ *   `gemdb-run-init.tpz`  its init file, which keeps topaz's own output off
+ *                         the terminal (see TOPAZ_INIT below).
+ *   `gemdb-shell.js`      the GemDB Shell, staged out of the extension's
+ *                         build together with `node_modules/koffi` beside it.
  *
  * File mode drives *linked* topaz — the right login for a batch run: its own
  * process, one session, crash isolation by construction, and real stdin/stdout
@@ -67,6 +70,45 @@ export function cliPath(): string {
 }
 
 const TOPAZ_TUNING = `-T 400000 -C 'GEM_TEMPOBJ_CODE_SIZE=300000;'`;
+
+/**
+ * The init file (`-I`) for a file run: everything topaz itself says goes to a
+ * per-run log the wrapper names in GEMDB_TOPAZ_LOG, and never to the terminal.
+ *
+ * The program's own output is unaffected, because it never passes through
+ * topaz: print() and the driver's reports write to `GsFile stdout`/`stderr`,
+ * which in linked topaz are the process's real descriptors. What this removes
+ * is topaz talking over the program. Ctrl-C used to end a run with
+ *
+ *   [Sending soft break]
+ *    Near line 155 of file …/gemdb-run.tpz
+ *   KeyboardInterrupt
+ *   ERROR 3004 , a ExitClientError occurred (error 3004)
+ *   Logging out session 1.
+ *
+ * where CPython prints only the KeyboardInterrupt — and the ERROR line, which
+ * is the driver's deliberate way out (see the end of the driver), read as a
+ * failure (GemTalk/GemDB_Code#131). Each piece here was measured on 4.0.0.a4:
+ *
+ * - **`-P`, not `-S`.** Under `-S`, `OUTPUT PUSH … ONLY` has no effect on
+ *   stdout (topaz's own help says so, and `output push /dev/null only` changed
+ *   nothing). Under `-P` it takes effect, the soft-break notice on stderr
+ *   included.
+ * - **Pushed here, not in the driver.** `-P` echoes each script line to the
+ *   terminal until the push takes effect, so a push on the driver's first line
+ *   still printed that line and the one before it. An `-I` file is not echoed.
+ *   `-i` is no substitute: it did not stop `-P`'s echo, and it ignores `-I`.
+ * - **A log, not /dev/null.** A refused login (the session limit, the space
+ *   threshold, an external database's password) or a session the stone ends
+ *   mid-run is reported by topaz and nothing else, so the wrapper shows the
+ *   log whenever the run did not report a status.
+ *
+ * `-I` also means no `.topazini` is read, from home or from the current
+ * directory — which the driver's `set` lines already overrode for the login,
+ * and which a cloned repository could otherwise use to run topaz commands.
+ */
+const TOPAZ_INIT = `output push $GEMDB_TOPAZ_LOG only
+`;
 
 /**
  * Copy the shell bundle and its one native dependency beside the wrapper.
@@ -118,6 +160,7 @@ function cliFingerprint(wrapper: string, driver: string, shellBundle: string): s
   const hash = crypto.createHash('sha256');
   hash.update(wrapper);
   hash.update(driver);
+  hash.update(TOPAZ_INIT);
   hash.update(fs.existsSync(shellBundle) ? fs.readFileSync(shellBundle) : Buffer.of());
   return hash.digest('hex');
 }
@@ -196,22 +239,23 @@ export function writeCliScripts(extensionPath: string): void {
   const external = externalDatabase();
   const stone = stoneName();
 
-  // The topaz driver for one file or module. `set` lines beat any ~/.topazini
-  // (the ini runs first, these run later), so a Jasper user's defaults cannot
-  // hijack the login. Errors are caught as AbstractException, not Error —
-  // Grail's Python exceptions live outside the Error branch, which is why
-  // grail.tpz's own file mode exits 0 on a Python error.
+  // The topaz driver for one file or module, run with `-P` after TOPAZ_INIT.
+  // No ~/.topazini runs (`-I` replaces it), and the `set` lines would beat one
+  // anyway, so a Jasper user's defaults cannot hijack the login. Errors are
+  // caught as AbstractException, not Error — Grail's Python exceptions live
+  // outside the Error branch, which is why grail.tpz's own file mode exits 0
+  // on a Python error.
   //
-  // There is deliberately no `exit` command at the end. topaz's own help says
-  // it of `-S`: the script is processed with INPUT, "topaz exits when the
-  // script completes", and "exit and quit commands are ignored". Ignored
-  // quietly when stdin is a pipe, which is why both suites and every run
-  // through a non-interactive shell missed it — but out loud when stdin is a
-  // tty, where `gemdb hide.py` printed four lines of topaz explaining that it
-  // was ignoring the EXIT, plus a "Logging out session 1." the ignored exit
-  // provoked. The status still leaves through GEMDB_STATUS_FILE, which never
-  // depended on that line (measured again without it: sys.exit(3) → 3, an
-  // uncaught exception → 1, a missing file → 2).
+  // `-P` is why the driver ends with `exit`. Unlike `-S`, it does not exit at
+  // the end of the script: it goes on to read commands from stdin, which is
+  // the user's terminal or, worse, whatever was piped to their program. A
+  // topaz-level error does not change that — measured with a wrong password,
+  // topaz reports the refused login, carries on through the script, and
+  // leaves at this line, on a tty and on a pipe alike. Only Ctrl-C stops it
+  // reading, and the ExitClientError below covers that. (Under `-S` the
+  // closing exit was the opposite problem: ignored, and on a tty four lines
+  // saying so.) The status still leaves through GEMDB_STATUS_FILE, not the
+  // exit: sys.exit(3) → 3, an uncaught exception → 1, a missing file → 2.
   //
   // sys.exit(n) is decoded here, not upstream: Grail raises its own SystemExit
   // (never ExitClientError — input()'s except SystemExit and finally blocks
@@ -382,9 +426,12 @@ sys.breakpointhook = _gemdb_breakpoint']]
 and it stops reading this script once the block returns, leaving the user at
 a topaz 1> prompt still holding a session -- so nothing written after this
 block would run. An ExitClientError is what makes topaz log out and exit
-instead. The status still travels through GEMDB_STATUS_FILE, written above."
+instead. The status still travels through GEMDB_STATUS_FILE, written above,
+and topaz's ERROR 3004 for it goes to the log TOPAZ_INIT opened, which the
+wrapper shows only when there is no status."
 interrupted ifTrue: [ExitClientError new status: status; signal].
 %
+exit
 `;
 
   const script = `#!/bin/bash
@@ -473,21 +520,66 @@ fi
 #
 # mkdir is the primitive: it creates or fails, with no window between the test
 # and the claim, and it is there on a stock macOS where flock is not.
-stone_is_up() {
-  "$GEMSTONE/bin/gslist" 2>/dev/null | awk -v s="$STONE" '$(NF-1) == "Stone" && $NF == s { found = 1 } END { exit !found }'
+#
+# What the stone's status says decides what to do. Not listed: start one. A
+# stone still at Startup -- recovering from a crash, or another process's start
+# not finished -- is listed, and a second startstone beside it is the
+# two-stones case above, so it is waited for until it is past Startup, since a
+# login now would fail. One at Shutdown is being stopped, and saying so beats
+# waiting a minute for it. Anything else goes on to the login, which judges it:
+# a stone left running when the engine tree was replaced reads "exe deleted"
+# and takes logins.
+#
+# The status as gslist -cvl lists it, lowercased (the engine prints "OK",
+# "Startup", "frozen"), or nothing when the stone is not listed. One call per
+# question: -v asks the stone itself, which takes about five seconds when it is
+# frozen (measured). A row is status, version, owner, pid, port, three date
+# fields, type and name, and "exe deleted" is the one two-word status. A row of
+# any other shape is still this stone, so it answers something: nothing would
+# mean "start one".
+stone_status() {
+  "$GEMSTONE/bin/gslist" -cvl 2>/dev/null | awk -v s="$STONE" '$(NF-1) == "Stone" && $NF == s { print tolower(NF == 10 ? $1 : NF == 11 ? $1 " " $2 : "listed"); exit }'
+}
+starting() { case "$1" in startup|recovery) return 0 ;; *) return 1 ;; esac; }
+shutting_down() {
+  echo "gemdb: the database is shutting down. Run this again once it has stopped." >&2
+  exit 1
+}
+# Wait while the stone is starting, from the status last seen ($1). $2 is where
+# to look when it fails. Waits are timed by the clock, not by counting polls:
+# each poll is a gslist call, and those vary from milliseconds to seconds.
+wait_for_stone() {
+  local st="$1" deadline=$(( $(date +%s) + 60 )) said=""
+  while starting "$st"; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "gemdb: the database has been starting for over a minute.$2" >&2
+      exit 1
+    fi
+    [ -z "$said" ] && said=1 && echo "gemdb: waiting for the database to finish starting…" >&2
+    sleep 0.1
+    st=$(stone_status)
+  done
+  [ "$st" = shutdown ] && shutting_down
+  if [ -z "$st" ]; then
+    echo "gemdb: the database stopped while it was starting.$2" >&2
+    exit 1
+  fi
 }
 
+STATUS=$(stone_status)
+[ "$STATUS" = shutdown ] && shutting_down
 ${
   external
     ? `# This machine's administrator runs the database, so a stopped stone is theirs
-# to start: starting it here would run it as this user.
-if ! stone_is_up; then
+# to start: starting it here would run it as this user. So no lock and no
+# start, only a wait for one that is still starting.
+if [ -z "$STATUS" ]; then
   echo "gemdb: the database (stone $STONE) is not running. It is run by this machine's administrator." >&2
   exit 1
 fi
+wait_for_stone "$STATUS" ""
 `
-    : ''
-}if ! stone_is_up; then
+    : `if [ -z "$STATUS" ] || starting "$STATUS"; then
   STONE_LOCK="$ROOT/.gemdb-stone.lock"
   # mkdir and the pid write are two steps, here and in the extension, so a
   # lock with no pid yet is one being taken right now. It is debris only once
@@ -532,8 +624,8 @@ fi
     return "$took"
   }
   held=""
-  tries=0
-  while [ "$tries" -lt 100 ]; do
+  lock_deadline=$(( $(date +%s) + 10 ))
+  while [ "$(date +%s)" -lt "$lock_deadline" ]; do
     if mkdir "$STONE_LOCK" 2>/dev/null; then
       held=yes
       echo $$ > "$STONE_LOCK/pid" 2>/dev/null
@@ -552,34 +644,58 @@ fi
         continue
       fi
     fi
-    stone_is_up && break
+    STATUS=$(stone_status)
+    [ -n "$STATUS" ] && ! starting "$STATUS" && break
     sleep 0.1
-    tries=$((tries + 1))
   done
 
   if [ -n "$held" ]; then
     # Re-check inside the lock. Between our first check and this one, whoever
     # we queued behind may have started it -- which is the case the bare
-    # check-then-act got wrong.
-    if ! stone_is_up; then
+    # check-then-act got wrong. Listed, not ready: one still starting is
+    # waited for below, never started again.
+    STATUS=$(stone_status)
+    if [ -z "$STATUS" ]; then
       echo "gemdb: starting the database…" >&2
       if ! "$GEMSTONE/bin/startstone" -l "$ROOT/db/log/$STONE.log" "$STONE" >/dev/null 2>&1; then
         release_stone_lock
         echo "gemdb: the database at $ROOT could not be started. See $ROOT/db/log/$STONE.log" >&2
         exit 1
       fi
+      STATUS=$(stone_status)
     fi
     release_stone_lock
-  elif ! stone_is_up; then
+  elif [ -z "$STATUS" ]; then
     echo "gemdb: the database is not running and another process has been starting it for" >&2
     echo "gemdb: ten seconds. See $ROOT/db/log/$STONE.log, or remove $STONE_LOCK if nothing is." >&2
     exit 1
   fi
+
+  # Ours or someone else's, a stone still starting is waited for: a login now
+  # would fail. A minute, as the extension waits.
+  wait_for_stone "$STATUS" " See $ROOT/db/log/$STONE.log"
 fi
+`
+}
+
+# The run's temporary files, removed however it ends: bash runs an EXIT trap
+# on a normal exit, and on SIGHUP (a terminal tab closed mid-run) and SIGTERM
+# too — measured with macOS's /bin/bash 3.2, the oldest this runs under. A
+# function rather than an array, because 3.2 calls an empty array unbound
+# under set -u.
+CODE_FILE=""
+GEMDB_STATUS_FILE=""
+GEMDB_TOPAZ_LOG=""
+remove_temp_files() {
+  local f
+  for f in "$CODE_FILE" "\${CODE_FILE%.py}" "$GEMDB_STATUS_FILE" "$GEMDB_TOPAZ_LOG"; do
+    if [ -n "$f" ]; then rm -f "$f"; fi
+  done
+}
+trap remove_temp_files EXIT
 
 # -c 'code': materialise the code as a file, like CPython's -c but visibly so.
 # mktemp is given an explicit template — BSD and GNU disagree about -t.
-CODE_FILE=""
 if [ "$1" = "-c" ]; then
   [ "$#" -ge 2 ] || { echo "gemdb: -c requires an argument" >&2; exit 2; }
   CODE_FILE="$(mktemp "\${TMPDIR:-/tmp}/gemdb-c-XXXXXX").py"
@@ -597,13 +713,20 @@ fi
 
 # topaz cannot carry an exit status out of a run block, so the driver writes
 # it to a file and this wrapper becomes the exit code. See gemdb-run.tpz.
+# Everything topaz itself prints goes to GEMDB_TOPAZ_LOG instead of the
+# terminal (gemdb-run-init.tpz), so that Ctrl-C ends a program the way it ends
+# CPython. No status means the program never finished — a refused login, or a
+# session ended under it — and then topaz's account is the only one, so it is
+# shown, less topaz's echo of the driver.
 GEMDB_STATUS_FILE="$(mktemp "\${TMPDIR:-/tmp}/gemdb-status-XXXXXX")"
-export GEMDB_STATUS_FILE
-topaz -L -q -S "$ROOT/bin/gemdb-run.tpz" ${TOPAZ_TUNING} -- "$@"
+GEMDB_TOPAZ_LOG="$(mktemp "\${TMPDIR:-/tmp}/gemdb-topaz-XXXXXX")"
+export GEMDB_STATUS_FILE GEMDB_TOPAZ_LOG
+topaz -L -q -I "$ROOT/bin/gemdb-run-init.tpz" -P "$ROOT/bin/gemdb-run.tpz" ${TOPAZ_TUNING} -- "$@"
 RC=$?
 STATUS="$(cat "$GEMDB_STATUS_FILE" 2>/dev/null || true)"
-rm -f "$GEMDB_STATUS_FILE"
-[ -n "$CODE_FILE" ] && rm -f "$CODE_FILE" "\${CODE_FILE%.py}"
+if [ -z "$STATUS" ]; then
+  sed -e '/^topaz[^>]*> run$/,/^%$/d' -e '/^topaz[^>]*> /d' "$GEMDB_TOPAZ_LOG" >&2
+fi
 case "$STATUS" in
   ''|*[!0-9]*) [ "$RC" -ne 0 ] && exit "$RC"; exit 1 ;;
   *) exit "$STATUS" ;;
@@ -631,6 +754,7 @@ esac
   const driverPath = path.join(cliDirPath(), 'gemdb-run.tpz');
   fs.writeFileSync(driverPath, driver, { mode: 0o600 });
   fs.chmodSync(driverPath, 0o600);
+  fs.writeFileSync(path.join(cliDirPath(), 'gemdb-run-init.tpz'), TOPAZ_INIT);
 
   // An earlier release handed the no-argument mode to Grail's topaz REPL
   // through this file; the shell replaced it, so a stale copy is only a trap.
