@@ -117,6 +117,21 @@ describe.skipIf(!havePayload || !canMakeFixture())('Grail in a real database', (
     expect(result.value).toBe('False');
   });
 
+  it('builds the Unicode tables during the file-in: first use leaves nothing to commit', async () => {
+    // install-grail.sh's scripts/deployUnicodedata.gs step. Without it the
+    // first normalize or category call in a session builds the tables and
+    // caches them in a module global: half a second, and a dirty session.
+    const code = [
+      'import unicodedata, gemdb',
+      "unicodedata.normalize('NFKC', '\\ufb01') + unicodedata.ucd_3_2_0.category('A')",
+      'gemdb.needs_commit()',
+    ].join('\n');
+
+    const result = await runPython(code, nb('notebook-unicodedata'));
+
+    expect(result.value).toBe('False');
+  });
+
   it('keeps globals within a scope, and apart between scopes', async () => {
     // What a notebook depends on: one cell's assignment visible to the next,
     // and two notebooks not seeing each other's variables.

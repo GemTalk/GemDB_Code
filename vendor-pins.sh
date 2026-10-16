@@ -11,37 +11,40 @@
 # Bumping a pin is a one-line PR to this file; a green CI run on it is the
 # proof the new upstream commit works.
 
-# Grail: main as of 2026-10-07, 213 commits (78 PRs) on from the previous pin
-# (9f8b116). The scripts resources/install-grail.sh drives are byte-identical
-# apart from deployGemdb.gs, whose warm-deploy list gains gemdb.modules (#1297),
+# Grail: main as of 2026-10-15, 388 commits (175 PRs) on from the previous pin
+# (beef473). install.sh gains one step (#1556): after deployGemdb.gs it runs
+# scripts/deployUnicodedata.gs, which builds and commits unicodedata's tables so
+# a session's first normalize/category call neither takes a second nor leaves
+# the session dirty. resources/install-grail.sh now mirrors it as its step 4,
+# warn-only as upstream's is. Every other script it drives is byte-identical,
 # and every name in bundle-grail.sh's REQUIRED list is still there. install.gs
-# is mostly re-sorted (#1360); its real changes are four new runtime inputs and
-# five removed ones -- random, statistics, string, string_Formatter and
-# StatisticsError -- which CPython's own .py files under src/python replace
-# (#1301, #1305, #1329). Every `input` in it exists in the tree. The C shim's
-# SOURCE changed (cpython.cc, shim_pyo3.cc, shim_numpy.cc, _sre, for FastAPI,
-# pydantic and re), so every platform rebuilds it; the Makefile is unchanged
-# and its two new GCI calls (GciFetchOop, GciIsKindOfClass) are in a4's gci.hf.
+# only adds: three runtime inputs (GrailCommitCoordinator, JSONDecoder,
+# PythonTokenizerIdentifiers) and test classes, all under src/. The C shim's
+# SOURCE changed (numpy, FastAPI, subclassing C types), so every platform
+# rebuilds it; the Makefile and its GCI calls are unchanged, and the only new
+# includes are libc's. The gemdb Python package is byte-identical.
 #
-# Grail now targets CPython 3.14.8 (#1343, #1346, #1348, #1350, #1359):
-# SyntaxError messages and positions match CPython's (#1363), runaway recursion
-# is a catchable RecursionError (#1358), and random, statistics, string and
-# str.format are CPython's own (#1301, #1305, #1329, #1330). FastAPI and
-# starlette answer as CPython does for async endpoints (#1347, #1352).
+# Deleted or moved, none of it referenced by GemDB: stdlib click and requests
+# become _grail_click and _grail_requests (#1634), and importlib/metadata.py
+# gives way to CPython's package (#1664).
 #
-# What the gemdb module adds: app namespaces, gemdb.use_namespace() (#1302,
-# #1324, #1361); gemdb.SessionStateError, a catchable error naming the object a
-# refused commit tripped on, where it was a Smalltalk error (#1319, #1336);
-# __transient__ attributes that are never committed (#1337, #1338); and
-# gemdb.modules (#1297). Nothing GemDB calls was removed or renamed.
+# What users get: FastAPI's sync endpoints and HTTP serving (#1400, #1568,
+# #1626); `import numpy` completing (#1560 and on); enough for boto3,
+# sqlalchemy and pytest collection (#1547, #1550, #1551, #1597, #1598);
+# identifiers per CPython's XID and NFKC rules (#1503, #1512); `except*`
+# (#1625); tracebacks and frame lines as CPython reports them (#1373, #1509,
+# #1519); and a method patched onto a throwaway instance no longer leaves
+# something to commit (#1468).
 #
-# Behaviour changes a user can meet: importing a different file under a module
-# name already deployed raises ImportError, naming gemdb.modules.relocate() and
-# forget() (#1297); setting a global of one of Grail's own modules, such as
-# gc.disable(), lasts for the session instead of being committed (#1344);
-# `7 // 2.0` is 3.0 (#1311); a seeded random gives CPython's sequence, not the
-# old one (#1305); and code CPython rejects, such as `01`, is a SyntaxError.
-PINNED_GRAIL_REF=beef4736c897dff60fc9c81d210430cc785313af
+# Behaviour changes a user can meet: `import click` or `import requests` with
+# neither installed is ModuleNotFoundError (#1634); `vars(obj)` is a live view,
+# so writing through it changes the object (#1664); calls CPython refuses now
+# raise TypeError -- extra lambda arguments (#1524), an argument given twice
+# (#1577); an exception in a decorator propagates instead of leaving the def
+# undecorated (#1403); `date == datetime` is False and ordering the two raises
+# (#1603); `^` and `&` on negative large integers are corrected (#1611); and
+# `µ` and `μ` are one name (#1512).
+PINNED_GRAIL_REF=9fb5d23a9f46e8e06c0d6783c06bb653d5b0c97e
 
 # mcp_server: main as of 2026-09-25, 26 commits (8 PRs) on from the previous pin
 # (afa3790). No load.gs changed, and every selector src/mcp.ts sends --
