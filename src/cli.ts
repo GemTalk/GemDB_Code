@@ -678,21 +678,50 @@ fi
 `
 }
 
-# The run's temporary files, removed however it ends: bash runs an EXIT trap
-# on a normal exit, and on SIGHUP (a terminal tab closed mid-run) and SIGTERM
-# too — measured with macOS's /bin/bash 3.2, the oldest this runs under. A
-# function rather than an array, because 3.2 calls an empty array unbound
-# under set -u.
+# However the run ends, end_run tidies up after it: bash runs an EXIT trap on
+# a normal exit, and on SIGHUP (a terminal tab closed mid-run) and SIGTERM
+# too — measured with macOS's /bin/bash 3.2, the oldest this runs under.
+#
+# A hangup ends this script but not topaz, which ignores SIGHUP: closing the
+# terminal left it running the program, holding a session (and a web app its
+# port) with nobody to see it, and a program that kept printing was not ended
+# by its writes failing either (#136). So if topaz is still running, it is sent
+# what Ctrl-C sends — measured after closing the terminal, the program's
+# finally blocks ran and topaz logged out and exited within a quarter of a
+# second — and SIGTERM, which skips finally, if it has not gone in ten
+# seconds. Without pgrep there is no topaz to find, and the run is left as it
+# was before. The files go last, because the driver writes the status file as
+# it unwinds. They are listed in a loop rather than kept in an array, because
+# 3.2 calls an empty array unbound under set -u.
 CODE_FILE=""
 GEMDB_STATUS_FILE=""
 GEMDB_TOPAZ_LOG=""
-remove_temp_files() {
+TOPAZ_RUNNING=""
+wait_for_exit() {
+  local tries=0
+  while kill -0 "$1" 2>/dev/null && [ "$tries" -lt "$2" ]; do
+    sleep 0.1
+    tries=$((tries + 1))
+  done
+  ! kill -0 "$1" 2>/dev/null
+}
+stop_topaz() {
+  local pid
+  pid="$(pgrep -P $$ -x topaz 2>/dev/null | head -n 1)"
+  [ -n "$pid" ] || return 0
+  kill -INT "$pid" 2>/dev/null
+  wait_for_exit "$pid" 100 && return 0
+  kill -TERM "$pid" 2>/dev/null
+  wait_for_exit "$pid" 50 || true
+}
+end_run() {
+  if [ -n "$TOPAZ_RUNNING" ]; then stop_topaz; fi
   local f
   for f in "$CODE_FILE" "\${CODE_FILE%.py}" "$GEMDB_STATUS_FILE" "$GEMDB_TOPAZ_LOG"; do
     if [ -n "$f" ]; then rm -f "$f"; fi
   done
 }
-trap remove_temp_files EXIT
+trap end_run EXIT
 
 # -c 'code': materialise the code as a file, like CPython's -c but visibly so.
 # mktemp is given an explicit template — BSD and GNU disagree about -t.
@@ -721,8 +750,10 @@ fi
 GEMDB_STATUS_FILE="$(mktemp "\${TMPDIR:-/tmp}/gemdb-status-XXXXXX")"
 GEMDB_TOPAZ_LOG="$(mktemp "\${TMPDIR:-/tmp}/gemdb-topaz-XXXXXX")"
 export GEMDB_STATUS_FILE GEMDB_TOPAZ_LOG
+TOPAZ_RUNNING=yes
 topaz -L -q -I "$ROOT/bin/gemdb-run-init.tpz" -P "$ROOT/bin/gemdb-run.tpz" ${TOPAZ_TUNING} -- "$@"
 RC=$?
+TOPAZ_RUNNING=""
 STATUS="$(cat "$GEMDB_STATUS_FILE" 2>/dev/null || true)"
 if [ -z "$STATUS" ]; then
   sed -e '/^topaz[^>]*> run$/,/^%$/d' -e '/^topaz[^>]*> /d' "$GEMDB_TOPAZ_LOG" >&2

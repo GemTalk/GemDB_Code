@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Closing the terminal ends a `gemdb` run.** Closing the terminal tab of `gemdb app.py`, or of
+  **Run Python File in GemDB**, left the program running out of sight, holding a database session
+  and, for a web app, its port. It is now stopped as Ctrl+C would stop it: its `finally` blocks run
+  and its session is given back.
+
 ## [1.7.0] - 2026-10-16
 
 The engine is unchanged at GemStone 4.0.0.a4, and the bundled Python runtime moves forward. Start

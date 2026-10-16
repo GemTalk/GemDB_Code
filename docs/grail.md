@@ -85,6 +85,18 @@ commands from stdin, and a refused login with input piped in ran that input as
 topaz commands (measured, and covered by `cli.test.ts`). Under `-S` the same
 `exit` was ignored, and on a tty it printed four lines saying so.
 
+**Topaz ignores SIGHUP, so the wrapper ends it.** Measured on 4.0.0.a4 by
+closing a pty under topaz: the wrapper exits, but topaz carries on running
+the program with its session, whether the program is quiet or keeps printing
+to the dead terminal, and its `finally` blocks never run (#136). The
+wrapper's `EXIT` trap, which bash runs on a hangup, therefore sends a topaz
+still running SIGINT, which is what Ctrl-C sends. The driver turns that into
+`KeyboardInterrupt`, the `finally` blocks run, and topaz logs out and exits,
+within a quarter of a second in the measurement. A topaz still running after
+ten seconds gets SIGTERM, which skips `finally`. The temporary files are
+removed only after topaz has gone, because the driver writes the status file
+as it unwinds and would otherwise recreate one the trap had just removed.
+
 Errors in the driver are caught as
 `AbstractException`, not `Error`: Grail's Python exceptions live outside the
 `Error` branch, which is why grail.tpz's own file mode exits 0 on a Python
