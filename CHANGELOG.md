@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-15
+
+The engine is unchanged at GemStone 4.0.0.a4. The bundled Python runtime moves forward.
+
 ### Added
 
 - **The Debug Console and Watch work at a `breakpoint()` or red dot.** Type Python into the Debug
@@ -1009,7 +1013,8 @@ gets out of the way.
 - **`sys.exit(n)` exits 1 rather than `n`**, and **`input()` is not yet
   supported**. Both are upstream in Grail.
 
-[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.4...v1.6.0
 [1.5.4]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.2...v1.5.3
