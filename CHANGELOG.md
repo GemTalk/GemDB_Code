@@ -9,7 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.7.0] - 2026-10-15
 
-The engine is unchanged at GemStone 4.0.0.a4. The bundled Python runtime moves forward.
+The engine is unchanged at GemStone 4.0.0.a4, but start with a fresh database: delete
+`~/GemDB/db` before starting this release. The bundled Python runtime moves forward, and an update
+reinstalls it, after which much of what an earlier release committed no longer behaves as its type:
+dates and times, decimals, tuples and sets, instances of your own classes, even a stored `None`.
 
 ### Added
 
