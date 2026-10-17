@@ -18,8 +18,8 @@ or later. For a complete list, see [Requirements](#requirements).
 ## Start here
 
 1. **Install GemDB Code.** In the Extensions view, search for `GemDB Code` and click **Install**.
-   The first time you install an extension from GemTalk Systems, VS Code prompts you to trust the
-   publisher. Choose **Trust Publisher & Install**. Setup then starts on its own.
+   VS Code shows a dialog about the publisher, GemDB, which it marks as not verified. Choose
+   **Trust Publisher & Install**. Setup then starts on its own.
 
 2. **Let initial setup finish.** Progress appears in notifications at the bottom right of VS Code.
    If you miss one, click the bell icon in the status bar. If the operating system needs a setting
@@ -36,7 +36,7 @@ or later. For a complete list, see [Requirements](#requirements).
 
 5. **Try the Brain Freeze demo.** You are ready to explore a working application. When VS Code
    prompts you to trust the folder, choose to trust it, so Python can run there. For more
-   information, see [Trusting `~/GemDB`](#trusting-gemdb). To get started, click
+   information, see [Trust `~/GemDB`](#trust-gemdb). To get started, click
    [The Brain Freeze demo](#the-brain-freeze-demo).
 
 ## Features to check out
@@ -72,7 +72,7 @@ Running the cell shows `'Hello from GemDB!'`. For more information, see [Noteboo
 
 GemDB Code includes an MCP (Model Context Protocol) server, so AI agents such as Claude Code or
 Cursor can explore your data, run Python in your database, and commit changes. For more information,
-see [Connecting an AI agent](#connecting-an-ai-agent).
+see [Connect an AI agent](#connect-an-ai-agent).
 
 ---
 
@@ -85,19 +85,20 @@ The rest of this page covers the details behind each feature.
 - [Setup and permissions](#setup-and-permissions)
 - [The guided walkthrough](#the-guided-walkthrough)
 - [The GemDB Code sidebar](#the-gemdb-code-sidebar)
-- [Starting and stopping the database](#starting-and-stopping-the-database)
+- [Start and stop the database](#start-and-stop-the-database)
 - [Sessions](#sessions)
+- [Database space and garbage collection](#database-space-and-garbage-collection)
 - [Python in the database](#python-in-the-database)
 - [The `gemdb` command](#the-gemdb-command)
 - [Notebooks](#notebooks)
-- [Connecting an AI agent](#connecting-an-ai-agent)
+- [Connect an AI agent](#connect-an-ai-agent)
 - [The Brain Freeze demo](#the-brain-freeze-demo)
 - [Where things live](#where-things-live)
 - [GemDB Code updates and associated data](#gemdb-code-updates-and-associated-data)
 - [Settings](#settings)
 - [Commands](#commands)
 - [Using GemDB Code vs. GemStone/S](#using-gemdb-code-vs-gemstones)
-- [Uninstalling](#uninstalling)
+- [Uninstall GemDB Code](#uninstall-gemdb-code)
 - [Privacy](#privacy)
 - [License](#license)
 
@@ -122,8 +123,9 @@ for VSCodium and other compatible editors, from
   Linux, `sudo` is also needed for the optional `RemoveIPC=no` setting (see
   [Changes that need your permission](#changes-that-need-your-permission)).
 - Internet access to `dl.gemdb.com` for the one-time engine download.
-- About 2 GB of free disk space under `~/GemDB` during setup, plus room for your data, on a local
-  disk. If your home directory is on a Network File System (NFS) mount, as it is on many shared
+- About 11 GB of free disk space on macOS, or about 12 GB on Linux, under `~/GemDB`, on a local
+  disk. The database reserves its full 10 GB limit when it first starts, so your data does not need
+  extra room. If your home directory is on a Network File System (NFS) mount, as it is on many shared
   Linux machines, see [Where things live](#where-things-live).
 - At least 500 MB of free memory, and more as your data and the number of open notebooks grow.
 - On Linux, `unzip`. Most distributions include it; if yours does not, install it with your package
@@ -179,12 +181,12 @@ The first time the database starts, usually right after setup, GemDB Code instal
 into it. This takes a few minutes and shows its progress in a notification. If the database cannot
 start yet, this happens the first time you open a shell or run a notebook cell instead.
 
-When a GemDB Code update ships newer Python support, GemDB Code asks before installing it into a
-database that already has Python support. Data committed with the old version stops working as its
-type afterwards (dates and times, decimals, tuples and sets, and instances of your own classes), so
+When a GemDB Code update ships newer Python support, GemDB Code prompts you before installing it into
+a database that already has Python support. Data committed with the old version stops working as its
+type afterward (dates and times, decimals, tuples and sets, and instances of your own classes), so
 install it into a database that holds nothing you need. If you keep the current version, GemDB Code
-does not ask again for that update; **GemDB: Reinstall the Python Execution Engine** installs it
-later.
+does not prompt you again for that update; **GemDB: Reinstall the Python Execution Engine** installs
+it later.
 
 #### Changes that need your permission
 
@@ -222,9 +224,9 @@ connects to the right MCP server. In VS Code, it registers the server automatica
 Code, it runs Claude Code's own `claude mcp add` command for the open folder and shows you how to
 undo it. For Claude Desktop and Cursor, it copies a JSON snippet with the server's address for you
 to merge into that client's configuration file. See
-[Connecting an AI agent](#connecting-an-ai-agent).
+[Connect an AI agent](#connect-an-ai-agent).
 
-#### Trusting `~/GemDB`
+#### Trust `~/GemDB`
 
 GemDB Code installs the Brain Freeze demo and its other folders under `~/GemDB`, and VS Code opens
 any folder you have not trusted in Restricted Mode. So by default, GemDB Code's folders open in
@@ -254,11 +256,17 @@ only the first time you install GemDB Code. To open it again:
 
 Click the **GemDB Code** icon in the Activity Bar, on the far left of VS Code. The Primary Side Bar
 then shows the **GemDB** view, which this page calls the GemDB Code sidebar. Its rows show whether
-the database is **Running** or **Stopped**, the database engine version, the database, Python
-support, AI agent access, and shared memory. On Linux, a **Survives logout** row appears when
-`RemoveIPC=no` is not set. Click it to set it. Once a notebook in this window has started a session
-by running a cell, a **Sessions** row also appears; if you do not see it, click **Refresh** (↻). See
-[Sessions](#sessions).
+the database is **Running** or **Stopped**, the database engine version, the database, how much of
+its space is used (**Space**), whether it is recording statistics (**Statistics**), Python support,
+AI agent access, and shared memory. Click **Space** to collect garbage now, as described in
+[Database space and garbage collection](#database-space-and-garbage-collection). Click
+**Statistics** to open the newest statistics file in GemDB Stats, GemTalk's statistics viewer. The
+database records its statistics every 20 seconds to `~/GemDB/db/stat`, one file a day, and deletes
+files after 14 days.
+
+On Linux, a **Survives logout** row appears when `RemoveIPC=no` is not set. Click it to set it. Once
+a notebook in this window has started a session by running a cell, a **Sessions** row also appears;
+if you do not see it, click **Refresh** (↻). See [Sessions](#sessions).
 
 The buttons along the top of the sidebar are:
 
@@ -275,7 +283,7 @@ label, and uses the **GemDB:** form for commands that are only in the Command Pa
 While the database is running, the status bar at the bottom of the window also shows **GemDB**, and
 clicking it stops the database.
 
-### Starting and stopping the database
+### Start and stop the database
 
 The database keeps running in the background after you close VS Code, so your data stays available
 to scripts, terminals, and agents. When the extension activates, GemDB Code starts the database if
@@ -305,6 +313,25 @@ been idle longest. Close a notebook or a GemDB Shell to free one. Once a noteboo
 run a cell, click **Refresh** (↻) at the top of the GemDB Code sidebar to see a **Sessions** row. It
 shows how many sessions this window holds, and hovering over it lists each notebook and how long it
 has been idle.
+
+GemDB Code refreshes a session that has been idle for 10 minutes and has no uncommitted changes, so
+the session does not hold back garbage collection. It never changes a session that has uncommitted
+changes. To stop a session you do not need, choose **Stop a Database Session…** from the
+sidebar's **⋯** menu. It lists every session, with the ones holding back garbage collection first,
+and stops the one you pick after you confirm. Anything that session had not committed is lost.
+
+### Database space and garbage collection
+
+The database that GemDB Code installs is limited to 10 GB by the license that comes with it. It
+reserves all 10 GB on disk when it first starts. The **Space** row in the GemDB Code sidebar shows
+how much of that space your data uses. When your code stops using an object, the database keeps the
+object until a collection removes it; this unused data is _garbage_. GemDB Code collects garbage on
+a schedule, and again whenever less than 2 GB is left. To collect now, click the **Space** row, or
+choose **Collect Garbage Now** from the sidebar's **⋯** menu.
+
+If the database runs out of the space it keeps free, GemDB Code warns you at once. After about three
+minutes, the database starts stopping sessions that hold back its space, and what they have not
+committed is lost. Commit your work when you see the warning.
 
 ### Python in the database
 
@@ -374,8 +401,9 @@ export PATH="$HOME/GemDB/bin:$PATH"
 ```
 
 The command needs no environment setup, and it starts the database if the database is not running.
-Exit codes work the way scripts expect: 0 on success, 1 on an uncaught exception (with the error
-message on stderr), 2 for a missing file, and `sys.exit()` behaves as in CPython.
+Exit codes work the way scripts expect: 0 on success, 1 on an uncaught exception (Python's traceback
+prints), 2 for a missing file, 130 when you stop the script with Ctrl+C (only `KeyboardInterrupt`
+prints), and `sys.exit()` behaves as in CPython.
 
 `input()` works in scripts, the GemDB Shell, and notebooks. A script reads stdin, and the GemDB
 Shell reads its own prompt line, where Ctrl+C raises `KeyboardInterrupt` and Ctrl+D raises
@@ -422,7 +450,7 @@ database, select that kernel from the kernel picker at the top right.
   functions folded into their own rows. Each value starts with its type, and a container's with its
   size too (`{Point} Point(3, 4)`, `{list: 3} […]`); **Copy Value** copies the value without them.
   An object with attributes, its own or its class's, opens on everything it has: its own attributes, its class's, its properties and slots,
-  with its methods under **function variables** and its dunders under **special variables**. Right-click a row and choose **Set Value** to change
+  with its methods under **function variables** and its names with double underscores, such as `__module__`, under **special variables**. Right-click a row and choose **Set Value** to change
   a local, a global, an attribute, a list item or a dict entry. The value you type is a Python
   expression, and the run continues with it. It can use the notebook's globals, or a `.py` file's,
   on any row, and on a Locals row the frame's locals too. **Continue** resumes the cell where it paused; **Stop**
@@ -442,7 +470,7 @@ database, select that kernel from the kernel picker at the top right.
   console suggests them. `gemdb` is always available in the console, so a line copied from Persisted
   Objects, such as `gemdb.root["orders"]`, works even if the program never imported it. What Persisted Objects holds is available by its
   key too (`o` for `gemdb.root["o"]`), unless the paused code has its own name `o`; `persisted.o` reaches it whatever `o` means, and a
-  bare persisted name is labelled with where it came from. While you type a name, autocomplete
+  bare persisted name is labeled with where it came from. While you type a name, autocomplete
   offers `persisted.o` for each persisted entry it starts (press Tab to take a suggestion). Stepping is not supported yet, and neither are red
   dots in a cell (they work in `.py` files; see above). Right-click a Variables row and choose **Add to Persisted Objects…** to keep that object: it
   goes in `gemdb.root` under the key you give (one is suggested) and is written at the notebook's
@@ -451,7 +479,7 @@ database, select that kernel from the kernel picker at the top right.
   way; once committed, Persisted Objects reopens it in the debugger, even after a restart. Its
   Debug Console works on the saved objects: call a method, bind a name, change an object,
   `%persist` one. A change waits uncommitted; the console says when the stack opens that `%commit`
-  (or ✓) would write it into the saved stack, and closing the stack asks whether to commit or
+  (or ✓) would write it into the saved stack, and closing the stack prompts you to commit or
   discard what is pending.
   **Debug Python File in GemDB** does the same for a `.py` file (see above). In the GemDB Shell
   and in **Run Python File in GemDB**, `breakpoint()` prints where it was and the code carries on.
@@ -463,7 +491,7 @@ database, select that kernel from the kernel picker at the top right.
 - Renaming a notebook from VS Code's Explorer keeps its session and variables. Renaming it outside
   VS Code, or using Save As, starts a new session.
 
-### Connecting an AI agent
+### Connect an AI agent
 
 GemDB Code includes an MCP server, which lets an AI agent such as Claude Code work in your database
 on your behalf. Because your data is made of Python objects, the agent works with it by running
@@ -548,15 +576,15 @@ needs `git`.
 
 Everything GemDB Code creates is under one directory, `~/GemDB` by default (`gemdb.rootPath`):
 
-| Path                                 | What it is                                        |
-| ------------------------------------ | ------------------------------------------------- |
-| `db/`                                | Your database, the only irreplaceable part        |
-| `GemStone64Bit<version>-<platform>/` | The database engine                               |
-| `grail/`                             | The Python runtime library and native shim        |
-| `mcp/`                               | The MCP server, and the scripts to run it by hand |
-| `bin/`                               | The `gemdb` command                               |
-| `brain-freeze/`                      | The Brain Freeze demo, if you installed it        |
-| `locks/`, `log/`, `mcp-router.json`  | Bookkeeping for the engine and the MCP server     |
+| Path                                 | What it is                                                                                                 |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `db/`                                | Your database, the only irreplaceable part                                                                 |
+| `GemStone64Bit<version>-<platform>/` | The database engine                                                                                        |
+| `grail/`                             | The Python runtime library and native shim                                                                 |
+| `mcp/`                               | The MCP server and the scripts for starting it yourself, created the first time you turn on the MCP server |
+| `bin/`                               | The `gemdb` command                                                                                        |
+| `brain-freeze/`                      | The Brain Freeze demo, if you installed it                                                                 |
+| `locks/`, `log/`, `mcp-router.json`  | Bookkeeping for the engine and the MCP server                                                              |
 
 The directory must be on a local disk. The database engine refuses to open its files on an NFS
 mount, so on a machine whose home directories are NFS mounts, `~/GemDB` cannot hold the database.
@@ -590,8 +618,8 @@ To keep your data, copy out anything you need before you update GemDB Code.
 ### Settings
 
 The default GemDB Code settings are designed to work on most systems, so most users do not need to
-change them. These include settings for locating where GemDB Code stores files and setting up the
-MCP server for AI agents.
+change them. These include settings for locating where GemDB Code stores files, collecting garbage,
+recording statistics, and setting up the MCP server for AI agents.
 
 If you want to review them, open VS Code's Settings (Ctrl+, on Linux, or Cmd+, on macOS) and search
 for `gemdb`, or go to **Extensions** > **GemDB Code** in the list on the left. If you need to
@@ -599,19 +627,24 @@ customize your setup, change them in your **User** settings. They apply to the o
 this computer, so a value set in a workspace or folder is ignored, and Settings Sync does not copy
 them to other computers. The following table lists all of the settings and the defaults.
 
-| Setting                                  | Default         | What it does                                                     |
-| ---------------------------------------- | --------------- | ---------------------------------------------------------------- |
-| `gemdb.rootPath`                         | `~/GemDB`       | Where GemDB Code keeps everything; must be on a local disk       |
-| `gemdb.engineVersion`                    | _(empty)_       | Advanced: override the pinned engine version                     |
-| `gemdb.mcp.enabled`                      | `false`         | Run the MCP server, so AI agents can reach your database         |
-| `gemdb.mcp.port`                         | `50390`         | The port it listens on, always on `127.0.0.1`                    |
-| `gemdb.mcp.readOnly`                     | `false`         | Log agents in as a database user that cannot commit              |
-| `gemdb.externalDatabase.gemstone`        | _(empty)_       | Advanced: use a database someone else runs, whose engine is here |
-| `gemdb.externalDatabase.globalDirectory` | `/opt/gemstone` | That database's lock directory (`GEMSTONE_GLOBAL_DIR`)           |
-| `gemdb.externalDatabase.stone`           | `gs64stone`     | Its stone                                                        |
-| `gemdb.externalDatabase.netldi`          | `gs64ldi`       | Its NetLDI                                                       |
-| `gemdb.externalDatabase.user`            | `DataCurator`   | The account GemDB Code logs in as                                |
-| `gemdb.externalDatabase.passwordFile`    | _(empty)_       | A file holding that account's password                           |
+| Setting                                            | Default         | What it does                                                                         |
+| -------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------ |
+| `gemdb.rootPath`                                   | `~/GemDB`       | Where GemDB Code keeps everything; must be on a local disk                           |
+| `gemdb.engineVersion`                              | _(empty)_       | Advanced: override the pinned engine version                                         |
+| `gemdb.maintenance.garbageCollectionIntervalHours` | `24`            | Hours between scheduled garbage collections; `0` collects only when space runs short |
+| `gemdb.maintenance.abortIdleSessionsAfterMinutes`  | `10`            | Minutes before an idle session with no uncommitted changes is refreshed              |
+| `gemdb.statistics.collect`                         | `true`          | Whether the database records its statistics for GemDB Stats                          |
+| `gemdb.statistics.intervalSeconds`                 | `20`            | Seconds between recordings                                                           |
+| `gemdb.statistics.keepDays`                        | `14`            | Days before a statistics file is deleted                                             |
+| `gemdb.mcp.enabled`                                | `false`         | Run the MCP server, so AI agents can reach your database                             |
+| `gemdb.mcp.port`                                   | `50390`         | The port it listens on, always on `127.0.0.1`                                        |
+| `gemdb.mcp.readOnly`                               | `false`         | Log agents in as a database user that cannot commit                                  |
+| `gemdb.externalDatabase.gemstone`                  | _(empty)_       | Advanced: use a database someone else runs, whose engine is here                     |
+| `gemdb.externalDatabase.globalDirectory`           | `/opt/gemstone` | That database's lock directory (`GEMSTONE_GLOBAL_DIR`)                               |
+| `gemdb.externalDatabase.stone`                     | `gs64stone`     | Its stone                                                                            |
+| `gemdb.externalDatabase.netldi`                    | `gs64ldi`       | Its NetLDI                                                                           |
+| `gemdb.externalDatabase.user`                      | `DataCurator`   | The account GemDB Code logs in as                                                    |
+| `gemdb.externalDatabase.passwordFile`              | _(empty)_       | A file holding that account's password                                               |
 
 Before you change the following settings, note these important details:
 
@@ -622,6 +655,7 @@ Before you change the following settings, note these important details:
 - **`gemdb.engineVersion`**: a database created by a different engine version cannot be opened. See
   [GemDB Code updates and associated data](#gemdb-code-updates-and-associated-data) before you
   change it.
+- **`gemdb.statistics.*`**: changes take effect the next time the database starts.
 - **`gemdb.mcp.enabled`**: if you turn it on here rather than with **Connect an AI Agent to GemDB**,
   the server starts the next time the database starts or you run Python.
 - **`gemdb.mcp.port`**: after changing it, choose **Restart the MCP Server** from the sidebar's
@@ -639,8 +673,9 @@ GemDB Code includes commands to run useful functions in VS Code. The GemDB Code 
 most of these, either as a button along its top or in its **⋯** menu. To run a command, either use
 the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS) or run it from the sidebar. In the
 Command Palette, type `GemDB` to list the commands. **GemDB: Run Python File in GemDB** and **GemDB:
-Debug Python File in GemDB** appear only when a Python file is open, and **GemDB: Keep the Database Running After Logout** appears only on
-Linux. The table below reviews the functions available as commands or in the sidebar.
+Debug Python File in GemDB** appear only when a Python file is open, and **GemDB: Keep the Database
+Running After Logout** appears only on Linux. The table below reviews the functions available as
+commands or in the sidebar.
 
 | Command Palette                                   | Sidebar                                                                                   | What it does                                                                                                                  |
 | ------------------------------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
@@ -653,6 +688,8 @@ Linux. The table below reviews the functions available as commands or in the sid
 | **GemDB: Show Log**                               | **⋯** menu                                                                                | Opens GemDB Code's log                                                                                                        |
 | **GemDB: Reinstall the Python Execution Engine**  | **⋯** menu, or click the **Python** row when an update is available or the install failed | Reinstalls Python support into your database                                                                                  |
 | **GemDB: Restart the MCP Server**                 | **⋯** menu, while the database is running                                                 | Restarts the MCP server and releases agent sessions                                                                           |
+| **GemDB: Collect Garbage Now**                    | **⋯** menu, or click the **Space** row                                                    | Collects the database's garbage immediately                                                                                   |
+| **GemDB: Stop a Database Session…**               | **⋯** menu                                                                                | Lists the sessions on the database and stops the one you pick; anything it had not committed is lost                          |
 | **GemDB: Install Brain Freeze Demo**              | **⋯** menu                                                                                | Clones the demo application into `~/GemDB/brain-freeze` and opens it                                                          |
 | **GemDB: Uninstall GemDB**                        | **⋯** menu                                                                                | Removes the engine, its Python support, and the MCP server, and offers the option to remove your database                     |
 | **GemDB: Set Up GemDB**                           | **Set Up GemDB** button, before setup has finished                                        | Runs or resumes setup                                                                                                         |
@@ -663,6 +700,9 @@ Linux. The table below reviews the functions available as commands or in the sid
 | **GemDB: Debug Python File in GemDB**             | None; use the Run button's menu at the top right of a Python file                         | Runs the current `.py` file so that `breakpoint()` opens the debugger; listed only when a Python file is open                 |
 | **GemDB: Clear Notebook Variables**               | None                                                                                      | Clears the active notebook's variables                                                                                        |
 | **GemDB: Refresh Notebook View**                  | ↻ button in a GemDB notebook's toolbar                                                    | Lets the active notebook see what other sessions have committed: runs `gemdb.refresh()` in its session                        |
+| **GemDB: Open Today's Statistics**                | Click the **Statistics** row                                                              | Opens the newest statistics file in GemDB Stats                                                                               |
+| **GemDB: Open Statistics File…**                  | None                                                                                      | Opens a statistics file you choose in GemDB Stats                                                                             |
+| **GemDB: Copy Telemetry ID**                      | None                                                                                      | Copies the ID that identifies your usage data to the clipboard, so you can ask for that data to be found or deleted           |
 
 ### Using GemDB Code vs. GemStone/S
 
@@ -676,7 +716,7 @@ database list, a login manager, and a process view. GemDB Code and Jasper can be
 side. GemDB Code keeps its files under `~/GemDB` and names its processes distinctly, so the
 databases remain separately maintained and controlled.
 
-### Uninstalling
+### Uninstall GemDB Code
 
 Removing the extension from VS Code does not remove the database or anything under `~/GemDB`, and
 the database keeps running after VS Code closes. Uninstall in this order:
@@ -684,7 +724,7 @@ the database keeps running after VS Code closes. Uninstall in this order:
 1. **Open the GemDB Code sidebar.** Click the **GemDB Code** icon in the Activity Bar, on the far
    left of VS Code.
 2. **Stop the database.** If the top row of the sidebar says **Running**, click **Stop GemDB** (■)
-   at the top of the sidebar. Wait until the row says **Stopped**. GemDB Code will not remove its
+   at the top of the sidebar. Wait until the row says **Stopped**. GemDB Code does not remove its
    files while the database is running.
 3. **Remove the database engine and Python support.** In the sidebar's **⋯** menu, choose
    **Uninstall GemDB**. The **Remove GemDB?** dialog shows where your database is and offers:
@@ -740,5 +780,7 @@ server, all from GemTalk Systems, plus the koffi library. See [NOTICE](NOTICE) f
 Code downloads the database engine during setup, and the engine has its own license terms.
 
 To build GemDB Code from source, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+This README ends with a tracking pixel. [Read what it does and what it collects](USAGE_DATA.md#tracking-pixel-in-the-readme).
 
 <img referrerpolicy="no-referrer-when-downgrade" src="https://static.scarf.sh/a.png?x-pxid=66a85084-141a-4772-80ed-69d29c88f7ad" />
