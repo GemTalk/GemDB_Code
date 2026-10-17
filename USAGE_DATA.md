@@ -56,7 +56,7 @@ GemDB's own properties and four of VS Code's: `common.extversion`,
 common properties, `common.vscodemachineid` among them, are not sent to Scarf,
 so nothing Scarf receives identifies your installation.
 Scarf matches the IP address an event arrives from to the company or
-organisation it belongs to, if any, and to a coarse location.
+organization it belongs to, if any, and to a coarse location.
 The raw IP address is discarded once it has been matched.
 
 ## What we do not collect
@@ -74,7 +74,7 @@ underlying error's own text, because GemStone errors can embed file paths.
 
 To understand GemDB's usage in aggregate: whether setup and startup succeed
 and how long they take, which platforms GemDB runs on and which regions it is
-used in, which organisations use it, and which features people actually use.
+used in, which organizations use it, and which features people actually use.
 That lets us prioritize fixes and improvements. We do not use it to see what
 any individual does with their data or code (see "What we do not collect"),
 and it is never used for advertising or profiling. This relies on legitimate interest (GDPR Art.
@@ -99,7 +99,7 @@ for advertising, or share it with any third party beyond these two.
 
 ## Your controls
 
-GemDB honours VS Code's `telemetry.telemetryLevel` setting via
+GemDB honors VS Code's `telemetry.telemetryLevel` setting via
 `vscode.env.createTelemetryLogger`:
 
 - `off` — no telemetry is sent, to Azure or to Scarf.
@@ -117,7 +117,28 @@ delete the matching records.
 Events sent to Scarf carry no identifier, so they cannot be traced back to
 you, and there is no record of yours there to look up or delete.
 
+## Tracking pixel in the README
+
+The README ends with a Scarf tracking pixel, an invisible image that loads when you view it.
+
+**What we collect:** Scarf looks up business details for the requesting network address, such as
+company, general location, and cloud provider. Scarf states that it does not store IP addresses and
+purges personally identifiable information right after the lookup. GemDB only sees aggregate
+summaries, never your address.
+
+**Why:** We use the counts to see how many people view this README and what kinds of organizations
+are interested. We do not use them for advertising.
+
+**Opting out:** Block remote images in your browser or with an ad blocker. The README reads the same
+without the pixel.
+
+Learn more from Scarf:
+[How the pixel works](https://docs.scarf.sh/faq/#how-does-the-tracking-pixel-work) ·
+[Data privacy and security](https://docs.scarf.sh/faq/#data-privacy-security)
+
+Questions? Contact GemDB at [gemdb.com](https://www.gemdb.com/).
+
 ## Changes
 
-Last updated: 2026-10-15. Changes to this notice will be published in this
+Last updated: 2026-10-16. Changes to this notice will be published in this
 repository.

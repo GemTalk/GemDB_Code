@@ -781,4 +781,6 @@ Code downloads the database engine during setup, and the engine has its own lice
 
 To build GemDB Code from source, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+This README ends with a tracking pixel. [Read what it does and what it collects](USAGE_DATA.md#tracking-pixel-in-the-readme).
+
 <img referrerpolicy="no-referrer-when-downgrade" src="https://static.scarf.sh/a.png?x-pxid=66a85084-141a-4772-80ed-69d29c88f7ad" />
