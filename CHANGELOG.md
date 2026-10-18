@@ -7,14 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-18
+
+The database engine moves to GemStone 4.0.0.a5, and the bundled Python runtime moves forward. Start
+with a fresh database: delete `~/GemDB/db` before starting this release. The new engine cannot use a
+database an earlier one wrote, and GemDB Code says so rather than starting it.
+
 ### Added
 
 - **Open a persisted object in the Persisted Objects view, with nothing paused.** Each entry under
   `gemdb.root` opens like a Variables row, with its type badges and its special, class and function
   variables folded, and what is inside it opens in turn. A committed entry is read by GemDB's own
   session, so it opens any time, in a new window, after a restart; one added and not committed yet
-  is read by its notebook's session, while that notebook is not running a cell. A slow `__repr__`
-  is cut off at two seconds, as in Variables. A saved stack still opens in the debugger instead.
+  is read by its notebook's session, while that notebook is not running a cell. A slow `__repr__` is
+  cut off at two seconds, as in Variables. A saved stack still opens in the debugger instead.
 - **Ranges for a long list in the Persisted Objects view.** A list or dict longer than 500 items
   opens to ranges of 500 — `[0 … 499]`, `[500 … 999]`, … — each opening to its items and nested for
   a very long one, as the Variables show them; nothing is read until a range is opened. When
@@ -26,41 +32,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   but is a position goes there and says so, and a key that isn't there says so and how keys are
   written.
 - **`%pending` in the Debug Console: what the next commit writes.** At a pause, `%pending` lists
-  every persisted object the notebook's transaction has changed, each by its path under
-  `gemdb.root` (`gemdb.root["orders"][2]`), its type and its value now, with a link. Ctrl+click the
-  link (as every Debug Console link is followed) and Persisted Objects opens the rows down to that
-  object, ranges too, and selects it. VS Code asks once before it lets GemDB open its own links. The search for paths follows narrow, deep paths before
-  big containers, so an object many attributes down is found even beside a list of thousands; one
-  it can't find is listed as not found, without a link.
+  every persisted object the notebook's transaction has changed, each by its path under `gemdb.root`
+  (`gemdb.root["orders"][2]`), its type and its value now, with a link. Ctrl+click the link (as
+  every Debug Console link is followed) and Persisted Objects opens the rows down to that object,
+  ranges too, and selects it. VS Code asks once before it lets GemDB open its own links. The search
+  for paths follows narrow, deep paths before big containers, so an object many attributes down is
+  found even beside a list of thousands; one it can't find is listed as not found, without a link.
   Persisted Objects marks each changed object **M**, in the colour of a modified file: its
   description says what changes (`changed: total 10 → 15`, or how many entries changed, were added
   and were removed), its hover sets each changed entry's committed value beside the one the next
-  commit writes, and a changed attribute or item inside it reads `10 → 15`. Right-click a marked
-  row for **Revert to Committed Value**: after asking, it puts that entry, or the whole object, back
-  as committed in the notebook's session — discarding the change, committing nothing — and the mark
+  commit writes, and a changed attribute or item inside it reads `10 → 15`. Right-click a marked row
+  for **Revert to Committed Value**: after asking, it puts that entry, or the whole object, back as
+  committed in the notebook's session — discarding the change, committing nothing — and the mark
   goes, and `%pending` no longer lists it: an object that reads exactly as committed again
   (reverted, or set to what it already held) is counted on one line, not listed, though the commit
   still writes it back unchanged. A value is put back only as a plain literal or as the committed
-  object itself; a set, or a
-  value over 2,000 characters, says it can't be reverted. The marks go once the notebook commits or
-  discards its changes. Objects are matched by their permanent number, so a list
-  that grew still finds the right item. Objects created since the last commit are written as part
-  of the objects that now hold them. Objects outside `gemdb.root` — Grail's own records (its lists of a class's attribute names,
-  its module cache) and storage inside a Python object, such as a big dict's buckets — are counted
-  on one line, not listed.
+  object itself; a set, or a value over 2,000 characters, says it can't be reverted. The marks go
+  once the notebook commits or discards its changes. Objects are matched by their permanent number,
+  so a list that grew still finds the right item. Objects created since the last commit are written
+  as part of the objects that now hold them. Objects outside `gemdb.root` — Grail's own records (its
+  lists of a class's attribute names, its module cache) and storage inside a Python object, such as
+  a big dict's buckets — are counted on one line, not listed.
 - **Pending changes in Persisted Objects, with nothing paused.** Every notebook with uncommitted
   changes now has a row in Persisted Objects, with Commit and Abort, whether or not anything was
   added from the debugger. Under it, **Pending changes** lists what its next commit changes, as
-  `%pending` does in the Debug Console. Click one to go to it under `gemdb.root`, where it is
-  marked **M** and can be reverted.
+  `%pending` does in the Debug Console. Click one to go to it under `gemdb.root`, where it is marked
+  **M** and can be reverted.
 
 ### Changed
 
+- **The database engine is GemStone 4.0.0.a5.** A database an earlier engine wrote cannot be used by
+  this one: GemStone starts on it and then refuses every login, so GemDB Code checks first and says
+  which folder to delete. Setup downloads about 170 MB on macOS and 470 MB on Linux, up from 145 MB
+  and 450 MB, and still needs about 11 GB (12 GB on Linux) of disk.
+- **A newer Python runtime.** 71 commits across 31 pull requests since 1.7.0. Class bodies behave as
+  CPython's do: a class body now runs a `raise`, `assert`, `match`, or an `import` or `del` inside
+  an `if`, which were skipped before, and a class whose body fails is not defined. `numpy.random`
+  loads, `import uvicorn` works, `hashlib` adds `sha224` and `sha384`, and an abandoned generator
+  runs its `finally` block. Some code CPython refuses is now refused here too: invalid `__slots__`
+  raise `TypeError`, and `x *= y` raises when neither side supports it instead of storing
+  `NotImplemented`. A `@property` now wins over an instance attribute of the same name, a coroutine
+  is no longer a `GeneratorType`, and patching `json.dumps`, `math.sqrt` or `os.getcwd` now reaches
+  the code that calls them.
 - **Usage data also goes to Scarf.** The same usage events GemDB already sends now go to
-  [Scarf](https://about.scarf.sh) as well, with fewer of VS Code's own properties. Turning
-  telemetry off in VS Code turns off both. Scarf is not sent VS Code's machine id, so nothing it
-  receives identifies your installation. [USAGE_DATA.md](USAGE_DATA.md) says what Scarf receives
-  and how long it keeps it.
+  [Scarf](https://about.scarf.sh) as well, with fewer of VS Code's own properties. Turning telemetry
+  off in VS Code turns off both. Scarf is not sent VS Code's machine id, so nothing it receives
+  identifies your installation. [USAGE_DATA.md](USAGE_DATA.md) says what Scarf receives and how long
+  it keeps it. It now also describes the Scarf image at the end of the README, which loads when the
+  README is viewed, including on the extension's page, and how to block it.
 
 ### Fixed
 
@@ -69,12 +88,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   history. VS Code reads where a suggestion starts as a 0-based position, and GemDB sent it 1-based.
   The names suggested after `%persist ` and `persisted.` had the same fault.
 - **An untitled notebook is called by its name.** GemDB named a notebook by the last part of its
-  address, so an untitled one read `untitled:Untitled-1.ipynb?jupyter-notebook` wherever its
-  session is named, and a file name with a space read `my%20notes.ipynb`. They now read
-  `Untitled-1.ipynb` and `my notes.ipynb`.
-- **Persisted Objects reads again when the database starts or stops.** Opened while the database
-  was stopped, it kept saying "Start GemDB to see persisted objects." after Start until it was
-  closed and opened again; it now follows the status panel, which sees every start and stop.
+  address, so an untitled one read `untitled:Untitled-1.ipynb?jupyter-notebook` wherever its session
+  is named, and a file name with a space read `my%20notes.ipynb`. They now read `Untitled-1.ipynb`
+  and `my notes.ipynb`.
+- **Persisted Objects reads again when the database starts or stops.** Opened while the database was
+  stopped, it kept saying "Start GemDB to see persisted objects." after Start until it was closed
+  and opened again; it now follows the status panel, which sees every start and stop.
 - **Closing the terminal ends a `gemdb` run.** Closing the terminal tab of `gemdb app.py`, or of
   **Run Python File in GemDB**, left the program running out of sight, holding a database session
   and, for a web app, its port. It is now stopped as Ctrl+C would stop it: its `finally` blocks run
@@ -1099,7 +1118,8 @@ gets out of the way.
 - **`sys.exit(n)` exits 1 rather than `n`**, and **`input()` is not yet
   supported**. Both are upstream in Grail.
 
-[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.4...v1.6.0
 [1.5.4]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.3...v1.5.4
