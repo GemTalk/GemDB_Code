@@ -9,7 +9,9 @@ import {
   commandCompletions,
   helpText,
   isConsoleCommand,
+  objectLink,
   parseConsoleCommand,
+  pendingText,
   persistedCompletions,
 } from './consoleCommands';
 import { PlacedFrame, jupyterTraceback } from './consoleTraceback';
@@ -32,8 +34,15 @@ import {
   parseConsoleNames,
   parseConsoleReply,
   parsePausedStack,
+  parsePending,
   parsePersistedKeys,
+  parseSnapshot,
+  withoutUnchanged,
+  snapshotQuery,
+  Pending,
+  Snapshot,
   pausedStackQuery,
+  pendingQuery,
   persistedKeysQuery,
   setVariableQuery,
 } from './pauseVariables';
@@ -300,6 +309,37 @@ function tellView(command: string, ...args: unknown[]): void {
   Promise.resolve(vscode.commands.executeCommand(command, ...args)).catch((e: unknown) =>
     log(`Could not update Persisted Objects: ${errorMessage(e)}`),
   );
+}
+
+/**
+ * `%pending`'s objects less those that read exactly as committed — reverted
+ * by Revert to Committed Value, or set to what they held — compared as
+ * Persisted Objects compares them: what is committed read by GemDB's own
+ * session (through the view's command, which owns that session), what the
+ * notebook would commit read at the pause. With no view to ask, the list
+ * is kept whole.
+ */
+async function withoutReverted(pause: Pause, pending: Pending): Promise<Pending> {
+  const query = pause.query;
+  const oops = pending.changes.filter((c) => !c.internal).map((c) => c.oop);
+  if (!query || oops.length === 0) return pending;
+  let committed: string[] | undefined;
+  try {
+    committed = await vscode.commands.executeCommand<string[] | undefined>(
+      'gemdb.savedObjects.committedSnapshots',
+      oops,
+    );
+  } catch (e) {
+    log(`Could not read what is committed for %pending: ${errorMessage(e)}`);
+  }
+  if (!committed) return pending;
+  const before = new Map<number, Snapshot>();
+  const after = new Map<number, Snapshot>();
+  for (const [i, oop] of oops.entries()) {
+    before.set(oop, parseSnapshot(committed[i] ?? ''));
+    after.set(oop, parseSnapshot(await query(snapshotQuery(oop))));
+  }
+  return withoutUnchanged(pending, before, after);
 }
 
 /**
@@ -1193,6 +1233,27 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
               ? 'Nothing bound in the Debug Console yet at this pause. Try p = …, then %names.'
               : names.map((n) => `${n.name}: ${n.type} = ${n.repr}`).join('\n'),
           );
+          done();
+          return;
+        }
+        case 'pending': {
+          if (!pause.query) throw new Error('There is nothing to commit here.');
+          const pending = await withoutReverted(
+            pause,
+            parsePending(await pause.query(pendingQuery())),
+          );
+          const text = pendingText(pending, pause.label, (oop) =>
+            objectLink(vscode.env.uriScheme, oop),
+          );
+          // A line at a time: VS Code finds no links in a piece of output over 2,000
+          // characters, so sent whole, a long list's links would be plain text.
+          for (const line of text.split('\n')) say(line);
+          // Persisted Objects marks the same objects, with what is committed beside what changes.
+          tellView('gemdb.savedObjects.notePendingChanges', {
+            ownerKey: pause.ownerKey,
+            label: pause.label,
+            oops: pending.changes.filter((c) => !c.internal).map((c) => c.oop),
+          });
           done();
           return;
         }

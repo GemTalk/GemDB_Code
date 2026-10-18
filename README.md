@@ -437,8 +437,12 @@ database, select that kernel from the kernel picker at the top right.
   nested row, ready for the next line, or **Evaluate with self…**,
   which runs an expression with `self` bound to it (`len(self.history)`) and shows the answer
   there. Lines starting with `%` are GemDB commands, not Python: `%persist p` adds `p` to
-  Persisted Objects (`%persist expr as key` for anything else), `%commit` commits the notebook,
-  `%names` lists what you have bound in the console, and `%help` lists them all. Type `%` and the
+  Persisted Objects (`%persist expr as key` for anything else), `%pending` lists the persisted
+  objects the notebook's next commit writes — each by its path under `gemdb.root`, with a link
+  (Ctrl+click) that shows it in Persisted Objects, where each changed object is marked **M**, its
+  hover sets the committed value beside the new one, and right-click **Revert to Committed Value**
+  undoes the change — `%commit` commits the
+  notebook, `%names` lists what you have bound in the console, and `%help` lists them all. Type `%` and the
   console suggests them. `gemdb` is always available in the console, so a line copied from Persisted
   Objects, such as `gemdb.root["orders"]`, works even if the program never imported it. What Persisted Objects holds is available by its
   key too (`o` for `gemdb.root["o"]`), unless the paused code has its own name `o`; `persisted.o` reaches it whatever `o` means, and a
@@ -447,7 +451,19 @@ database, select that kernel from the kernel picker at the top right.
   dots in a cell (they work in `.py` files; see above). Right-click a Variables row and choose **Add to Persisted Objects…** to keep that object: it
   goes in `gemdb.root` under the key you give (one is suggested) and is written at the notebook's
   next commit. The **Persisted Objects** view, under GemDB and in Run and Debug, lists what `gemdb.root`
-  holds; its title bar always has **Commit** and **Abort** for the notebook you are working in. **Add Stack to Persisted Objects…** on the Call Stack saves the whole paused stack the same
+  holds. Each entry opens like a Variables row, with its type badges and groups, and you can keep
+  opening what is inside it, with nothing paused: a committed entry is read by GemDB's own session,
+  any time, even after a restart; one added and not committed yet is read by its notebook's, while
+  that notebook is not running a cell. A list or dict longer than 500 items opens to ranges of 500 —
+  `[0 … 499]`, `[500 … 999]`, … — each opening to its items, nested for a very long one, as in
+  Variables; and when `gemdb.root` holds more than 200 entries, it shows them as ranges of 200.
+  Right-click a list, set or dict (or one of its ranges) and choose **Go to Item…** to type a position
+  (negative counts from the end; `[42]`, as the ranges write it, also works) or a dict's key, and the
+  view opens down to that item and selects it; a key it can't find says so and how keys are written.
+  Every notebook with uncommitted changes is listed below `gemdb.root`, paused or not, with
+  **Commit** and **Abort** on its row and a **Pending changes** group: the persisted objects its
+  next commit changes, as `%pending` lists them. Click one to go to it under `gemdb.root`, marked
+  **M**. The view's title bar always has **Commit** and **Abort** for the notebook you are working in. **Add Stack to Persisted Objects…** on the Call Stack saves the whole paused stack the same
   way; once committed, Persisted Objects reopens it in the debugger, even after a restart. Its
   Debug Console works on the saved objects: call a method, bind a name, change an object,
   `%persist` one. A change waits uncommitted; the console says when the stack opens that `%commit`
