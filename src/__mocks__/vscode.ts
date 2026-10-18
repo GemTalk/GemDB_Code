@@ -202,11 +202,19 @@ export interface FakeTreeView {
   reveals: Array<{ element: unknown; options: unknown }>;
   reveal(element: unknown, options?: unknown): Promise<void>;
   onDidChangeVisibility(listener: (event: { visible: boolean }) => void): Disposable;
+  onDidExpandElement(listener: (event: { element: unknown }) => void): Disposable;
+  onDidCollapseElement(listener: (event: { element: unknown }) => void): Disposable;
+  /** Open or close a row, as the user's click on its twistie does. */
+  toggle(element: unknown, open: boolean): void;
   dispose(): void;
 }
 
 /** Tree views created so far, by view id. */
 export const __treeViews = new Map<string, FakeTreeView>();
+
+/** The extension's URI handler, as `window.registerUriHandler` was given it. */
+export const __uriHandler: { handler?: { handleUri(uri: { path: string; query: string }): void } } =
+  {};
 
 /** What was last written to the clipboard. */
 export const __clipboard = { text: '' };
@@ -230,6 +238,18 @@ export const window = {
       dispose: () => {},
     };
   },
+  registerFileDecorationProvider(provider: {
+    provideFileDecoration(uri: Uri): unknown;
+  }): Disposable {
+    __fileDecorations.push(provider);
+    return new Disposable(() => __fileDecorations.splice(__fileDecorations.indexOf(provider), 1));
+  },
+  registerUriHandler(handler: {
+    handleUri(uri: { path: string; query: string }): void;
+  }): Disposable {
+    __uriHandler.handler = handler;
+    return new Disposable(() => (__uriHandler.handler = undefined));
+  },
   registerTreeDataProvider(_viewId: string, _provider: unknown): Disposable {
     return new Disposable(() => {});
   },
@@ -238,6 +258,8 @@ export const window = {
     return new Disposable(() => __customEditors.delete(viewType));
   },
   createTreeView(viewId: string, options: unknown): FakeTreeView {
+    const expand: Array<(event: { element: unknown }) => void> = [];
+    const collapse: Array<(event: { element: unknown }) => void> = [];
     const view: FakeTreeView = {
       id: viewId,
       options,
@@ -249,6 +271,16 @@ export const window = {
       },
       onDidChangeVisibility: (_listener: (event: { visible: boolean }) => void) =>
         new Disposable(() => {}),
+      onDidExpandElement: (listener: (event: { element: unknown }) => void) => {
+        expand.push(listener);
+        return new Disposable(() => {});
+      },
+      onDidCollapseElement: (listener: (event: { element: unknown }) => void) => {
+        collapse.push(listener);
+        return new Disposable(() => {});
+      },
+      toggle: (element: unknown, open: boolean) =>
+        (open ? expand : collapse).forEach((listener) => listener({ element })),
       dispose: () => {},
     };
     __treeViews.set(viewId, view);
@@ -356,9 +388,11 @@ export class MarkdownString {
 }
 
 export class TreeItem {
+  id?: string;
   description?: string;
   tooltip?: string | MarkdownString;
   iconPath?: unknown;
+  resourceUri?: Uri;
   contextValue?: string;
   command?: unknown;
   constructor(
@@ -370,6 +404,32 @@ export class TreeItem {
 export class ThemeColor {
   constructor(readonly id: string) {}
 }
+
+/** Just a URI's parts, as `Uri.from` takes them. */
+export class Uri {
+  constructor(
+    readonly scheme: string,
+    readonly path: string,
+    readonly query = '',
+  ) {}
+  static from(parts: { scheme: string; path?: string; query?: string }): Uri {
+    return new Uri(parts.scheme, parts.path ?? '', parts.query ?? '');
+  }
+  toString(): string {
+    return `${this.scheme}:${this.path}${this.query ? `?${this.query}` : ''}`;
+  }
+}
+
+export class FileDecoration {
+  constructor(
+    readonly badge?: string,
+    readonly tooltip?: string,
+    readonly color?: ThemeColor,
+  ) {}
+}
+
+/** The file decoration providers registered, as a tree view would ask them. */
+export const __fileDecorations: Array<{ provideFileDecoration(uri: Uri): unknown }> = [];
 
 export class ThemeIcon {
   constructor(

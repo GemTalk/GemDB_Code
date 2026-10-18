@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { GrailInstallFailure } from '../grail';
-import { pythonRow, runningRow } from '../statusView';
+import { onRunningChange, pythonRow, runningRow } from '../statusView';
 
 /**
  * The status view's two rows about Python, decided without a database.
@@ -107,5 +107,24 @@ describe('the Running row', () => {
     const row = runningRow({ listening: false, pythonFailed: true });
 
     expect(row.description).toBe('Running, but not accepting new sessions');
+  });
+});
+
+describe('telling Persisted Objects the database started or stopped', () => {
+  it('calls back when running changes, not on the first read or a repeat', () => {
+    const changed = vi.fn();
+    const read = onRunningChange(changed);
+
+    read('stopped');
+    read('stopped');
+    expect(changed).not.toHaveBeenCalled();
+    read('running');
+    expect(changed).toHaveBeenCalledTimes(1);
+    read('running');
+    read('stopped');
+    expect(changed).toHaveBeenCalledTimes(2);
+    // Not installed is not running either: no change from stopped.
+    read('notInstalled');
+    expect(changed).toHaveBeenCalledTimes(2);
   });
 });
