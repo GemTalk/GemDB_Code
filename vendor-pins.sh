@@ -11,40 +11,31 @@
 # Bumping a pin is a one-line PR to this file; a green CI run on it is the
 # proof the new upstream commit works.
 
-# Grail: main as of 2026-10-15, 388 commits (175 PRs) on from the previous pin
-# (beef473). install.sh gains one step (#1556): after deployGemdb.gs it runs
-# scripts/deployUnicodedata.gs, which builds and commits unicodedata's tables so
-# a session's first normalize/category call neither takes a second nor leaves
-# the session dirty. resources/install-grail.sh now mirrors it as its step 4,
-# warn-only as upstream's is. Every other script it drives is byte-identical,
-# and every name in bundle-grail.sh's REQUIRED list is still there. install.gs
-# only adds: three runtime inputs (GrailCommitCoordinator, JSONDecoder,
-# PythonTokenizerIdentifiers) and test classes, all under src/. The C shim's
-# SOURCE changed (numpy, FastAPI, subclassing C types), so every platform
-# rebuilds it; the Makefile and its GCI calls are unchanged, and the only new
-# includes are libc's. The gemdb Python package is byte-identical.
+# Grail: main as of 2026-10-18, 71 commits (31 PRs) on from the previous pin
+# (9fb5d23). install.sh and every script resources/install-grail.sh drives are
+# byte-identical, there are no deletions or renames, and every name in
+# bundle-grail.sh's REQUIRED list is still there. install.gs only adds: one
+# runtime input (GrailDynLoadRequest) and test classes, all under src/. The C
+# shim's SOURCE changed (numpy, cffi, C-type introspection), so every platform
+# rebuilds it; the Makefile adds shim_cffi.o to the default build, the only new
+# includes are libc's, and the GCI calls are unchanged and declared in a5's
+# headers. The gemdb Python package is unchanged. Grail #1667 (a bare `import
+# flask` dirties every fresh session on a deployed stone) is still open.
 #
-# Deleted or moved, none of it referenced by GemDB: stdlib click and requests
-# become _grail_click and _grail_requests (#1634), and importlib/metadata.py
-# gives way to CPython's package (#1664).
+# What users get: class bodies and the object model closer to CPython's
+# (#1709, #1685, #1697, #1671, #1704 and more); numpy.random's Cython modules
+# loading and nested extension loads (#1665); cffi entry points, `import
+# uvicorn`, hashlib.sha224/sha384 (#1676); FastAPI's core tests at 99.8%
+# (#1654); and abandoned generators running their `finally` blocks (#1684).
 #
-# What users get: FastAPI's sync endpoints and HTTP serving (#1400, #1568,
-# #1626); `import numpy` completing (#1560 and on); enough for boto3,
-# sqlalchemy and pytest collection (#1547, #1550, #1551, #1597, #1598);
-# identifiers per CPython's XID and NFKC rules (#1503, #1512); `except*`
-# (#1625); tracebacks and frame lines as CPython reports them (#1373, #1509,
-# #1519); and a method patched onto a throwaway instance no longer leaves
-# something to commit (#1468).
-#
-# Behaviour changes a user can meet: `import click` or `import requests` with
-# neither installed is ModuleNotFoundError (#1634); `vars(obj)` is a live view,
-# so writing through it changes the object (#1664); calls CPython refuses now
-# raise TypeError -- extra lambda arguments (#1524), an argument given twice
-# (#1577); an exception in a decorator propagates instead of leaving the def
-# undecorated (#1403); `date == datetime` is False and ordering the two raises
-# (#1603); `^` and `&` on negative large integers are corrected (#1611); and
-# `µ` and `μ` are one name (#1512).
-PINNED_GRAIL_REF=9fb5d23a9f46e8e06c0d6783c06bb653d5b0c97e
+# Behaviour changes a user can meet: a class body now runs `raise`, `assert`,
+# `match` and conditional `del`/`import` it used to skip, and one that fails
+# leaves the name unbound (#1709); bad `__slots__` raise TypeError (#1697); a
+# `@property` wins over an instance value of the same name (#1671); a coroutine
+# is no longer a GeneratorType (#1672); `x *= y` where both sides decline raises
+# instead of storing NotImplemented (#1690); and patching `json.dumps`,
+# `math.sqrt` or `os.getcwd` now reaches their callers (#1654).
+PINNED_GRAIL_REF=a78e8c03c78bf957acb9119ae10c01567acdda06
 
 # mcp_server: main as of 2026-09-25, 26 commits (8 PRs) on from the previous pin
 # (afa3790). No load.gs changed, and every selector src/mcp.ts sends --
