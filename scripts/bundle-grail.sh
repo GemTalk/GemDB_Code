@@ -142,6 +142,7 @@ REQUIRED=(
     scripts/check_base_installed.gs
     scripts/kernel_class_extensions.gs
     scripts/deployGemdb.gs
+    scripts/deployUnicodedata.gs
     scripts/set_base_marker.gs
     scripts/setUnicodeMode.sh
     scripts/grail.tpz
