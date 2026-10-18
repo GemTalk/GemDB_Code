@@ -75,6 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Persisted Objects reads again when the database starts or stops.** Opened while the database
   was stopped, it kept saying "Start GemDB to see persisted objects." after Start until it was
   closed and opened again; it now follows the status panel, which sees every start and stop.
+- **Closing the terminal ends a `gemdb` run.** Closing the terminal tab of `gemdb app.py`, or of
+  **Run Python File in GemDB**, left the program running out of sight, holding a database session
+  and, for a web app, its port. It is now stopped as Ctrl+C would stop it: its `finally` blocks run
+  and its session is given back.
 
 ## [1.7.0] - 2026-10-16
 
