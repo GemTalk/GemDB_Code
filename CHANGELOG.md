@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Usage data also goes to Scarf.** The same usage events GemDB already sends now go to
+  [Scarf](https://about.scarf.sh) as well, with fewer of VS Code's own properties. Turning
+  telemetry off in VS Code turns off both. Scarf is not sent VS Code's machine id, so nothing it
+  receives identifies your installation. [USAGE_DATA.md](USAGE_DATA.md) says what Scarf receives
+  and how long it keeps it.
+
 ### Fixed
 
 - **Closing the terminal ends a `gemdb` run.** Closing the terminal tab of `gemdb app.py`, or of

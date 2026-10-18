@@ -17,7 +17,7 @@ export class TelemetryReporter {
   private readonly logger: ReturnType<typeof vscode.env.createTelemetryLogger>;
 
   constructor(_connectionString: string) {
-    // The mock's `createTelemetryLogger` ignores the sender entirely.
+    // No sender, so the mock's `createTelemetryLogger` records to `__telemetry`.
     this.logger = vscode.env.createTelemetryLogger(undefined as never);
   }
 
