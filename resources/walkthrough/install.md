@@ -5,7 +5,7 @@ storing the database under `~/GemDB`, and making any required shared-memory chan
 
 The first time GemDB Code activates, it:
 
-1. Starts downloading the database engine (about 145 MB on macOS, about 450 MB on Linux).
+1. Starts downloading the database engine (about 170 MB on macOS, about 470 MB on Linux).
 2. Checks the operating system's shared-memory limit while the engine downloads, and prompts you
    only if it needs raising.
 3. Unpacks the engine and creates one database under `~/GemDB`.

@@ -2,22 +2,22 @@ import { describe, expect, it } from 'vitest';
 import { parseGslist } from '../gslist';
 
 // Captured verbatim from `gslist -cvl` against a real database of the PINNED
-// engine, 4.0.0.a4, on 2026-09-28. The shape — fixed-width columns, a `cache`
+// engine, 4.0.0.a5, on 2026-10-18. The shape — fixed-width columns, a `cache`
 // row per stone, a two-word status — is what the parser has to survive.
 //
 // The version column is why the pattern is `\d\S*` rather than digits and
-// dots: `4.0.0.a4` is not digits and dots, and an earlier `[\d.]*` dropped
+// dots: `4.0.0.a5` is not digits and dots, and an earlier `[\d.]*` dropped
 // every row — see the comment on parseGslist.
 const REAL_OUTPUT = `Status        Version    Owner       Pid   Port   Started     Type       Name
 -------      --------- --------- -------- ----- ------------ ------      ----
-OK           4.0.0.a4  jfoster      79386 51475 Sep 28 19:31 Stone       gemdb
-OK           4.0.0.a4  jfoster      79398 51480 Sep 28 19:31 Netldi      gemdbldi
-OK           4.0.0.a4  jfoster      79387 51473 Sep 28 19:31 cache       gemdb~29024b83bbdeab9a`;
+OK           4.0.0.a5  jfoster      50354 49167 Oct 18 10:17 Stone       gemdb
+OK           4.0.0.a5  jfoster      50544 49247 Oct 18 10:17 Netldi      gemdbldi
+OK           4.0.0.a5  jfoster      50387 65454 Oct 18 10:17 cache       gemdb~a3c6c57f68b4e387`;
 
 // The same, from a 4.0.0.Alpha1 stone on 2026-09-11 — kept because it carries
 // a shape the current pin does not: the engine TRUNCATED `4.0.0.Alpha1` to
 // `4.0.0.Alpha`, eleven characters, in the lock file's fixed `char version[12]`
-// field. `4.0.0.a4` is short enough to arrive whole, so the pin of the day
+// field. `4.0.0.a5` is short enough to arrive whole, so the pin of the day
 // hides that behaviour; the parser still has to survive the next version that
 // does not. Reported upstream.
 const TRUNCATED_OUTPUT = `Status        Version    Owner       Pid   Port   Started     Type       Name
@@ -32,20 +32,20 @@ describe('parseGslist', () => {
     expect(processes).toEqual([
       {
         type: 'stone',
-        version: '4.0.0.a4',
-        pid: 79386,
+        version: '4.0.0.a5',
+        pid: 50354,
         name: 'gemdb',
         status: 'OK',
         responding: true,
       },
       {
         type: 'netldi',
-        version: '4.0.0.a4',
-        pid: 79398,
+        version: '4.0.0.a5',
+        pid: 50544,
         name: 'gemdbldi',
         status: 'OK',
         responding: true,
-        port: 51480,
+        port: 49247,
       },
     ]);
   });
@@ -57,7 +57,7 @@ describe('parseGslist', () => {
   });
 
   it('skips the shared page cache, which is not a process we manage', () => {
-    expect(parseGslist(REAL_OUTPUT).map((p) => p.name)).not.toContain('gemdb~29024b83bbdeab9a');
+    expect(parseGslist(REAL_OUTPUT).map((p) => p.name)).not.toContain('gemdb~a3c6c57f68b4e387');
   });
 
   it('reports the listener port, which is how a session finds the database', () => {
@@ -65,7 +65,7 @@ describe('parseGslist', () => {
     // `gs64ldi`, so it has no /etc/services entry and no fixed port. Reading
     // the port back from here is what replaces that entry.
     const netldi = parseGslist(REAL_OUTPUT).find((p) => p.type === 'netldi');
-    expect(netldi?.port).toBe(51480);
+    expect(netldi?.port).toBe(49247);
   });
 
   it('handles a two-word status without mistaking it for the version', () => {
@@ -80,7 +80,7 @@ describe('parseGslist', () => {
   it('reads a stone that is still starting, listed but not yet responding', () => {
     // A stone is listed from the moment it exists, and sits at `Startup` while
     // it recovers from a crash; a login in that time fails.
-    const output = 'Startup      4.0.0.a4  jfoster      79386 51475 Sep 28 19:31 Stone       gemdb';
+    const output = 'Startup      4.0.0.a5  jfoster      50354 49167 Oct 18 10:17 Stone       gemdb';
 
     const [stone] = parseGslist(output);
 
@@ -99,6 +99,7 @@ describe('parseGslist', () => {
     // The row the old pattern could not match. A build-qualified version —
     // truncated or not — must not make a running stone invisible.
     for (const version of [
+      '4.0.0.a5',
       '4.0.0.a4',
       '4.0.0.a3',
       '4.0.0.a2',
