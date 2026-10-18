@@ -70,7 +70,7 @@ afterEach(() => {
 
 describe('reading the version out of copydbf', () => {
   it('takes the release and stops at the comma', () => {
-    expect(parseRepositoryVersion(copydbfOutput('4.0.0.a4'))).toBe('4.0.0.a4');
+    expect(parseRepositoryVersion(copydbfOutput('4.0.0.a5'))).toBe('4.0.0.a5');
     expect(parseRepositoryVersion(copydbfOutput('3.7.5'))).toBe('3.7.5');
   });
 
@@ -86,50 +86,49 @@ describe('the guard in front of a database', () => {
     // Nothing to be wrong about: a first install creates the database from
     // this engine's own extent moments later.
     expect(repositoryVersion(engine)).toBeUndefined();
-    expect(() => assertDatabaseMatchesEngine(engine, '4.0.0.a4')).not.toThrow();
+    expect(() => assertDatabaseMatchesEngine(engine, '4.0.0.a5')).not.toThrow();
   });
 
   it('says nothing when the database matches the engine', () => {
     makeExtent();
-    engine = fakeEngine(copydbfOutput('4.0.0.a4'));
-    expect(() => assertDatabaseMatchesEngine(engine, '4.0.0.a4')).not.toThrow();
+    engine = fakeEngine(copydbfOutput('4.0.0.a5'));
+    expect(() => assertDatabaseMatchesEngine(engine, '4.0.0.a5')).not.toThrow();
   });
 
   it('refuses a database an older engine wrote, and says what to do', () => {
     makeExtent();
     engine = fakeEngine(copydbfOutput('3.7.5'));
 
-    expect(() => assertDatabaseMatchesEngine(engine, '4.0.0.a4')).toThrow(DatabaseVersionError);
+    expect(() => assertDatabaseMatchesEngine(engine, '4.0.0.a5')).toThrow(DatabaseVersionError);
     try {
-      assertDatabaseMatchesEngine(engine, '4.0.0.a4');
+      assertDatabaseMatchesEngine(engine, '4.0.0.a5');
     } catch (e) {
       const message = (e as Error).message;
       // Both versions, the path to delete, and a warning: everything the user
       // needs is in the message, because there is no upgrade to offer.
       expect(message).toContain('3.7.5');
-      expect(message).toContain('4.0.0.a4');
+      expect(message).toContain('4.0.0.a5');
       expect(message).toContain(databasePath());
       expect(message).toMatch(/delete/i);
     }
   });
 
   it('refuses one alpha against another, which is the upgrade users meet', () => {
-    // Not a variation on the test above: 3.7.5 -> 4.0 is the case that is over,
-    // and every pin move since has been alpha to alpha. Measured for Alpha1 ->
-    // a2 on 2026-09-16, a2 -> a3 on 2026-09-24 and a3 -> a4 on 2026-09-28: the
-    // older extent still reports `compatibilityLevel: 855` under the newer
-    // engine, so the stone starts and only the logins fail -- exactly the
-    // silent shape this guard exists to convert into a sentence.
+    // Not a variation on the test above: 3.7.5 -> 4.0 is the case that is over, and every pin
+    // move since has been alpha to alpha. Measured for Alpha1 -> a2 on 2026-09-16, a2 -> a3 on
+    // 2026-09-24, a3 -> a4 on 2026-09-28 and a4 -> a5 on 2026-10-18: the older extent still
+    // reports `compatibilityLevel: 855` under the newer engine, so the stone starts and only
+    // the logins fail -- exactly the silent shape this guard exists to convert into a sentence.
     makeExtent();
-    engine = fakeEngine(copydbfOutput('4.0.0.a3'));
+    engine = fakeEngine(copydbfOutput('4.0.0.a4'));
 
-    expect(() => assertDatabaseMatchesEngine(engine, '4.0.0.a4')).toThrow(DatabaseVersionError);
+    expect(() => assertDatabaseMatchesEngine(engine, '4.0.0.a5')).toThrow(DatabaseVersionError);
     try {
-      assertDatabaseMatchesEngine(engine, '4.0.0.a4');
+      assertDatabaseMatchesEngine(engine, '4.0.0.a5');
     } catch (e) {
       const message = (e as Error).message;
-      expect(message).toContain('4.0.0.a3');
       expect(message).toContain('4.0.0.a4');
+      expect(message).toContain('4.0.0.a5');
     }
   });
 
@@ -140,7 +139,7 @@ describe('the guard in front of a database', () => {
     makeExtent();
     engine = fs.mkdtempSync(path.join(os.tmpdir(), 'gemdb-engine-'));
     expect(repositoryVersion(engine)).toBeUndefined();
-    expect(() => assertDatabaseMatchesEngine(engine, '4.0.0.a4')).not.toThrow();
+    expect(() => assertDatabaseMatchesEngine(engine, '4.0.0.a5')).not.toThrow();
     fs.rmSync(engine, { recursive: true, force: true });
     engine = '';
   });

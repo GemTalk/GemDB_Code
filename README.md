@@ -169,7 +169,7 @@ not available for that platform, and you cannot install it.
 #### How setup runs
 
 In a local VS Code window, setup starts on its own the first time the extension activates on a
-machine. GemDB Code downloads the database engine (about 145 MB on macOS, about 450 MB on Linux) and
+machine. GemDB Code downloads the database engine (about 170 MB on macOS, about 470 MB on Linux) and
 creates one database under `~/GemDB`. In a remote window (SSH, WSL, dev containers), or after you
 cancel setup, click **Set Up GemDB** in the GemDB Code sidebar, or run **GemDB: Set Up GemDB** from
 the Command Palette.

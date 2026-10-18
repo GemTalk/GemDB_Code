@@ -64,9 +64,9 @@ export function archiveExtension(): 'dmg' | 'zip' {
 /**
  * What setup costs on this platform, as told to the user before it starts.
  *
- * Measured for 4.0.0.a4: the macOS disk image is 143 MB and its engine 378 MB
- * once copied out; the Linux zips are 424 MB (arm64) and 449 MB (x86-64) and
- * unpack to about 1.07 GB. The database with Python filed in and the staged
+ * Measured for 4.0.0.a5: the macOS disk image is 170 MB and its engine 491 MB
+ * once copied out; the Linux zips are 447 MB (arm64) and 472 MB (x86-64) and
+ * unpack to about 1.2 GB. (a5 added `extent0.rowan3.dbf`, 113 MB, to `bin`.) The database with Python filed in and the staged
  * Python payload add about 330 MB either way. The figures move with the engine
  * pin, and the welcome view in package.json and the walkthrough repeat them.
  */
@@ -74,8 +74,8 @@ export function setupFootprint(): { download: string; disk: string } {
   // The disk figure includes the database's 10 GB, reserved on disk from its
   // first start (DBF_PRE_GROW; withSpaceLimits in database.ts).
   return process.platform === 'darwin'
-    ? { download: '145 MB', disk: '11 GB' }
-    : { download: '450 MB', disk: '12 GB' };
+    ? { download: '170 MB', disk: '11 GB' }
+    : { download: '470 MB', disk: '12 GB' };
 }
 
 /** Shared-library extension for this platform. */

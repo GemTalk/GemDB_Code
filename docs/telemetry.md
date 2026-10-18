@@ -144,7 +144,7 @@ engine directories survive it.
 
 ### `setupStarted` and `setupFinished`
 
-Setup downloads and unpacks the database (about 145 MB on macOS, 450 MB on
+Setup downloads and unpacks the database (about 170 MB on macOS, 470 MB on
 Linux). `setupStarted` is sent every time it begins, `setupFinished` when it
 ends. A cancel followed by a Resume counts as two attempts.
 

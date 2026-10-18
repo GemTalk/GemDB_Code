@@ -13,7 +13,7 @@ import * as path from 'path';
  * downloaded the engine and created the database there. Home directories are
  * NFS mounts on many shared Linux machines, which puts the default root path
  * there too (#69). Asking first is what lets setup refuse before it has spent
- * a 450 MB download on a directory the database cannot use.
+ * a 470 MB download on a directory the database cannot use.
  *
  * On Linux, `statfs` answers with `NFS_SUPER_MAGIC`, which nfs and nfs4 mounts
  * share. On macOS NFS is a loadable file system, so its `statfs` type number is

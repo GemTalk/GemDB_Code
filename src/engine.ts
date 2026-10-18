@@ -94,7 +94,7 @@ export async function installEngine(
     extract(archivePath, dest, progress),
   );
 
-  // The archive (144 MB for the macOS disk image, ~450 MB for the Linux zips)
+  // The archive (170 MB for the macOS disk image, ~470 MB for the Linux zips)
   // serves no purpose once extracted, and keeping it would add most of its own
   // size again to an install that is meant to be unobtrusive.
   try {
