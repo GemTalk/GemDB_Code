@@ -1,13 +1,7 @@
 import { abortIdleSessionsAfterMinutes, externalDatabase } from './config';
 import { assertSafeToStart } from './database';
 import { errorMessage } from './log';
-import {
-  ensureProcesses,
-  externalDatabaseDownError,
-  findNetldi,
-  findStone,
-  listProcesses,
-} from './processes';
+import { assertExternalDatabaseUp, ensureProcesses } from './processes';
 import { PyRepl, ReplSession } from './pyRepl';
 import { runPythonInSession } from './pythonQueries';
 import { GciSession, setInputHandler } from './session';
@@ -39,21 +33,23 @@ import { GciSession, setInputHandler } from './session';
  * comes from editor settings the Shell does not have: `system.conf` keeps
  * whatever the window's last start wrote.
  *
- * An external database is only checked, as the window checks it: GemDB starts
- * none of it. Errors are reported rather than thrown: the shell prompt (or the
+ * An external database is only checked, as the window checks it (waiting for
+ * a stone still starting): GemDB starts none of it. Errors are reported rather than thrown: the shell prompt (or the
  * exit code) is the caller's answer.
  */
+function reportStart(message: string): void {
+  process.stderr.write(`gemdb: ${message.charAt(0).toLowerCase()}${message.slice(1)}\r\n`);
+}
+
 async function ensureDatabase(): Promise<boolean> {
   try {
     const external = externalDatabase();
     if (external) {
-      const running = listProcesses();
-      if (!findStone(running) || !findNetldi(running)) throw externalDatabaseDownError(external);
+      await assertExternalDatabaseUp({ listener: true, report: reportStart });
     } else {
       await ensureProcesses({
         beforeStoneStart: assertSafeToStart,
-        report: (message) =>
-          process.stderr.write(`gemdb: ${message.charAt(0).toLowerCase()}${message.slice(1)}\r\n`),
+        report: reportStart,
       });
     }
     return true;

@@ -223,6 +223,13 @@ export const SHUTTING_DOWN_MESSAGE =
   'The database is shutting down. Start it again once it has stopped.';
 
 /**
+ * {@link SHUTTING_DOWN_MESSAGE} for an external database, which nobody here
+ * can start again: its administrator runs it.
+ */
+export const EXTERNAL_SHUTTING_DOWN_MESSAGE =
+  "The database is shutting down. This machine's administrator runs it; ask them to start it again once it has stopped.";
+
+/**
  * Wait for a listed stone to finish starting.
  *
  * Returns at once for a stone that is not starting. One this process did not
@@ -234,12 +241,16 @@ export const SHUTTING_DOWN_MESSAGE =
  * from `wait.listing` when the caller has one that recent, rather than asking
  * gslist twice in a row. Returns the last listing, so the caller need not
  * take another.
+ *
+ * For an external database the messages do not point at GemDB's own log, which
+ * has nothing of its stone, and say who to ask rather than to start it again.
  */
 export async function waitForStoneReady(
   report?: (message: string) => void,
   wait: { pollMs?: number; timeoutMs?: number; listing?: EngineProcess[] } = {},
 ): Promise<EngineProcess[]> {
-  const stoneLog = path.join(databaseLogPath(), `${STONE_NAME}.log`);
+  const external = externalDatabase() !== undefined;
+  const seeLog = external ? '' : ` See ${path.join(databaseLogPath(), `${STONE_NAME}.log`)}.`;
   const deadline = Date.now() + (wait.timeoutMs ?? STONE_LOCK_TIMEOUT_MS);
   let running = wait.listing ?? (await listProcessesAsync());
   let waiting = false;
@@ -249,9 +260,9 @@ export async function waitForStoneReady(
       case 'other':
         return running;
       case 'stopping':
-        throw new Error(SHUTTING_DOWN_MESSAGE);
+        throw new Error(external ? EXTERNAL_SHUTTING_DOWN_MESSAGE : SHUTTING_DOWN_MESSAGE);
       case 'absent':
-        throw new Error(`The database stopped while it was starting. See ${stoneLog}.`);
+        throw new Error(`The database stopped while it was starting.${seeLog}`);
       case 'starting':
         break;
     }
@@ -261,7 +272,7 @@ export async function waitForStoneReady(
       log('The database is still starting; waiting for it.');
     }
     if (Date.now() > deadline) {
-      throw new Error(`The database has been starting for over a minute. See ${stoneLog}.`);
+      throw new Error(`The database has been starting for over a minute.${seeLog}`);
     }
     await new Promise((resolve) => setTimeout(resolve, wait.pollMs ?? STONE_LOCK_POLL_MS));
     running = await listProcessesAsync();
@@ -301,6 +312,27 @@ export function externalDatabaseDownError(external: {
     `The database is not running: GemDB expects stone ${external.stone} and NetLDI ` +
       `${external.netldi}, which this machine's administrator runs. Ask them to start it.`,
   );
+}
+
+/**
+ * Check that an external database is up, waiting for a stone that is still
+ * starting. GemDB starts none of it, so a stone that is absent or shutting
+ * down is an error that says who to ask. NetLDI is required only when the
+ * caller will open sessions through it (`listener`), and means listed, as it
+ * does for GemDB's own database. The one check the window and the GemDB Shell
+ * share.
+ */
+export async function assertExternalDatabaseUp(opts: {
+  listener: boolean;
+  report?: (message: string) => void;
+}): Promise<void> {
+  const external = externalDatabase();
+  if (!external) return;
+  const listed = await listProcessesAsync();
+  // Absent is not "stopped while it was starting": nothing was starting.
+  if (!findStone(listed)) throw externalDatabaseDownError(external);
+  const running = await waitForStoneReady(opts.report, { listing: listed });
+  if (opts.listener && !findNetldi(running)) throw externalDatabaseDownError(external);
 }
 
 /**

@@ -45,7 +45,13 @@ vi.mock('../processes', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../processes')>();
   return {
     ExternalDatabaseError: actual.ExternalDatabaseError,
-    externalDatabaseDownError: actual.externalDatabaseDownError,
+    // The real check's verdict on the faked listing; its waiting is covered in startProcesses.test.ts.
+    assertExternalDatabaseUp: async (opts: { listener: boolean }) => {
+      const external = actual.externalDatabaseDownError;
+      if (!findStone() || (opts.listener && !findNetldi())) {
+        throw external({ stone: 'stone', netldi: 'netldi' });
+      }
+    },
     listProcesses: () => [],
     findStone: () => findStone(),
     findNetldi: () => findNetldi(),
