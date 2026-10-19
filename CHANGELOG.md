@@ -54,6 +54,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says it is waiting, and waits as long as the window does, instead of giving up after ten seconds.
   A run starts the database only, not the session listener it never uses. A mistyped file name or
   a `-c` with no code no longer starts the database before failing.
+- **`gemdb` says so when Python has not been installed into the database yet.** Run on a database
+  GemDB Code had not finished setting up, a file, `-c`, `-m` and the GemDB Shell printed compile
+  errors from the driver, or a refused login, and the GemDB Shell in a terminal could start a
+  database with no Python in it. They now stop with "Python support is not installed in this
+  database yet. Run "GemDB: Start GemDB" in VS Code and let it finish", before starting anything.
 
 ## [1.8.0] - 2026-10-18
 

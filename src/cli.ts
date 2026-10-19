@@ -11,8 +11,10 @@ import {
   rootPath,
   stoneName,
 } from './config';
+import { GRAIL_NOT_INSTALLED } from './grailMessages';
 import { log } from './log';
-import { cliStampPath, enginePath, grailPath } from './paths';
+import { shellQuote } from './osConfig';
+import { cliStampPath, enginePath, grailPath, grailStampPath } from './paths';
 import { sharedLibraryExtension } from './platform';
 
 /**
@@ -524,7 +526,24 @@ elif [ "$1" != "-m" ] && [ ! -e "$1" ]; then
   exit 2
 fi
 
-# The database must be up — a linked gem still needs the stone. Starting it
+${
+  external
+    ? ''
+    : // Its own database only: an external one has Python filed in by whoever
+      // runs it. The same test as grailInstalled() in paths.ts.
+      `# Python has to be in the database before anything is run against it. A
+# database Grail has not been filed into yet would only answer a run with
+# compile errors, or a login refused for want of an account. The stamp is
+# written when the file-in succeeds. Before the stone check, so it holds on
+# a running stone too.
+GRAIL_STAMP="${grailStampPath()}"
+if [ ! -f "$GRAIL_STAMP" ]; then
+  echo ${shellQuote(`gemdb: ${GRAIL_NOT_INSTALLED}`)} >&2
+  exit 1
+fi
+
+`
+}# The database must be up — a linked gem still needs the stone. Starting it
 # here is the same judgement the editor makes: running Python is the request.
 #
 # The wrapper only recognises the common case. A stone that answers is just

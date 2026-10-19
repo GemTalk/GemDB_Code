@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { __resetSettings, __setSetting } from '../__mocks__/vscode';
 import { cliPath, ensureCliCurrent, putCliOnPath, writeCliScripts } from '../cli';
 import { STONE_LOCK_NAME } from '../lock';
-import { cliStampPath, expectedEnginePath } from '../paths';
+import { GRAIL_NOT_INSTALLED } from '../grailMessages';
+import { cliStampPath, expectedEnginePath, grailStampPath } from '../paths';
 
 /**
  * The generator, not the command: what the files say and where they land.
@@ -428,9 +429,15 @@ describe('starting the database', () => {
     return file;
   }
 
+  function stampGrail(): void {
+    fs.mkdirSync(path.dirname(grailStampPath()), { recursive: true });
+    fs.writeFileSync(grailStampPath(), 'grail=test\n');
+  }
+
   beforeEach(() => {
     writeCliScripts(ext);
     installStubs();
+    stampGrail();
   });
 
   it('runs against a stone that answers without calling the shell program', async () => {
@@ -546,6 +553,63 @@ describe('starting the database', () => {
     expect(stderr).toContain('-c requires an argument');
     expect(readCalls('gslist')).toEqual([]);
     expect(readCalls('shell')).toEqual([]);
+  });
+
+  describe('in a database Python has not been filed into', () => {
+    beforeEach(() => {
+      fs.rmSync(grailStampPath());
+    });
+
+    // Exact, quotes and all: the message holds double quotes, and one pasted
+    // unescaped into the script would end its echo early.
+    const refusal = `gemdb: ${GRAIL_NOT_INSTALLED}\n`;
+
+    for (const mode of ['a file', '-c', '-m']) {
+      it(`refuses ${mode}, whatever the stone is doing, without calling anything`, async () => {
+        stoneIs('OK');
+        const args =
+          mode === 'a file'
+            ? [aProgram()]
+            : mode === '-c'
+              ? ['-c', 'print(1)']
+              : ['-m', 'json.tool'];
+
+        const { code, stderr } = await run(args);
+
+        expect(code).toBe(1);
+        expect(stderr).toBe(refusal);
+        expect(readCalls('gslist')).toEqual([]);
+        expect(readCalls('shell')).toEqual([]);
+        expect(readCalls('topaz')).toEqual([]);
+      });
+    }
+
+    it('still answers --version and --help', async () => {
+      const { code } = await run(['--version']);
+
+      expect(code).toBe(0);
+    });
+
+    it('still reports a bad argument as one, before the missing Python', async () => {
+      const { code, stderr } = await run([path.join(root, 'nothing-here.py')]);
+
+      expect(code).toBe(2);
+      expect(stderr).toContain("can't open file");
+    });
+
+    it('is not asked of an external database, whose Python someone else filed in', async () => {
+      __setSetting('gemdb.externalDatabase.gemstone', expectedEnginePath());
+      __setSetting('gemdb.externalDatabase.globalDirectory', root);
+      __setSetting('gemdb.externalDatabase.stone', 'gemdb');
+      writeCliScripts(ext);
+      installStubs();
+      stoneIs('OK');
+
+      const { code } = await run([aProgram()]);
+
+      expect(code).toBe(0);
+      expect(readCalls('topaz')).toHaveLength(1);
+    });
   });
 
   it('carries nothing of its own that starts a stone or takes the lock', () => {

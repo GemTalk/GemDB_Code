@@ -4,7 +4,9 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cliPath } from '../cli';
-import { bundledGrailStamp, stageGrail } from '../grail';
+import { bundledGrailStamp, recordGrailInstalled, stageGrail } from '../grail';
+import { GRAIL_NOT_INSTALLED } from '../grailMessages';
+import { grailStampPath } from '../paths';
 import { isListening, isRunning, stopStone } from '../processes';
 import {
   createDatabaseWithPython,
@@ -75,6 +77,9 @@ beforeAll(async () => {
 
   createDatabaseWithPython(fixture); // Python already filed in — see testExtentPath
   stageGrail(ext); // stages Grail and generates the CLI
+  // The extent already has Python; the stamp is what the wrapper checks, and
+  // staging deleted it with the rest of grail/.
+  recordGrailInstalled(ext);
   await startStoneAlone();
 
   fs.writeFileSync(path.join(workDir, 'hello.py'), 'print("hello from", 6 * 7)\n');
@@ -413,6 +418,41 @@ close
     expect(isRunning()).toBe(true);
     // A file run is a linked topaz: the listener is none of its business.
     expect(isListening()).toBe(false);
+  });
+});
+
+describe.skipIf(!ready || !canMakeFixture())('the gemdb command without Python', () => {
+  let aside: string;
+
+  beforeAll(() => {
+    aside = `${grailStampPath()}.aside`;
+    fs.renameSync(grailStampPath(), aside);
+  });
+
+  afterAll(() => {
+    fs.renameSync(aside, grailStampPath());
+  });
+
+  it.each([
+    ['a file', ['hello.py']],
+    ['-c', ['-c', 'print(1)']],
+    ['-m', ['-m', 'json.tool']],
+  ])('refuses %s, saying where Python comes from, on a running stone', async (_mode, args) => {
+    const ran = await gemdb(...args);
+
+    expect(ran.code).toBe(1);
+    expect(ran.stderr).toBe(`gemdb: ${GRAIL_NOT_INSTALLED}\n`);
+    expect(ran.stdout).toBe('');
+  });
+
+  it('refuses before starting a stone that is down', async () => {
+    await stopStone(false);
+
+    const ran = await gemdb('hello.py');
+
+    expect(ran.code).toBe(1);
+    expect(ran.stderr).toBe(`gemdb: ${GRAIL_NOT_INSTALLED}\n`);
+    expect(isRunning()).toBe(false);
   });
 });
 

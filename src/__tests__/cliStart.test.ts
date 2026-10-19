@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 let external: object | undefined;
+let grailInstalled = true;
 const ensureProcesses = vi.fn(async (_opts: unknown) => ({
   startedStone: true,
   startedNetldi: false,
@@ -14,6 +15,7 @@ const assertExternalDatabaseUp = vi.fn(async (_opts: unknown) => {});
 const assertSafeToStart = vi.fn();
 
 vi.mock('../config', () => ({ externalDatabase: () => external }));
+vi.mock('../paths', () => ({ grailInstalled: () => grailInstalled }));
 vi.mock('../database', () => ({ assertSafeToStart: () => assertSafeToStart() }));
 vi.mock('../processes', () => ({
   ensureProcesses: (opts: unknown) => ensureProcesses(opts),
@@ -21,9 +23,11 @@ vi.mock('../processes', () => ({
 }));
 
 const { bringUp } = await import('../cliStart');
+const { GRAIL_NOT_INSTALLED } = await import('../grailMessages');
 
 beforeEach(() => {
   external = undefined;
+  grailInstalled = true;
   ensureProcesses.mockClear();
   assertExternalDatabaseUp.mockClear();
   assertSafeToStart.mockClear();
@@ -84,5 +88,23 @@ describe('bringing the database up for the gemdb command', () => {
     await expect(bringUp({ listener: false, report: () => {} })).rejects.toThrow(
       'delete this directory',
     );
+  });
+
+  it('refuses an own database that has no Python in it, before starting anything', async () => {
+    grailInstalled = false;
+
+    await expect(bringUp({ listener: false, report: () => {} })).rejects.toThrow(
+      GRAIL_NOT_INSTALLED,
+    );
+    expect(ensureProcesses).not.toHaveBeenCalled();
+  });
+
+  it('does not ask an external database for Python', async () => {
+    external = { stone: 'gs64stone' };
+    grailInstalled = false;
+
+    await bringUp({ listener: true, report: () => {} });
+
+    expect(assertExternalDatabaseUp).toHaveBeenCalled();
   });
 });

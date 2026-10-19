@@ -3,7 +3,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cliPath } from '../cli';
-import { bundledGrailStamp, stageGrail } from '../grail';
+import { bundledGrailStamp, recordGrailInstalled, stageGrail } from '../grail';
+import { GRAIL_NOT_INSTALLED } from '../grailMessages';
+import { grailStampPath } from '../paths';
 import { isRunning, stopNetldi, stopStone } from '../processes';
 import { createDatabaseWithPython, Fixture, haveTestExtent, makeFixture } from './fixture';
 
@@ -83,6 +85,8 @@ beforeAll(() => {
   if (!fixture) return;
   createDatabaseWithPython(fixture); // Python already filed in — see testExtentPath
   stageGrail(ext); // stages Grail, the CLI, and the shell bundle
+  // The extent already has Python; staging deleted the stamp with grail/.
+  recordGrailInstalled(ext);
 });
 
 afterAll(async () => {
@@ -174,6 +178,20 @@ send "exit()\\r"
     expect(ran.transcript).not.toContain('gcits');
     expect(ran.code).toBe(0);
     expect(isRunning()).toBe(true); // the shell brought the stone up itself
+  });
+
+  it('refuses to open without Python in the database, even on a running stone', async () => {
+    const aside = `${grailStampPath()}.aside`;
+    fs.renameSync(grailStampPath(), aside);
+    try {
+      const ran = await driveShell('');
+
+      expect(ran.code).toBe(1);
+      expect(ran.transcript).toContain(`gemdb: ${GRAIL_NOT_INSTALLED}`);
+      expect(ran.transcript).not.toContain('>>> ');
+    } finally {
+      fs.renameSync(aside, grailStampPath());
+    }
   });
 });
 

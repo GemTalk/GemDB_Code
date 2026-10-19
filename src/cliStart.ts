@@ -1,5 +1,7 @@
 import { externalDatabase } from './config';
 import { assertSafeToStart } from './database';
+import { GRAIL_NOT_INSTALLED } from './grailMessages';
+import { grailInstalled } from './paths';
 import { assertExternalDatabaseUp, ensureProcesses } from './processes';
 
 /**
@@ -16,6 +18,11 @@ import { assertExternalDatabaseUp, ensureProcesses } from './processes';
  * NetLDI. The Shell does; a file run is a linked topaz and never does, so it
  * starts the stone alone.
  *
+ * Python must already be in an own database: a stone that is up with no Grail
+ * in it fails every run with errors that name neither cause nor cure, so this
+ * is refused first, running stone or not. That is `GRAIL_NOT_INSTALLED`, for a
+ * database nobody has filed Grail into yet.
+ *
  * External database: only checked, waiting for a stone that is still
  * starting, since GemDB starts none of it.
  *
@@ -30,6 +37,7 @@ export async function bringUp(opts: {
     await assertExternalDatabaseUp(opts);
     return;
   }
+  if (!grailInstalled()) throw new Error(GRAIL_NOT_INSTALLED);
   await ensureProcesses({
     beforeStoneStart: assertSafeToStart,
     report: opts.report,
