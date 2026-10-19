@@ -36,6 +36,7 @@ import { isMcpRunning, startMcpServer, stopMcpServer } from './mcp';
 import { registerBreakpointDebugger } from './debugger';
 import { registerVariableCommands } from './variableCommands';
 import { registerSavedObjects } from './savedObjects';
+import { registerInspector } from './inspector';
 import { onSavedStacksChanged } from './savedStacks';
 import { cloneBrainFreeze, initPendingReadme, showPromisedReadme } from './demo';
 import { confirmMcpEnabled, registerMcpProvider, registerWithClient } from './mcpRegistration';
@@ -126,6 +127,8 @@ export function activate(context: vscode.ExtensionContext): void {
   // changes, so it re-reads after every cell: a cell is where commits happen.
   const savedObjects = registerSavedObjects(context);
   savedObjectsView.refresh = () => savedObjects.refresh();
+  // The Inspector opens from a Variables row or a Persisted Objects row.
+  context.subscriptions.push(registerInspector(extensionPath, savedObjects));
   const notebooks = new GemDbNotebookController(extensionPath, () => savedObjects.refresh());
   context.subscriptions.push(notebooks);
 

@@ -409,6 +409,11 @@
         "category": "GemDB"
       },
       {
+        "command": "gemdb.inspectVariable",
+        "title": "Inspect",
+        "category": "GemDB"
+      },
+      {
         "command": "gemdb.saveVariable",
         "title": "Add to Persisted Objects…",
         "category": "GemDB"
@@ -476,6 +481,11 @@
       {
         "command": "gemdb.savedObjects.goToItem",
         "title": "Go to Item…",
+        "category": "GemDB"
+      },
+      {
+        "command": "gemdb.savedObjects.inspect",
+        "title": "Inspect",
         "category": "GemDB"
       },
       {
@@ -657,6 +667,14 @@
           "when": "false"
         },
         {
+          "command": "gemdb.savedObjects.inspect",
+          "when": "false"
+        },
+        {
+          "command": "gemdb.inspectVariable",
+          "when": "false"
+        },
+        {
           "command": "gemdb.savedObjects.revert",
           "when": "false"
         },
@@ -674,6 +692,11 @@
         }
       ],
       "debug/variables/context": [
+        {
+          "command": "gemdb.inspectVariable",
+          "when": "debugType == gemdb",
+          "group": "z_gemdb@0"
+        },
         {
           "command": "gemdb.showInDebugConsole",
           "when": "debugType == gemdb",
@@ -725,6 +748,11 @@
           "command": "gemdb.savedObjects.goToItem",
           "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /( gemdbContainer( gemdbChanged)?|^gemdbRange)$/",
           "group": "0_open@2"
+        },
+        {
+          "command": "gemdb.savedObjects.inspect",
+          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /^(gemdbSavedObject|gemdbSavedPending|gemdbPersistedField)( gemdbContainer)?( gemdbChanged)?$/",
+          "group": "0_open@3"
         },
         {
           "command": "gemdb.savedObjects.revert",
@@ -873,6 +901,7 @@
   "devDependencies": {
     "@eslint-community/eslint-plugin-eslint-comments": "^4.8.1",
     "@eslint/js": "^9.19.0",
+    "@types/jsdom": "^28.0.3",
     "@types/node": "^22.15",
     "@types/vscode": "^1.101.0",
     "@typescript/native": "npm:typescript@^7.0.2",
@@ -881,6 +910,7 @@
     "esbuild": "^0.28.1",
     "eslint": "^10.0.0",
     "globals": "^17.12.0",
+    "jsdom": "^29.1.1",
     "lefthook": "^2.1.12",
     "ovsx": "^0.10.5",
     "prettier": "^3.9.5",

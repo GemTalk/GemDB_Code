@@ -93,7 +93,7 @@ import {
  * row being opened cuts that row short rather than holding the session.
  */
 let extensionChain: Promise<unknown> = Promise.resolve();
-function extensionQuery(code: string, { budget = false } = {}): Promise<string> {
+export function extensionQuery(code: string, { budget = false } = {}): Promise<string> {
   const run = extensionChain.then(async () => {
     const timer = budget
       ? setInterval(() => interruptSessionFor(EXTENSION_OWNER.key), PAUSED_QUERY_BUDGET_MS)
@@ -582,7 +582,7 @@ export function chooseNotebook(
  * `PAUSED_QUERY_BUDGET_MS`, as a paused query always is, for a read that runs
  * the user's `__repr__`.
  */
-async function inNotebook(
+export async function inNotebook(
   ownerKey: string,
   code: string,
   { budget = false } = {},
@@ -1519,6 +1519,40 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
       row.kind === 'change'
       ? row.parent
       : undefined;
+  }
+
+  /**
+   * Where the Inspector finds a row's object: the session to read it in and its
+   * position in this view's registry. Undefined for a row with no object of its
+   * own (a group, a message, a saved stack) and for a row from before the view
+   * was last read, whose position may now hold something else.
+   */
+  inspectTarget(row: SavedRow): { readIn: ReadIn; handle: number; label: string } | undefined {
+    if (!this.isCurrent(row)) return undefined;
+    switch (row.kind) {
+      case 'entry':
+        return row.entry.ref && !row.entry.stack
+          ? {
+              readIn: { session: 'extension' },
+              handle: row.entry.ref,
+              label: accessCode(row.entry.key),
+            }
+          : undefined;
+      case 'pending':
+        return row.ref
+          ? {
+              readIn: { session: 'notebook', ownerKey: row.save.ownerKey },
+              handle: row.ref,
+              label: accessCode(row.save.key),
+            }
+          : undefined;
+      case 'field':
+        return row.field.handle
+          ? { readIn: row.readIn, handle: row.field.handle, label: row.field.name }
+          : undefined;
+      default:
+        return undefined;
+    }
   }
 
   /** Whether a row belongs to the rows shown now, so its registry position still holds. */

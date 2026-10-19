@@ -499,6 +499,21 @@ database, select that kernel from the kernel picker at the top right.
   discard what is pending.
   **Debug Python File in GemDB** does the same for a `.py` file (see above). In the GemDB Shell
   and in **Run Python File in GemDB**, `breakpoint()` prints where it was and the code carries on.
+- **Inspect**, on a Variables row or a Persisted Objects row, opens the object in an Inspector
+  beside the editor: a strip of columns, one object each, with tabs for what it has — its
+  **Attributes** (grouped as in Variables, the groups opening in place), its **Items** or
+  **Entries** a page of 100 at a time with a box to jump to a position or a key, its whole
+  **Repr** (and its `str()` when that differs), its **Class** (methods by the class that defines
+  them, with their source, the MRO and the docstring) — and an **Evaluate** tab that runs Python
+  with `self` bound to it (Shift+Enter to display the answer; Ctrl+K I opens it in a new column).
+  Double-click a row to open its object in a new column; Enter opens it in place, and ‹ › go back
+  and forward. Each column's header shows the Python that reaches it (`p.tags['origin']`, which
+  **Copy as Expression** copies), the object's OOP, and whether it is committed. The Inspector
+  outlives the pause: it reads its object in the session that holds it, so it keeps working after
+  the cell resumes and between cells, and says so when the notebook is busy running one (↻ reads
+  it again). **Edit Value…** changes a row, joining the notebook's transaction as **Set Value**
+  does, and ↺ puts back what the row held before; an object opened from Persisted Objects'
+  committed entries is read-only there.
 - Each notebook has its own session and its own transaction, so a commit in one notebook never
   commits another notebook's half-finished changes. Closing a notebook ends its session and discards
   anything it has not committed.

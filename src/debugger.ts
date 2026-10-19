@@ -1621,19 +1621,21 @@ function handleKey(containerRef: number, name: string): string {
 
 /**
  * Where a console traceback's frame is, for `jupyterTraceback`: the first
- * frame is the console's own input; a `<grail>` frame is in the notebook cell
- * holding its line (`locateCell`, the call stack's own match); anything else
- * is a file, read from disk.
+ * frame is the console's own input, called `input` (the Inspector's Evaluate
+ * tab passes `Inspector`); a `<grail>` frame is in the notebook cell holding
+ * its line (`locateCell`, the call stack's own match); anything else is a
+ * file, read from disk.
  */
-function placeFrame(
+export function placeFrame(
   ownerKey: string,
   source: string,
+  input = 'Debug Console',
 ): (frame: TracebackFrame, index: number) => PlacedFrame {
   const { running, cells } = notebookCells(ownerKey);
   return (frame, index) => {
     if (frame.file === '<grail>') {
       if (index === 0 && frame.name === '<module>') {
-        return { label: 'Debug Console', isFile: false, lines: source.split(/\r?\n/) };
+        return { label: input, isFile: false, lines: source.split(/\r?\n/) };
       }
       const uri = locateCell(
         { ...frame, column: 0, endLine: frame.line, endColumn: 0, lineText: frame.text },
@@ -1646,7 +1648,7 @@ function placeFrame(
         : { label: 'Cell', isFile: false };
     }
     if (frame.file === '<string>' || frame.file === '') {
-      return { label: 'Debug Console', isFile: false, lines: source.split(/\r?\n/) };
+      return { label: input, isFile: false, lines: source.split(/\r?\n/) };
     }
     return { label: `File ${frame.file}`, isFile: true, lines: readFileLines(frame.file) };
   };

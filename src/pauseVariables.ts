@@ -116,7 +116,7 @@ export type ChildKind = 'seq' | 'coll' | 'dict' | 'obj' | 'ivars';
  * answers `keysAndValuesDo:`, with 1-based integer keys, and a Python list
  * must read as `[0]`, `[1]`, … (measured: a list came out as entries 1, 2, 3).
  */
-const CHILDREN_OF = `
+export const CHILDREN_OF = `
   childrenOf := [:v | | d ds slots names |
     (isLeaf value: v)
       ifTrue: [nil]
@@ -162,7 +162,7 @@ const CHILDREN_OF = `
  * `childrenOf`) because a String is a SequenceableCollection, and a Python str
  * should read as text, not as a list of characters.
  */
-const DESCRIBE = `
+export const DESCRIBE = `
   describe := [:nm :v | | kids n text tname idx named container |
    v == tooLong
     ifTrue: [
@@ -233,7 +233,7 @@ const DESCRIBE = `
  * whose getter ran past the budget, or was skipped after one did; `describe`
  * writes it as such.
  */
-const HELPERS = `
+export const HELPERS = `
   late := false.
   ro := false.
   isDunder := [:nm |
@@ -295,7 +295,7 @@ const HELPERS = `
  * stops the query past every handler; `queryWhilePaused` then clears its
  * stack, which is what runs the `ensure:` (measured).
  */
-function withQuietConsole(body: string): string {
+export function withQuietConsole(body: string): string {
   return `saved := SessionTemps current at: #'GrailConsole' otherwise: nil.
 SessionTemps current at: #'GrailConsole' put: (Array with: (WriteStream on: Unicode7 new)).
 [${body}] ensure: [
@@ -309,9 +309,9 @@ SessionTemps current at: #'GrailConsole' put: (Array with: (WriteStream on: Unic
  * (`reg out field record none describe childrenOf reprOf late clean
  * isLeaf`), for a query that writes rows without listing children.
  */
-const ROW_TEMPS = 'ro isDunder typeNameOf broke classCounts classData isMethodType tooLong';
+export const ROW_TEMPS = 'ro isDunder typeNameOf broke classCounts classData isMethodType tooLong';
 
-const PREAMBLE = `field := Character codePoint: 31.
+export const PREAMBLE = `field := Character codePoint: 31.
 record := Character codePoint: 30.
 none := System myUserProfile symbolList objectNamed: #'None'.
 out := WriteStream on: Unicode7 new.`;
@@ -717,6 +717,11 @@ export function parseChildren(raw: string): PauseVariable[] {
  *
  * A row inside a group (`class variables` and the rest) changes in the scope
  * or object the group was made from.
+ *
+ * `registry` is the pause's by default; the Inspector passes its own
+ * (`INSPECTOR_REGISTRY`). With `valueHandle`, the new value is that registry
+ * entry rather than `source` evaluated — how the Inspector puts back the value
+ * a row held before it was edited, which it keeps registered for exactly that.
  */
 export function setVariableQuery(
   processOop: bigint,
@@ -724,13 +729,15 @@ export function setVariableQuery(
   name: string,
   source: string,
   globalsRef = 0,
+  registry: string = REGISTRY,
+  valueHandle = 0,
 ): string {
   const nm = `'${escapeString(name)}'`;
   return `| reg c g owner isScope v failed problem dispatcher evalScope kind key found py s kids out field record none saved describe childrenOf start count last isDunder nameOf reprOf late clean isLeaf ro typeNameOf roIn groupOf emitGrouped withGroups moduleClass broke classCounts classData isMethodType tooLong |
 ${PREAMBLE}
 start := 0.
 count := 0.
-reg := SessionTemps current at: #'${REGISTRY}' otherwise: nil.
+reg := SessionTemps current at: #'${registry}' otherwise: nil.
 c := (reg notNil and: [${ref} between: 1 and: reg size]) ifTrue: [reg at: ${ref}] ifFalse: [nil].
 c isNil ifTrue: [^ 'Error: that value is no longer available' encodeAsUTF8].
 ${HELPERS}
@@ -755,10 +762,16 @@ ${withQuietConsole(`
     "A row's own scope goes on top: a frame's local shadows a global of its name."
     isScope ifTrue: [(owner at: 2) keysAndValuesDo: [:k :x | evalScope at: k asString asSymbol put: x]].
     failed := false.
-    v := [dispatcher evaluateSource: '${escapeString(`(\n${source}\n)`)}' usingModuleScope: evalScope]
+    v := ${
+      valueHandle > 0
+        ? `(${valueHandle} between: 1 and: reg size)
+      ifTrue: [reg at: ${valueHandle}]
+      ifFalse: [failed := true. 'the value to put back is no longer available']`
+        : `[dispatcher evaluateSource: '${escapeString(`(\n${source}\n)`)}' usingModuleScope: evalScope]
       on: AbstractException do: [:e |
         failed := true.
-        e return: e class name , ' - ' , e messageText asString].
+        e return: e class name , ' - ' , e messageText asString]`
+    }.
     failed ifTrue: [problem := v]].
   (problem isNil and: [isScope]) ifTrue: [| dict |
     dict := owner at: 2.
@@ -2058,7 +2071,18 @@ kind == #value ifTrue: [
     saved isNil
       ifTrue: [SessionTemps current removeKey: #'GrailConsole' ifAbsent: []]
       ifFalse: [SessionTemps current at: #'GrailConsole' put: saved]]].
-kind == #stack ifTrue: [
+${REPLY_ERROR}
+out contents encodeAsUTF8`;
+}
+
+/**
+ * Smalltalk that writes the error records of `consoleQuery`'s answer, when
+ * `kind` is `#stack` or `#error` (with the exception in `exc`): the type and
+ * message, where a SyntaxError could not read, and then the traceback's frames,
+ * as `parseConsoleReply` reads them. The Inspector's Evaluate tab answers in
+ * the same format (`inspectorEvaluateQuery`).
+ */
+export const REPLY_ERROR = `kind == #stack ifTrue: [
   out nextPutAll: 'RecursionError'; nextPut: field; nextPutAll: 'maximum recursion depth exceeded'; nextPut: record].
 kind == #error ifTrue: [| payload frames tname msg attr sx |
   attr := [:o :name | [o @env1:___pyAttrLoad___: name] on: AbstractException do: [:e | e return: nil]].
@@ -2083,9 +2107,7 @@ kind == #error ifTrue: [| payload frames tname msg attr sx |
     out nextPutAll: (clean value: ((f at: 1) ifNil: ['<grail>']) asString); nextPut: field;
       print: ((f at: 2) isNumber ifTrue: [f at: 2] ifFalse: [0]); nextPut: field;
       nextPutAll: (clean value: ((f at: 3) ifNil: ['?']) asString); nextPut: field;
-      nextPutAll: (clean value: ((f at: 4) isString ifTrue: [f at: 4] ifFalse: [''])); nextPut: record]].
-out contents encodeAsUTF8`;
-}
+      nextPutAll: (clean value: ((f at: 4) isString ifTrue: [f at: 4] ifFalse: [''])); nextPut: record]].`;
 
 /**
  * Smalltalk that puts in `into` the object of registry entry `handle`, the

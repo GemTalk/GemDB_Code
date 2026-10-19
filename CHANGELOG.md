@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **An Inspector for any object.** Right-click a Variables row, or a Persisted Objects row, and
+  choose **Inspect**: the object opens beside the editor in a strip of columns, each with tabs for
+  what the object has — its attributes (grouped as in Variables), its items or entries a page at a
+  time with a jump to a position or a key, its whole repr, its class (methods with their source,
+  the MRO, the docstring) — and an Evaluate tab that runs Python with `self` bound to it.
+  Double-click a row to open it in a new column, Enter to open it in place, with back and forward.
+  A column's header shows the Python expression that reaches it, its OOP and whether it is
+  committed. It keeps working after the pause resumes and between cells, and **Edit Value…**
+  changes a row (and ↺ puts it back) in the notebook's transaction. It is Jasper's Inspector,
+  brought over for Python.
+
 ## [1.8.0] - 2026-10-18
 
 The database engine moves to GemStone 4.0.0.a5, and the bundled Python runtime moves forward. Start

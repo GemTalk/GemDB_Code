@@ -1,0 +1,329 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  color: var(--vscode-editor-foreground);
+  background: var(--vscode-editor-background);
+  height: 100vh;
+  overflow: hidden;
+}
+/* ── Column strip (miller columns) ─────────── */
+#columnStrip {
+  display: flex;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  /* Gutters between columns: the strip's divider-colored background shows
+     through the flex gap, so each column reads as a separate pane. */
+  gap: 6px;
+  background: var(--vscode-editorGroup-border, var(--vscode-contrastBorder, var(--vscode-panel-border)));
+}
+.column {
+  flex: 1 1 auto;
+  min-width: 280px;
+  height: 100%;
+  position: relative;
+  background: var(--vscode-editor-background);
+  display: flex;
+}
+.col-inner { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; }
+.column.focused .header { background: var(--vscode-list-inactiveSelectionBackground); }
+.col-resize-edge { position: absolute; top: 0; right: -2px; bottom: 0; width: 5px; cursor: col-resize; z-index: 5; }
+.col-resize-edge:hover, .col-resize-edge.active { background: var(--vscode-focusBorder, #007fd4); opacity: 0.7; }
+/* ── Header ──────────────────────────────── */
+.header {
+  display: flex; align-items: center; gap: 5px; padding: 3px 8px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  flex-shrink: 0; min-height: 26px; overflow: hidden;
+}
+.nav-btn {
+  cursor: pointer; user-select: none; flex-shrink: 0;
+  opacity: 0.75; padding: 0 3px; line-height: 1; font-size: 1.05em;
+  background: none; border: none; color: inherit; font-family: inherit;
+}
+.nav-btn:hover:not(:disabled) { opacity: 1; color: var(--vscode-textLink-foreground); }
+.nav-btn:disabled { opacity: 0.25; cursor: default; }
+.obj-class { font-weight: 600; white-space: nowrap; flex-shrink: 0; }
+.obj-sep { color: var(--vscode-descriptionForeground); flex-shrink: 0; }
+.obj-label {
+  color: var(--vscode-descriptionForeground); font-size: 0.88em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.header-oop {
+  margin-left: auto; font-size: 0.78em; color: var(--vscode-descriptionForeground);
+  white-space: nowrap; flex-shrink: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; user-select: text;
+}
+.col-close {
+  cursor: pointer; flex-shrink: 0; opacity: 0.5; font-size: 1.1em;
+  line-height: 1; padding: 0 2px; user-select: none;
+}
+.col-close:hover { opacity: 1; color: var(--vscode-errorForeground); }
+/* ── Tab bar ─────────────────────────────── */
+.tab-bar {
+  display: flex; border-bottom: 1px solid var(--vscode-panel-border);
+  flex-shrink: 0; overflow-x: auto; scrollbar-width: thin;
+}
+.tab {
+  padding: 3px 14px; cursor: pointer; font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+  border-bottom: 2px solid transparent; user-select: none;
+  margin-bottom: -1px; white-space: nowrap;
+}
+.tab:hover { color: var(--vscode-foreground); }
+.tab.active {
+  color: var(--vscode-foreground);
+  border-bottom-color: var(--vscode-focusBorder, var(--vscode-button-background));
+}
+/* ── Content pane ────────────────────────── */
+.content-pane { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+.placeholder { padding: 12px 10px; color: var(--vscode-descriptionForeground); font-style: italic; }
+.detail-value {
+  font-family: var(--vscode-editor-font-family); font-size: var(--vscode-editor-font-size);
+  white-space: pre-wrap; word-break: break-word; overflow: auto;
+  flex: 1; min-height: 0; padding: 8px 10px; user-select: text;
+}
+/* ── Tables ──────────────────────────────── */
+.table-wrap { overflow: auto; flex: 1; }
+table.rows { border-collapse: collapse; width: 100%; }
+table.rows th {
+  position: sticky; top: 0; z-index: 1; background: var(--vscode-editor-background);
+  text-align: left; padding: 2px 6px; border-bottom: 1px solid var(--vscode-panel-border);
+  font-weight: 600; white-space: nowrap; user-select: none;
+}
+table.rows td {
+  padding: 2px 6px; border-bottom: 1px solid var(--vscode-list-hoverBackground);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 0;
+}
+table.rows tr:hover td { background: var(--vscode-list-hoverBackground); }
+table.rows tr.selected td { background: var(--vscode-list-inactiveSelectionBackground); }
+.cell-label { font-family: var(--vscode-editor-font-family); width: 30%; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--vscode-textLink-foreground); }
+.sort-mark { margin-left: 4px; font-size: 0.85em; color: var(--vscode-descriptionForeground); }
+.cell-class { color: var(--vscode-descriptionForeground); width: 22%; }
+.cell-edited { color: var(--vscode-gitDecoration-modifiedResourceForeground, var(--vscode-charts-yellow)); }
+.revert-btn {
+  background: none; border: none; cursor: pointer; color: inherit;
+  opacity: 0.7; padding: 0 3px; font-size: 0.95em;
+}
+.revert-btn:hover { opacity: 1; color: var(--vscode-textLink-foreground); }
+.load-more-row td { padding: 4px 8px; color: var(--vscode-textLink-foreground); cursor: pointer; font-style: italic; }
+.load-more-row:hover td { text-decoration: underline; }
+.row-editor {
+  width: 100%; font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size);
+  background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-focusBorder); padding: 1px 3px;
+}
+.edit-error { color: var(--vscode-errorForeground); font-size: 0.85em; padding: 3px 8px; }
+/* ── Bytes ───────────────────────────────── */
+/* The dump is column-aligned by spaces, so they have to survive. */
+.bytes {
+  font-family: var(--vscode-editor-font-family); font-size: var(--vscode-editor-font-size);
+  padding: 8px 10px; overflow: auto; flex: 1; user-select: text; white-space: pre;
+}
+.bytes-head {
+  color: var(--vscode-descriptionForeground); border-bottom: 1px solid var(--vscode-panel-border);
+  margin-bottom: 3px; padding-bottom: 2px; position: sticky; top: 0;
+  background: var(--vscode-editor-background);
+}
+.bytes .off { color: var(--vscode-descriptionForeground); }
+.bytes .txt { color: var(--vscode-textLink-foreground); }
+/* ── Meta ────────────────────────────────── */
+/* Laid out like the Enhanced Inspector's Meta tab: a class heading, an info
+   bar of one-line facts, then sub-tabs over a single scrolling pane. Only
+   .meta-sub-content scrolls, so the heading and sub-tab bar stay put. */
+.meta { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.meta-head { padding: 8px 12px 4px; flex-shrink: 0; }
+.meta-head-label {
+  font-size: 0.75em; color: var(--vscode-descriptionForeground); margin-bottom: 2px;
+}
+.meta-class-name {
+  font-family: var(--vscode-editor-font-family); font-size: 1.15em;
+  font-weight: 600; word-break: break-all;
+}
+.meta-info-bar {
+  padding: 2px 12px 6px; flex-shrink: 0; font-size: 0.82em;
+  color: var(--vscode-descriptionForeground);
+  border-bottom: 1px solid var(--vscode-panel-border);
+  display: flex; gap: 12px; flex-wrap: wrap; user-select: text;
+}
+.meta-info-bar strong { color: var(--vscode-foreground); font-weight: 600; }
+.meta-sub-bar {
+  display: flex; flex-shrink: 0; overflow-x: auto; scrollbar-width: thin;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+.meta-sub-content { flex: 1; min-height: 0; overflow: auto; padding: 6px 10px; }
+.meta-pre {
+  font-family: var(--vscode-editor-font-family); font-size: var(--vscode-editor-font-size);
+  white-space: pre-wrap; word-break: break-word; user-select: text; margin: 0;
+}
+.meta-comment { font-family: var(--vscode-font-family); line-height: 1.5; }
+/* A selector list is a list of clickable rows, not a paragraph of words:
+   each one gets a rule under it and a disclosure caret, so where one ends
+   and the next begins is not something the eye has to work out. */
+.method-list { border-top: 1px solid var(--vscode-panel-border); }
+.method-item {
+  padding: 3px 6px 3px 4px; cursor: pointer; user-select: none;
+  font-family: var(--vscode-editor-font-family);
+  border-bottom: 1px solid var(--vscode-panel-border);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.method-item::before {
+  content: '\25B8'; display: inline-block; width: 12px;
+  color: var(--vscode-descriptionForeground); font-size: 0.85em;
+}
+.method-item.open::before { content: '\25BE'; }
+.method-item:hover { background: var(--vscode-list-hoverBackground); color: var(--vscode-textLink-foreground); }
+.method-item.open { background: var(--vscode-list-inactiveSelectionBackground); }
+.method-source-box {
+  margin: 4px 0 6px 14px; padding: 6px 8px;
+  background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-panel-border); border-radius: 3px;
+  font-family: var(--vscode-editor-font-family); font-size: var(--vscode-editor-font-size);
+  white-space: pre-wrap; user-select: text;
+}
+/* ── Evaluate pane ───────────────────────── */
+.eval { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 8px 10px; gap: 6px; }
+.eval textarea {
+  font-family: var(--vscode-editor-font-family); font-size: var(--vscode-editor-font-size);
+  background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  padding: 4px 6px; resize: vertical; min-height: 60px;
+}
+.eval-body { display: flex; flex: 1; min-height: 0; gap: 8px; }
+.eval-editor { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 6px; }
+/* The clear button sits inside the expression box's top-right corner and is
+   revealed only when there is text — matching the debugger's eval bar. */
+.eval-input-wrap { position: relative; display: flex; flex-shrink: 0; }
+/* Sole flex item of the wrap, so it has to be told to fill it — a bare
+   textarea would otherwise fall back to its default column width. */
+.eval-input-wrap textarea { flex: 1; min-width: 0; padding-right: 1.6rem; }
+.clear-btn {
+  position: absolute; right: 6px; top: 6px;
+  visibility: hidden; background: none; border: none; padding: 0 2px;
+  cursor: pointer; line-height: 1; font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+.clear-btn:hover { color: var(--vscode-foreground); }
+.eval-input-wrap.has-text .clear-btn { visibility: visible; }
+/* The names list fills what was dead space to the right of the expression.
+   Sized in ch so it holds a realistic identifier without crowding the
+   editor, and it gives way first when the column is narrow. */
+.eval-vars {
+  width: 26ch; min-width: 14ch; flex-shrink: 1; display: flex; flex-direction: column;
+  border-left: 1px solid var(--vscode-panel-border); padding-left: 8px; min-height: 0;
+}
+.eval-vars-list { overflow: auto; flex: 1; min-height: 0; }
+/* The declaring class of the names under it — an inherited instance
+   variable is as much in scope here as one the class declares itself, and
+   this is what says so. */
+.eval-var-owner {
+  font-size: 0.75em; color: var(--vscode-descriptionForeground);
+  border-bottom: 1px solid var(--vscode-panel-border);
+  padding: 4px 3px 1px; margin-bottom: 2px; position: sticky; top: 0;
+  background: var(--vscode-editor-background);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.eval-var-owner:first-child { padding-top: 0; }
+.eval-var {
+  display: flex; align-items: baseline; gap: 6px; cursor: pointer;
+  padding: 1px 3px; border-radius: 2px;
+  font-family: var(--vscode-editor-font-family); font-size: var(--vscode-editor-font-size);
+}
+.eval-var:hover { background: var(--vscode-list-hoverBackground); }
+.eval-var-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.eval-var-class {
+  margin-left: auto; font-size: 0.85em; color: var(--vscode-descriptionForeground);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 1;
+}
+.eval-var-copy {
+  background: none; border: none; cursor: pointer; color: inherit;
+  opacity: 0; padding: 0 2px; font-size: 0.85em; flex-shrink: 0;
+}
+.eval-var:hover .eval-var-copy { opacity: 0.7; }
+.eval-var-copy:hover { opacity: 1; }
+.eval-hint { font-size: 0.8em; color: var(--vscode-descriptionForeground); }
+.eval-hint.armed { color: var(--vscode-textLink-foreground); }
+/* A transient answer that is not a result -- "there is nothing to recall". Tinted so it reads as
+   a reply to the keystroke rather than as the chord hint having changed wording. */
+.eval-hint.flash { color: var(--vscode-foreground); font-style: italic; }
+.eval-out {
+  flex: 1; min-height: 0; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  font-family: var(--vscode-editor-font-family); font-size: var(--vscode-editor-font-size);
+  user-select: text; padding: 4px 6px;
+  background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-panel-border); border-radius: 3px;
+}
+.eval-out.error { color: var(--vscode-errorForeground); }
+/* ── Shared bits ─────────────────────────── */
+.toolbar { display: flex; align-items: center; gap: 6px; padding: 3px 6px; flex-shrink: 0; border-bottom: 1px solid var(--vscode-panel-border); }
+.toolbar-gap { flex: 1; }
+.btn {
+  background: var(--vscode-button-secondaryBackground, transparent);
+  border: 1px solid var(--vscode-panel-border); border-radius: 3px;
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  cursor: pointer; padding: 1px 8px; font-size: 0.8em; font-family: var(--vscode-font-family);
+}
+.btn:hover { background: var(--vscode-list-hoverBackground); }
+.btn.active { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: var(--vscode-button-background); }
+.toolbar-label { font-size: 0.8em; color: var(--vscode-descriptionForeground); }
+.load-note {
+  font-size: 0.8em; color: var(--vscode-descriptionForeground);
+  padding: 3px 8px; border-bottom: 1px solid var(--vscode-panel-border);
+}
+.load-note code { font-family: var(--vscode-editor-font-family); font-size: 0.95em; }
+.setting-link { color: var(--vscode-textLink-foreground); text-decoration: none; cursor: pointer; }
+.setting-link:hover { color: var(--vscode-textLink-activeForeground); text-decoration: underline; }
+.setting-link:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+.setting-link code { color: inherit; }
+.ctx-menu {
+  position: fixed; display: none;
+  background: var(--vscode-menu-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-panel-border); border-radius: 3px;
+  padding: 2px 0; z-index: 1000; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+.ctx-item { padding: 4px 16px; cursor: pointer; white-space: nowrap; color: var(--vscode-menu-foreground, var(--vscode-foreground)); font-size: 0.9em; }
+.ctx-item:hover { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+.ctx-sep { height: 1px; margin: 3px 0; background: var(--vscode-panel-border); }
+/* ── GemDB's additions ───────────────────── */
+/* Where the object lives, beside its OOP: committed objects outlive every session. */
+.header-badge {
+  font-size: 0.75em; padding: 0 5px; border-radius: 3px; flex-shrink: 0;
+  border: 1px solid var(--vscode-panel-border); color: var(--vscode-descriptionForeground);
+}
+.header-badge.committed { color: var(--vscode-gitDecoration-addedResourceForeground, var(--vscode-charts-green)); }
+/* A group of attributes (special variables, class variables, …): a heading that opens in place. */
+tr.group-row td { cursor: pointer; color: var(--vscode-descriptionForeground); font-style: italic; }
+tr.group-row td.cell-label::before { content: '\25B8'; display: inline-block; width: 12px; font-style: normal; }
+tr.group-row.open td.cell-label::before { content: '\25BE'; }
+tr.in-group td.cell-label { padding-left: 20px; }
+tr.note-row td { color: var(--vscode-descriptionForeground); font-style: italic; }
+/* Paging: one page at a time, with a typed jump, rather than a list that grows. */
+.pager { display: flex; align-items: center; gap: 6px; }
+.goto-input {
+  width: 9em; font-family: var(--vscode-editor-font-family); font-size: 0.85em;
+  background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); padding: 1px 4px;
+}
+.goto-error { color: var(--vscode-errorForeground); font-size: 0.8em; }
+tr.found td { background: var(--vscode-editor-findMatchHighlightBackground, var(--vscode-list-inactiveSelectionBackground)); }
+.column-error {
+  color: var(--vscode-errorForeground); padding: 8px 10px; white-space: pre-wrap;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+.root-error { padding: 16px; color: var(--vscode-errorForeground); white-space: pre-wrap; }
+.class-member-kind { color: var(--vscode-descriptionForeground); font-size: 0.85em; margin-left: 6px; }
+.class-owner {
+  font-size: 0.75em; color: var(--vscode-descriptionForeground);
+  border-bottom: 1px solid var(--vscode-panel-border); padding: 6px 3px 1px;
+}
+.repr-label { font-size: 0.75em; color: var(--vscode-descriptionForeground); padding: 6px 10px 0; }
+.repr-note { font-size: 0.8em; color: var(--vscode-descriptionForeground); padding: 4px 10px; }
+/* Which Smalltalk class implements a built-in method: a note about the code, not part of it. */
+.source-caption {
+  font-family: var(--vscode-font-family); font-size: 0.75em; white-space: normal;
+  color: var(--vscode-descriptionForeground); margin-bottom: 4px; user-select: none;
+}
