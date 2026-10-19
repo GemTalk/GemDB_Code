@@ -44,6 +44,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gemdb app.py`, or of **Run Python File in GemDB**, stop the program as Ctrl+C would. On Linux it
   usually did not: the program carried on out of sight, its `finally` blocks unrun, holding its
   database session. macOS was not affected.
+- **The window and the GemDB Shell wait for an external database that is still starting.** They
+  used to report one at `Startup` as up, and the first login then failed. A stone that is shutting
+  down is now said to be run by the machine's administrator, who is the one to start it again.
+- **`gemdb file.py`, `-c` and `-m` start the database the way the window and the GemDB Shell do.**
+  A database left by an older engine is now refused with the sentence that says what to delete,
+  instead of a raw 4045 at the first login, and a lack of room or an NFS root path is refused
+  too. A `gemdb` run that finds the database being started by another process now
+  says it is waiting, and waits as long as the window does, instead of giving up after ten seconds.
+  A run starts the database only, not the session listener it never uses. A mistyped file name or
+  a `-c` with no code no longer starts the database before failing.
 
 ## [1.8.0] - 2026-10-18
 

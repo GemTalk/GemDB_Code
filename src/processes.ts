@@ -339,9 +339,10 @@ export async function assertExternalDatabaseUp(opts: {
  * Bring up whichever of the stone and the session listener is not already
  * up, and say which of them this call started.
  *
- * Every start of GemDB's own database goes through here — the window's and
- * the GemDB Shell's (the listener a declined force-stop puts back goes through
- * {@link ensureListener}) — and all of it happens under the stone lock the `gemdb` wrapper also takes. Checking
+ * Every start of GemDB's own database goes through here — the window's, the
+ * GemDB Shell's and the `gemdb` wrapper's (the listener a declined force-stop
+ * puts back goes through {@link ensureListener}) — and all of it happens under
+ * the stone lock, which wrappers older than this one also take in bash. Checking
  * and starting have to be one step: checked outside the lock, two callers
  * that both found the listener missing both ran `startnetldi`, and the loser
  * reported a failure over a database that was up. So the look happens inside
@@ -353,19 +354,36 @@ export async function assertExternalDatabaseUp(opts: {
  * the guards that refuse a stone that should not start belong there, not on
  * every call. `report` hears each step as it begins, for a progress
  * notification or a terminal.
+ *
+ * `listener: false` is for a caller that never opens a session through
+ * NetLDI, as the wrapper's file mode (a linked topaz) never does: the stone
+ * is all it needs, so a missing listener neither takes the lock nor is
+ * started. Starting it there would only add a failure mode, and hand the
+ * caller's environment to every session NetLDI forks later.
+ *
+ * `skipQuickCheck` is for a caller that has just looked and found the stone
+ * not answering, as the wrapper has before it runs `--ensure-stone`: the
+ * lock-free listing that would find everything up is skipped, and the first
+ * look is the one inside the lock.
  */
 export async function ensureProcesses(
-  opts: { beforeStoneStart?: () => void; report?: (message: string) => void } = {},
+  opts: {
+    beforeStoneStart?: () => void;
+    report?: (message: string) => void;
+    listener?: boolean;
+    skipQuickCheck?: boolean;
+  } = {},
 ): Promise<{ startedStone: boolean; startedNetldi: boolean }> {
+  const wantListener = opts.listener ?? true;
   requireOwnDatabase('start');
   // Every notebook cell lands here, and nearly always both are up: one
   // listing and no lock then. Never for a stone starting or stopping, which
   // the lock and the wait below are for.
-  const before = await listProcessesAsync();
+  const before = opts.skipQuickCheck ? [] : await listProcessesAsync();
   const stoneUp = ['ready', 'other'].includes(stoneState(before));
-  if (stoneUp && findNetldi(before)) {
+  if (stoneUp && (!wantListener || findNetldi(before))) {
     log('The database is already running.');
-    log('The session listener is already running.');
+    if (wantListener) log('The session listener is already running.');
     return { startedStone: false, startedNetldi: false };
   }
   let seen = before;
@@ -396,7 +414,9 @@ export async function ensureProcesses(
       });
 
       let startedNetldi = false;
-      if (!findNetldi(running)) {
+      if (!wantListener) {
+        // Nothing here opens a session through it.
+      } else if (!findNetldi(running)) {
         opts.report?.('Starting the session listener…');
         startedNetldi = await startNetldi();
       } else {
@@ -407,8 +427,9 @@ export async function ensureProcesses(
     {
       satisfied: async () => {
         seen = await listProcessesAsync();
-        return stoneReady(seen) && listenerReady(seen);
+        return stoneReady(seen) && (!wantListener || listenerReady(seen));
       },
+      report: opts.report,
       // A stone listed and not going down means whoever holds the lock is past
       // startstone: waiting on it, or starting the listener beside it.
       progressing: () => ['starting', 'ready', 'other'].includes(stoneState(seen)),

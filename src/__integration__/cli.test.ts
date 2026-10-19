@@ -5,7 +5,7 @@ import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cliPath } from '../cli';
 import { bundledGrailStamp, stageGrail } from '../grail';
-import { isRunning, stopStone } from '../processes';
+import { isListening, isRunning, stopStone } from '../processes';
 import {
   createDatabaseWithPython,
   Fixture,
@@ -411,6 +411,8 @@ close
     expect(ran.stdout).toContain('back');
     expect(ran.code).toBe(0);
     expect(isRunning()).toBe(true);
+    // A file run is a linked topaz: the listener is none of its business.
+    expect(isListening()).toBe(false);
   });
 });
 

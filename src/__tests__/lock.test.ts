@@ -290,6 +290,41 @@ describe('withStoneLock', () => {
     expect(fs.existsSync(stoneLock())).toBe(true);
   });
 
+  it('says once that it is waiting when the lock is held', async () => {
+    fs.mkdirSync(stoneLock());
+    writeStonePid(`${process.ppid}\n`);
+    setTimeout(() => fs.rmSync(stoneLock(), { recursive: true }), 60);
+    const report = vi.fn();
+
+    await withStoneLock(async () => 'started', { pollMs: 10, report });
+
+    expect(report).toHaveBeenCalledTimes(1);
+    expect(report).toHaveBeenCalledWith(
+      'Waiting for another process to finish starting the database…',
+    );
+  });
+
+  it('says it is this window that is starting the database when it is', async () => {
+    fs.mkdirSync(stoneLock());
+    writeStonePid(`${process.pid}\n`);
+    setTimeout(() => fs.rmSync(stoneLock(), { recursive: true }), 40);
+    const report = vi.fn();
+
+    await withStoneLock(async () => 'started', { pollMs: 10, report });
+
+    expect(report).toHaveBeenCalledWith(
+      'This window is already starting the database; waiting for it…',
+    );
+  });
+
+  it('says nothing when it gets the lock at once', async () => {
+    const report = vi.fn();
+
+    await withStoneLock(async () => 'started', { report });
+
+    expect(report).not.toHaveBeenCalled();
+  });
+
   it('fails naming the lock when a live holder never lets go', async () => {
     fs.mkdirSync(stoneLock());
     writeStonePid(`${process.ppid}\n`);

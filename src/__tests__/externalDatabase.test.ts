@@ -263,7 +263,9 @@ describe('the gemdb command', () => {
     expect(script).toContain('export GEMSTONE_GLOBAL_DIR="/srv/gemstone"');
     expect(script).toContain(`export GEMDB_EXTERNAL_PASSWORD_FILE="${file}"`);
     expect(script).not.toContain('GEMSTONE_SYS_CONF');
-    expect(script).toContain("It is run by this machine's administrator.");
+    // Starting is the shell program's judgement, which for an external
+    // database only checks.
+    expect(script).not.toContain('startstone');
 
     const driver = path.join(path.dirname(cliPath()), 'gemdb-run.tpz');
     const text = fs.readFileSync(driver, 'utf8');

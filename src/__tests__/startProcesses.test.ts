@@ -170,6 +170,24 @@ describe('ensureProcesses', () => {
     expect(gslistCalls).toBe(3);
   });
 
+  it('asks gslist one time fewer on a cold start when the caller just looked', async () => {
+    listings = ['', STONE_UP];
+
+    const started = await ensureProcesses({ listener: false, skipQuickCheck: true });
+
+    expect(started).toEqual({ startedStone: true, startedNetldi: false });
+    expect(gslistCalls).toBe(2);
+  });
+
+  it('still takes the lock and starts nothing when the stone turns out to be up', async () => {
+    listings = [STONE_UP];
+
+    const started = await ensureProcesses({ listener: false, skipQuickCheck: true });
+
+    expect(started).toEqual({ startedStone: false, startedNetldi: false });
+    expect(spawned).toEqual([]);
+  });
+
   it('starts both, guards first, when neither is up', async () => {
     // Before the lock, inside it, then the stone after starting it.
     listings = ['', '', STONE_UP];
@@ -291,6 +309,51 @@ describe('ensureProcesses', () => {
     expect(await check(STONE_UP)).toBe(false);
     expect(await check(LISTENER_UP)).toBe(false);
     expect(await check([STONE_STARTING, LISTENER_UP].join('\n'))).toBe(false);
+  });
+});
+
+describe('starting the stone alone', () => {
+  it('starts the stone, guards first, and never the listener', async () => {
+    listings = ['', '', STONE_UP];
+    const beforeStoneStart = vi.fn(() => {
+      expect(spawned).toEqual([]);
+    });
+
+    const started = await ensureProcesses({ beforeStoneStart, listener: false });
+
+    expect(started).toEqual({ startedStone: true, startedNetldi: false });
+    expect(beforeStoneStart).toHaveBeenCalledTimes(1);
+    expect(spawned).toEqual(['startstone']);
+  });
+
+  it('takes no lock for a stone that is up with no listener', async () => {
+    listings = [STONE_UP];
+
+    const started = await ensureProcesses({ listener: false });
+
+    expect(started).toEqual({ startedStone: false, startedNetldi: false });
+    expect(gslistCalls).toBe(1);
+    expect(satisfied).toBeUndefined();
+    expect(spawned).toEqual([]);
+  });
+
+  it('still waits for a stone that is starting, and starts no listener beside it', async () => {
+    listings = [STONE_STARTING, STONE_STARTING, STONE_UP];
+
+    const started = await ensureProcesses({ listener: false });
+
+    expect(started).toEqual({ startedStone: false, startedNetldi: false });
+    expect(spawned).toEqual([]);
+  });
+
+  it('stops waiting for the lock once the stone is up, listener or not', async () => {
+    listings = [STONE_STARTING];
+    const done = ensureProcesses({ listener: false });
+    await new Promise((resolve) => setImmediate(resolve));
+    listings = [STONE_UP];
+
+    expect(await satisfied?.()).toBe(true);
+    await done;
   });
 });
 

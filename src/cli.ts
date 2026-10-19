@@ -117,8 +117,10 @@ const TOPAZ_INIT = `output push $GEMDB_TOPAZ_LOG only
  * machine's is kept — the same pruning .vscodeignore applies to the copy the
  * extension itself ships. A build without the bundle (a fresh checkout that
  * has not run `npm run bundle`) stages nothing and says so; the wrapper then
- * reports the missing shell at run time rather than failing here, because the
- * file and module modes still work without it.
+ * reports the missing shell at run time rather than failing here, because a
+ * file or module run against a database that is already up works without it.
+ * A cold start does not: it is the shell program's `--ensure-stone` that starts
+ * the database.
  */
 function stageShell(extensionPath: string): void {
   const bundle = path.join(extensionPath, 'out', 'gemdb-shell.js');
@@ -483,12 +485,11 @@ case "\${1:-}" in
     exit 0 ;;
 esac
 
-# No arguments: the GemDB Shell — the same Python prompt the editor opens,
-# on this terminal. It brings the database up itself (a shell session needs
-# the listener too), so it runs before the stone check below. The editor's
-# own Node runtime is recorded here; PATH is the fallback for when the editor
-# has moved since this file was written.
-if [ "$#" -eq 0 ]; then
+# The shell program runs under the editor's own Node runtime, recorded here
+# when this file was written; PATH is the fallback for when the editor has
+# moved since. Both the GemDB Shell and a cold start (below) run it, so both
+# find it the same way and fail with the same words.
+find_node() {
   SHELL_JS="$ROOT/bin/gemdb-shell.js"
   if [ ! -f "$SHELL_JS" ]; then
     echo "gemdb: this installation has no shell program. Open VS Code so GemDB can finish setting up, then retry." >&2
@@ -503,180 +504,57 @@ if [ "$#" -eq 0 ]; then
   export GEMDB_ENGINE_VERSION="${engineVersion()}"
   export GEMDB_ABORT_IDLE_MINUTES="${abortIdleSessionsAfterMinutes()}"
   export ELECTRON_RUN_AS_NODE=1
+}
+
+# No arguments: the GemDB Shell — the same Python prompt the editor opens,
+# on this terminal. It brings the database up itself (a shell session needs
+# the listener too), so it runs before the stone check below.
+if [ "$#" -eq 0 ]; then
+  find_node
   exec "$NODE" "$SHELL_JS"
+fi
+
+# Arguments that are wrong fail here, with a message and exit code shaped like
+# CPython's, before anything starts a database for them: a typo must not cost
+# a start. Only the checks are here; -c's file is made after the start below.
+if [ "$1" = "-c" ]; then
+  [ "$#" -ge 2 ] || { echo "gemdb: -c requires an argument" >&2; exit 2; }
+elif [ "$1" != "-m" ] && [ ! -e "$1" ]; then
+  echo "gemdb: can't open file '$1': No such file or directory" >&2
+  exit 2
 fi
 
 # The database must be up — a linked gem still needs the stone. Starting it
 # here is the same judgement the editor makes: running Python is the request.
 #
-# Under a lock, because this is a check-then-act and EVERY gemdb command runs
-# it. Two commands close together — a terminal one while the editor starts the
-# database, say — would otherwise both see no stone and both start one, and
-# nothing downstream refuses the second: two stoned processes held one
-# extent0.dbf read-write for a week on a developer machine. It went unnoticed
-# because gslist keys Stone rows by name, so it shows ONE row for two stones
-# with the same name; the second only became visible when the first stopped
-# and it took over the row.
-#
-# mkdir is the primitive: it creates or fails, with no window between the test
-# and the claim, and it is there on a stock macOS where flock is not.
-#
-# What the stone's status says decides what to do. Not listed: start one. A
-# stone still at Startup -- recovering from a crash, or another process's start
-# not finished -- is listed, and a second startstone beside it is the
-# two-stones case above, so it is waited for until it is past Startup, since a
-# login now would fail. One at Shutdown is being stopped, and saying so beats
-# waiting a minute for it. Anything else goes on to the login, which judges it:
-# a stone left running when the engine tree was replaced reads "exe deleted"
-# and takes logins.
+# The wrapper only recognises the common case. A stone that answers is just
+# run against, which is every run after the first, and costs one gslist. Every
+# other case -- no stone, one still starting or shutting down, a status that
+# needs a closer look, an external database -- goes to the shell program, which
+# makes the judgement the editor and the GemDB Shell make: the same lock, the
+# same pre-start guards (engine version, NFS, space), the same wait. It starts
+# the stone and nothing else: a file run is a linked topaz and never goes
+# through NetLDI. Not run on a terminal's stdin: --ensure-stone reads none, and
+# a shell program old enough not to know the flag stops at "needs a terminal"
+# rather than opening a Shell in the middle of a file run.
 #
 # The status as gslist -cvl lists it, lowercased (the engine prints "OK",
 # "Startup", "frozen"), or nothing when the stone is not listed. One call per
 # question: -v asks the stone itself, which takes about five seconds when it is
 # frozen (measured). A row is status, version, owner, pid, port, three date
 # fields, type and name, and "exe deleted" is the one two-word status. A row of
-# any other shape is still this stone, so it answers something: nothing would
-# mean "start one".
+# any other shape is still this stone, so it answers something other than "ok".
 stone_status() {
   "$GEMSTONE/bin/gslist" -cvl 2>/dev/null | awk -v s="$STONE" '$(NF-1) == "Stone" && $NF == s { print tolower(NF == 10 ? $1 : NF == 11 ? $1 " " $2 : "listed"); exit }'
 }
-starting() { case "$1" in startup|recovery) return 0 ;; *) return 1 ;; esac; }
-shutting_down() {
-  echo "gemdb: the database is shutting down. Run this again once it has stopped." >&2
-  exit 1
-}
-# Wait while the stone is starting, from the status last seen ($1). $2 is where
-# to look when it fails. Waits are timed by the clock, not by counting polls:
-# each poll is a gslist call, and those vary from milliseconds to seconds.
-wait_for_stone() {
-  local st="$1" deadline=$(( $(date +%s) + 60 )) said=""
-  while starting "$st"; do
-    if [ "$(date +%s)" -ge "$deadline" ]; then
-      echo "gemdb: the database has been starting for over a minute.$2" >&2
-      exit 1
-    fi
-    [ -z "$said" ] && said=1 && echo "gemdb: waiting for the database to finish starting…" >&2
-    sleep 0.1
-    st=$(stone_status)
-  done
-  [ "$st" = shutdown ] && shutting_down
-  if [ -z "$st" ]; then
-    echo "gemdb: the database stopped while it was starting.$2" >&2
-    exit 1
-  fi
-}
 
-STATUS=$(stone_status)
-[ "$STATUS" = shutdown ] && shutting_down
-${
-  external
-    ? `# This machine's administrator runs the database, so a stopped stone is theirs
-# to start: starting it here would run it as this user. So no lock and no
-# start, only a wait for one that is still starting.
-if [ -z "$STATUS" ]; then
-  echo "gemdb: the database (stone $STONE) is not running. It is run by this machine's administrator." >&2
-  exit 1
+STONE_STATUS=$(stone_status)
+if [ "$STONE_STATUS" != ok ]; then
+  # A subshell: find_node's exports (ELECTRON_RUN_AS_NODE above all) are for
+  # the shell program, not for the user's program the run starts next, which
+  # would otherwise see them on a cold start and not on a warm one.
+  ( find_node; "$NODE" "$SHELL_JS" --ensure-stone </dev/null ) || exit 1
 fi
-wait_for_stone "$STATUS" ""
-`
-    : `if [ -z "$STATUS" ] || starting "$STATUS"; then
-  STONE_LOCK="$ROOT/.gemdb-stone.lock"
-  # mkdir and the pid write are two steps, here and in the extension, so a
-  # lock with no pid yet is one being taken right now. It is debris only once
-  # it is older than a few seconds. stat spells mtime differently on GNU and
-  # macOS; GNU is tried first because its -f means something else.
-  older_than_5s() {
-    local m; m=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null) || return 1
-    [ -n "$m" ] && [ $(( $(date +%s) - m )) -gt 5 ]
-  }
-  stone_lock_is_stale() {
-    [ -d "$STONE_LOCK" ] || return 1
-    local owner; owner=$(cat "$STONE_LOCK/pid" 2>/dev/null)
-    case "$owner" in
-      ''|*[!0-9]*) older_than_5s "$STONE_LOCK" ;;
-      *) ! kill -0 "$owner" 2>/dev/null ;;
-    esac
-  }
-  release_stone_lock() {
-    [ "$(cat "$STONE_LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$STONE_LOCK"
-  }
-  # A steal guard older than a few seconds is debris from a stealer that died
-  # inside it. Taking it over is the extension's scheme: move it to a name of
-  # our own and check it is the guard we judged old (same inode and mtime),
-  # since deleting it in place could delete a fresh one someone took
-  # meanwhile. A live one moved by mistake is replaced with mkdir, never by
-  # moving ours back: mv onto a directory moves into it, and rmdir could never
-  # clear the guard again. This closes the two-stealer race; three at once
-  # over a dead guard can still pair up, until Step 5's kernel locks.
-  inode_and_mtime() { stat -c '%i %Y' "$1" 2>/dev/null || stat -f '%i %m' "$1" 2>/dev/null; }
-  take_stale_guard() {
-    local guard="$STONE_LOCK.steal" seen tomb took=1
-    seen=$(inode_and_mtime "$guard") && [ -n "$seen" ] || return 1
-    [ $(( $(date +%s) - \${seen#* } )) -gt 5 ] || return 1
-    tomb="$guard.$$.$RANDOM"
-    mv "$guard" "$tomb" 2>/dev/null || return 1
-    if [ "$(inode_and_mtime "$tomb")" = "$seen" ]; then
-      mkdir "$guard" 2>/dev/null && took=0
-    else
-      mkdir "$guard" 2>/dev/null
-    fi
-    rm -rf "$tomb"
-    return "$took"
-  }
-  held=""
-  lock_deadline=$(( $(date +%s) + 10 ))
-  while [ "$(date +%s)" -lt "$lock_deadline" ]; do
-    if mkdir "$STONE_LOCK" 2>/dev/null; then
-      held=yes
-      echo $$ > "$STONE_LOCK/pid" 2>/dev/null
-      break
-    fi
-    # Held by someone. A lock whose owner is gone is debris from a crash and
-    # must not block every later command; one whose owner is alive is a start
-    # already in flight, and waiting for it is the whole point. Stealing goes
-    # through the same .steal guard the extension takes, re-checked inside it,
-    # so two stealers cannot both remove a lock and the second remove the
-    # first one's fresh claim.
-    if stone_lock_is_stale; then
-      if mkdir "$STONE_LOCK.steal" 2>/dev/null || take_stale_guard; then
-        stone_lock_is_stale && rm -rf "$STONE_LOCK"
-        rmdir "$STONE_LOCK.steal" 2>/dev/null
-        continue
-      fi
-    fi
-    STATUS=$(stone_status)
-    [ -n "$STATUS" ] && ! starting "$STATUS" && break
-    sleep 0.1
-  done
-
-  if [ -n "$held" ]; then
-    # Re-check inside the lock. Between our first check and this one, whoever
-    # we queued behind may have started it -- which is the case the bare
-    # check-then-act got wrong. Listed, not ready: one still starting is
-    # waited for below, never started again.
-    STATUS=$(stone_status)
-    if [ -z "$STATUS" ]; then
-      echo "gemdb: starting the database…" >&2
-      if ! "$GEMSTONE/bin/startstone" -l "$ROOT/db/log/$STONE.log" "$STONE" >/dev/null 2>&1; then
-        release_stone_lock
-        echo "gemdb: the database at $ROOT could not be started. See $ROOT/db/log/$STONE.log" >&2
-        exit 1
-      fi
-      STATUS=$(stone_status)
-    fi
-    release_stone_lock
-  elif [ -z "$STATUS" ]; then
-    echo "gemdb: the database is not running and another process has been starting it for" >&2
-    echo "gemdb: ten seconds. See $ROOT/db/log/$STONE.log, or remove $STONE_LOCK if nothing is." >&2
-    exit 1
-  fi
-
-  # Ours or someone else's, a stone still starting is waited for: a login now
-  # would fail. A minute, as the extension waits.
-  wait_for_stone "$STATUS" " See $ROOT/db/log/$STONE.log"
-fi
-`
-}
 
 # However the run ends, end_run tidies up after it: bash runs an EXIT trap on
 # a normal exit, and on SIGHUP (a terminal tab closed mid-run) and SIGTERM
@@ -735,18 +613,10 @@ trap end_run EXIT
 # -c 'code': materialise the code as a file, like CPython's -c but visibly so.
 # mktemp is given an explicit template — BSD and GNU disagree about -t.
 if [ "$1" = "-c" ]; then
-  [ "$#" -ge 2 ] || { echo "gemdb: -c requires an argument" >&2; exit 2; }
   CODE_FILE="$(mktemp "\${TMPDIR:-/tmp}/gemdb-c-XXXXXX").py"
   printf '%s\\n' "$2" > "$CODE_FILE"
   shift 2
   set -- "$CODE_FILE" "$@"
-fi
-
-# A file that is not there should fail here, with a message and exit code
-# shaped like CPython's, not as a Smalltalk stack.
-if [ "$1" != "-m" ] && [ ! -e "$1" ]; then
-  echo "gemdb: can't open file '$1': No such file or directory" >&2
-  exit 2
 fi
 
 # topaz cannot carry an exit status out of a run block, so the driver writes
@@ -763,13 +633,13 @@ TOPAZ_RUNNING=yes
 topaz -L -q -I "$ROOT/bin/gemdb-run-init.tpz" -P "$ROOT/bin/gemdb-run.tpz" ${TOPAZ_TUNING} -- "$@"
 RC=$?
 TOPAZ_RUNNING=""
-STATUS="$(cat "$GEMDB_STATUS_FILE" 2>/dev/null || true)"
-if [ -z "$STATUS" ]; then
+RUN_STATUS="$(cat "$GEMDB_STATUS_FILE" 2>/dev/null || true)"
+if [ -z "$RUN_STATUS" ]; then
   sed -e '/^topaz[^>]*> run$/,/^%$/d' -e '/^topaz[^>]*> /d' "$GEMDB_TOPAZ_LOG" >&2
 fi
-case "$STATUS" in
+case "$RUN_STATUS" in
   ''|*[!0-9]*) [ "$RC" -ne 0 ] && exit "$RC"; exit 1 ;;
-  *) exit "$STATUS" ;;
+  *) exit "$RUN_STATUS" ;;
 esac
 `;
 

@@ -1,7 +1,6 @@
-import { abortIdleSessionsAfterMinutes, externalDatabase } from './config';
-import { assertSafeToStart } from './database';
+import { abortIdleSessionsAfterMinutes } from './config';
 import { errorMessage } from './log';
-import { assertExternalDatabaseUp, ensureProcesses } from './processes';
+import { bringUp } from './cliStart';
 import { PyRepl, ReplSession } from './pyRepl';
 import { runPythonInSession } from './pythonQueries';
 import { GciSession, setInputHandler } from './session';
@@ -23,41 +22,48 @@ import { GciSession, setInputHandler } from './session';
  */
 
 /**
- * Bring the database up, the same judgement the wrapper makes for a file run:
- * asking for the shell is asking for a running database. Unlike the wrapper's
- * file mode — a linked gem, needing only the stone — a shell session arrives
- * through the listener, so both are ensured. Both go through
- * `ensureProcesses`, the same locked path the window takes, so a Shell opened while a window is
- * starting the database waits for it rather than racing it. The stone gets the
- * window's pre-start guards too, all but statmonitor, whose configuration
- * comes from editor settings the Shell does not have: `system.conf` keeps
- * whatever the window's last start wrote.
- *
- * An external database is only checked, as the window checks it (waiting for
- * a stone still starting): GemDB starts none of it. Errors are reported rather than thrown: the shell prompt (or the
- * exit code) is the caller's answer.
+ * What a step of bringing the database up says on stderr: `gemdb: starting the
+ * database…`. `eol` is `\r\n` once raw mode may be on, where a bare `\n` would
+ * stairstep the message.
  */
-function reportStart(message: string): void {
-  process.stderr.write(`gemdb: ${message.charAt(0).toLowerCase()}${message.slice(1)}\r\n`);
+function reporter(eol: string): (message: string) => void {
+  return (message) =>
+    process.stderr.write(`gemdb: ${message.charAt(0).toLowerCase()}${message.slice(1)}${eol}`);
 }
 
+/**
+ * Bring the database up for the Shell, which asking for is asking for a
+ * running one: unlike a file run (a linked gem, needing only the stone) a
+ * Shell session arrives through the listener, so both are ensured. See
+ * {@link bringUp}. Errors are reported rather than thrown: the shell prompt
+ * (or the exit code) is the caller's answer.
+ */
 async function ensureDatabase(): Promise<boolean> {
   try {
-    const external = externalDatabase();
-    if (external) {
-      await assertExternalDatabaseUp({ listener: true, report: reportStart });
-    } else {
-      await ensureProcesses({
-        beforeStoneStart: assertSafeToStart,
-        report: reportStart,
-      });
-    }
+    await bringUp({ listener: true, report: reporter('\r\n') });
     return true;
   } catch (e) {
     // Raw mode may be on by now, so bare `\n` would stairstep the message.
     process.stderr.write(`gemdb: ${errorMessage(e).replace(/\n/g, '\r\n')}\r\n`);
     return false;
   }
+}
+
+/**
+ * `--ensure-stone`: what the wrapper runs when a file, `-c` or `-m` run finds
+ * the stone down. Starts the stone alone, since file mode never goes through
+ * NetLDI, and exits 0 or 1. Runs before anything looks at stdin: the wrapper
+ * hands it `/dev/null`, and it is no terminal program.
+ */
+async function ensureStone(): Promise<never> {
+  try {
+    // The wrapper only runs this after finding the stone not answering.
+    await bringUp({ listener: false, report: reporter('\n'), skipQuickCheck: true });
+  } catch (e) {
+    process.stderr.write(`gemdb: ${errorMessage(e)}\n`);
+    process.exit(1);
+  }
+  process.exit(0);
 }
 
 /**
@@ -102,6 +108,7 @@ function login(): ReplSession {
 }
 
 async function main(): Promise<void> {
+  if (process.argv[2] === '--ensure-stone') return ensureStone();
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     process.stderr.write(
       'gemdb: the GemDB Shell needs a terminal. To run a program, pass a file, -m, or -c.\n',
