@@ -1,0 +1,49 @@
+version: 2
+updates:
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    open-pull-requests-limit: 5
+    # Hold a release back until it has been public for a week, so a
+    # compromised version has time to be noticed and pulled before a PR
+    # proposes it.
+    cooldown:
+      default-days: 7
+    ignore:
+      # Part of the coordinated VS Code/Node version floor, and only bumped by
+      # hand, together with the rest of it:
+      #
+      #   - @types/vscode tracks engines.vscode in package.json. A newer one
+      #     lets tsc accept APIs the oldest supported VS Code lacks, and
+      #     `vsce package` refuses a @types/vscode above engines.vscode.
+      #   - @types/node tracks the engines.node floor in package.json, not the
+      #     newer Node in .nvmrc. A newer major lets tsc accept Node APIs the
+      #     floor lacks.
+      #
+      # Raising the floor moves engines.vscode or engines.node together with
+      # the matching range here, in one change, by hand.
+      - dependency-name: '@types/node'
+      - dependency-name: '@types/vscode'
+    groups:
+      dev-dependencies:
+        dependency-type: 'development'
+        update-types:
+          - 'minor'
+          - 'patch'
+      prod-dependencies:
+        dependency-type: 'production'
+        update-types:
+          - 'minor'
+          - 'patch'
+
+  # Workflows pin actions to a commit SHA with a `# vX.Y.Z` comment; Dependabot
+  # bumps both together.
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    groups:
+      github-actions:
+        patterns:
+          - '*'
