@@ -5,6 +5,7 @@ import {
   helpText,
   isConsoleCommand,
   objectLink,
+  dedented,
   parseConsoleCommand,
   pendingText,
   persistedCompletions,
@@ -24,6 +25,15 @@ import {
 /** GemDB's `%` commands in the Debug Console: reading a line, and what is suggested while typing one. */
 
 describe('reading a % line', () => {
+  it('reads %inspect with any expression after it', () => {
+    expect(parseConsoleCommand('%inspect p')).toEqual({ kind: 'inspect', expression: 'p' });
+    expect(parseConsoleCommand('  %inspect  self.lines[0] ')).toEqual({
+      kind: 'inspect',
+      expression: 'self.lines[0]',
+    });
+    expect(parseConsoleCommand('%inspect')).toMatchObject({ kind: 'invalid' });
+  });
+
   it('takes only a line that starts with %, so Python is never mistaken for a command', () => {
     expect(isConsoleCommand('%persist p')).toBe(true);
     expect(isConsoleCommand('  %help')).toBe(true);
@@ -69,7 +79,7 @@ describe('reading a % line', () => {
     const unknown = parseConsoleCommand('%abort');
     expect(unknown).toMatchObject({ kind: 'invalid' });
     expect((unknown as { message: string }).message).toMatch(
-      /%abort is not a GemDB command\. Commands: %persist, %pending, %commit, %names, %help\./,
+      /%abort is not a GemDB command\. Commands: %persist, %inspect, %pending, %commit, %names, %help\./,
     );
   });
 });
@@ -438,5 +448,23 @@ describe('leaving out what reads exactly as committed', () => {
     expect(pendingText(withoutUnchanged(onlyTwo, same, same), 'a.ipynb', String)).toBe(
       'Nothing changes on commit: the 2 objects a.ipynb changed read as committed again — reverted, or set to what they already held.',
     );
+  });
+});
+
+describe('dedented', () => {
+  it("takes a pasted line's leading space off", () => {
+    expect(dedented(' corner._fields')).toBe('corner._fields');
+    expect(dedented('\tx + 1')).toBe('x + 1');
+  });
+
+  it("keeps a block's own shape, taking off only what every line shares", () => {
+    expect(dedented('    for i in range(3):\n        print(i)')).toBe(
+      'for i in range(3):\n    print(i)',
+    );
+    expect(dedented('  a = 1\n\n  b = 2')).toBe('a = 1\n\nb = 2');
+  });
+
+  it('leaves unindented text as it is', () => {
+    expect(dedented('x = 1\n  y')).toBe('x = 1\n  y');
   });
 });

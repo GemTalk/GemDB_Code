@@ -735,6 +735,23 @@ describe('saved stacks', () => {
     });
   });
 
+  it('offers a saved stack to the Inspector: it is a dict under gemdb.root', async () => {
+    gem.committed.set('stack_bp', 'dict');
+    gem.stacks.set('stack_bp', snapshot('breakpoint.ipynb'));
+    // A dict with entries, so the listing registers it, as the database's does.
+    gem.refs.set('stack_bp', 7);
+    const { view } = setUp();
+
+    const [root] = await topOf(view);
+    const [entry] = await view.getChildren(root);
+
+    expect(view.inspectTarget(entry)).toMatchObject({
+      readIn: { session: 'extension' },
+      handle: expect.any(Number),
+      label: 'gemdb.root["stack_bp"]',
+    });
+  });
+
   it('opens the stack in the debugger, rebuilt from the database, with its saved source', async () => {
     gem.committed.set('stack_bp', 'dict');
     gem.stacks.set('stack_bp', snapshot('breakpoint.ipynb'));

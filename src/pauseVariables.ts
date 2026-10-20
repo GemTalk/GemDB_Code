@@ -842,14 +842,20 @@ function pythonString(text: string): string {
 /**
  * Smalltalk that runs Python in a fresh, throwaway scope — never a notebook's,
  * so nothing here leaves a name in the user's globals — with `_gemdb_value`
- * bound to registry entry `handle` when one is given. Answers the Python
- * value's printString, or an `Error: …` line.
+ * bound to registry entry `handle` when one is given — of the pause's
+ * registry, or of `registry` (the Inspector's). Answers the Python value's
+ * printString, or an `Error: …` line.
  */
-function pythonInFreshScope(source: string, handle?: number, first = ''): string {
+function pythonInFreshScope(
+  source: string,
+  handle?: number,
+  first = '',
+  registry: string = REGISTRY,
+): string {
   const bind =
     handle === undefined
       ? ''
-      : `reg := SessionTemps current at: #'${REGISTRY}' otherwise: nil.
+      : `reg := SessionTemps current at: #'${registry}' otherwise: nil.
 (reg notNil and: [${handle} between: 1 and: reg size])
   ifFalse: [^ 'Error: that value is no longer available' encodeAsUTF8].
 scope at: #'_gemdb_value' put: (reg at: ${handle}).`;
@@ -864,14 +870,14 @@ r encodeAsUTF8`;
 }
 
 /**
- * Smalltalk that answers what a good key for registry entry `handle` is made
- * of: its Python type name and, when it has one, the first of the attributes
+ * Smalltalk that answers what a good key for registry entry `handle` (of the
+ * pause's registry, or of `registry`) is made of: its Python type name and, when it has one, the first of the attributes
  * that usually identify an object (`name`, `id`, …) holding a str or a number.
  */
-export function saveSuggestionQuery(handle: number): string {
+export function saveSuggestionQuery(handle: number, registry: string = REGISTRY): string {
   return `| reg v tname label field |
 field := Character codePoint: 31.
-reg := SessionTemps current at: #'${REGISTRY}' otherwise: nil.
+reg := SessionTemps current at: #'${registry}' otherwise: nil.
 v := (reg notNil and: [${handle} between: 1 and: reg size]) ifTrue: [reg at: ${handle}] ifFalse: [nil].
 tname := [((v @env1:___pyAttrLoad___: #'__class__') @env1:___pyAttrLoad___: #'__name__') asString]
   on: AbstractException do: [:e | e return: v class name asString].
@@ -911,15 +917,18 @@ export function keyTakenQuery(key: string): string {
 }
 
 /**
- * Smalltalk that puts registry entry `handle` in gemdb.root under `key`,
+ * Smalltalk that puts registry entry `handle` (of the pause's registry, or of
+ * `registry`) in gemdb.root under `key`,
  * through Python so it is exactly what `gemdb.root[key] = value` in a cell
  * would do. It does not commit: the notebook's next commit writes it, with
  * everything else the notebook has changed. Answers `'saved'` or an error.
  */
-export function saveToRootQuery(handle: number, key: string): string {
+export function saveToRootQuery(handle: number, key: string, registry: string = REGISTRY): string {
   return pythonInFreshScope(
     `import gemdb\ngemdb.root[${pythonString(key)}] = _gemdb_value\n"saved"`,
     handle,
+    '',
+    registry,
   );
 }
 

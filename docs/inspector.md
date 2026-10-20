@@ -1,7 +1,7 @@
 # The Inspector
 
-**Inspect**, on a Variables row or a Persisted Objects row, opens an object in an editor-tab
-webview: a strip of columns, one object each, with tabs for what the object has. It is Jasper's
+**Inspect**, on a Variables row, a Watch row or a Persisted Objects row, or `%inspect expr` in
+the Debug Console, opens an object in an editor-tab webview: a strip of columns, one object each, with tabs for what the object has. It is Jasper's
 basic Inspector brought over for Python. This note says what was kept from Jasper, what changed and
 why, how the panel holds its objects, and what was measured.
 
@@ -11,11 +11,11 @@ Three scripts make the page, read from `resources/inspector/` at run time and in
 `<script>` tags (`src/inspector.ts`), so they are plain browser JavaScript and not part of the
 esbuild bundle:
 
-| File | Whose | What it does |
-| --- | --- | --- |
-| `evaluatePane.js` | Jasper's, unchanged | the Evaluate tab's keys (Shift+Enter, the Ctrl+K D/E/I chord) and its expression history |
-| `millerColumns.js` | Jasper's, unchanged | the column strip: drilling to the right, closing one column, focus and the panel title, widths |
-| `inspectorView.js` | GemDB's | everything drawn inside a column: tabs, tables, paging, the Class and Evaluate tabs, the context menu, Back and Forward |
+| File               | Whose               | What it does                                                                                                            |
+| ------------------ | ------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `evaluatePane.js`  | Jasper's, unchanged | the Evaluate tab's keys (Shift+Enter, the Ctrl+K D/E/I chord) and its expression history                                |
+| `millerColumns.js` | Jasper's, unchanged | the column strip: drilling to the right, closing one column, focus and the panel title, widths                          |
+| `inspectorView.js` | GemDB's             | everything drawn inside a column: tabs, tables, paging, the Class and Evaluate tabs, the context menu, Back and Forward |
 
 The first two are copied byte for byte from Jasper's `client/src/webview/` (Jasper `main` at
 e29ad036, 2026-10-19), with their tests (`src/__tests__/millerColumns.test.ts`,
@@ -75,6 +75,24 @@ Every header carries the object's OOP and whether it is committed, so a committe
 re-found from any session by its OOP (`pathToQuery` does this for Persisted Objects). Nothing does
 that yet; see "Not done".
 
+## Where it opens from, and what the tab says
+
+- **A Variables row** gives its handle in the pause's registry: its own reference when it opens,
+  else the one its listing recorded (`Pause.handleFor`).
+- **A Watch row** has neither when its value is a plain one (`first + 1`), so each watch's result
+  handle is kept, by its expression, as it is evaluated at every stop (`Pause.watchHandle`).
+- **`%inspect expr`** evaluates `expr` in the frame's console names, as any console line does, and
+  opens its result. VS Code offers extensions no menu on Debug Console output, so it is a command
+  beside `%persist` rather than a right-click.
+- **Persisted Objects** rows, as above, a saved stack's included: it is a dict under `gemdb.root`
+  (`savedStacks.ts`), so the Inspector opens its `frames`, `globals` and `saved_at` like any dict.
+
+The editor tab reads `Inspector: counter · function`: what the column was opened on, then its
+type, so several Inspectors can be told apart by variable. A long expression keeps its last whole
+steps (`…orders[11999].lines · list`). Where the object came from — the paused frame's file,
+`special_values.py`, with its function and line on hover, or Persisted Objects — sits quietly in
+the column's header beside the OOP, in the same small type, rather than in the title.
+
 ## Which session reads it
 
 A column reads in the session its object lives in (`ReadIn`, from `savedObjects.ts`):
@@ -100,8 +118,16 @@ the user's own edit, so it sits where Set Value sits on the automation line
 registered, is kept, and `setVariableQuery` with `valueHandle` writes that object back rather than
 evaluating anything. So a revert restores the very object, not one that prints the same.
 
+**Add to Persisted Objects…**, on a row's menu or the button at the end of a column's tab row,
+is the Variables row's command:
+both go through `addToPersistedObjects` (`savedObjects.ts`), so the key suggested, the warning
+on a key already taken, the toast and the reveal in Persisted Objects are the same. The Inspector
+reaches it through the internal command `gemdb.savedObjects.addFromInspector`, handing it the
+Inspector's registry, so `saveSuggestionQuery` and `saveToRootQuery` read the object there.
+
 An object read in the **extension's session** (a committed entry opened from Persisted Objects)
-is **read-only**: a change there would be in a transaction nobody commits, and the next abort
+is **read-only**, and offers no Add to Persisted Objects… either: a change there would be in a
+transaction nobody commits, and the next abort
 would drop it silently. Open it from a notebook (as `gemdb.root[...]` in a cell, then Inspect at a
 pause) to change it.
 
@@ -145,4 +171,4 @@ Inspect opens the result in a new column.
 - **Re-finding a committed object by OOP** once its session ends, so an Inspector on a committed
   object outlives its notebook.
 - **Bytes**, for `bytes` and `bytearray`.
-- **Inspect from the Debug Console** and from a notebook cell's output.
+- **Inspect from a notebook cell's output.**

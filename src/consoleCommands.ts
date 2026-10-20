@@ -30,6 +30,11 @@ export const CONSOLE_COMMANDS: ConsoleCommandInfo[] = [
     summary: 'Add p to Persisted Objects (gemdb.root); it is saved when the notebook commits.',
   },
   {
+    name: '%inspect',
+    usage: '%inspect p',
+    summary: 'Open p, or any expression, in an Inspector beside the editor.',
+  },
+  {
     name: '%pending',
     usage: '%pending',
     summary:
@@ -55,6 +60,7 @@ export const CONSOLE_COMMANDS: ConsoleCommandInfo[] = [
 /** A `%` line, read. */
 export type ConsoleCommand =
   | { kind: 'persist'; expression: string; key: string }
+  | { kind: 'inspect'; expression: string }
   | { kind: 'pending' }
   | { kind: 'commit' }
   | { kind: 'names' }
@@ -63,6 +69,23 @@ export type ConsoleCommand =
 
 /** A Python identifier: a name a console line can bind. */
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * What was typed in the Debug Console or a watch, without the indentation
+ * every line of it shares, as Python's `textwrap.dedent` takes it off: a line
+ * pasted from a document or a chat often starts with a space, which Python
+ * reads as an unexpected indent. A block keeps its own shape, since only the
+ * common part goes; blank lines don't count towards it.
+ */
+export function dedented(source: string): string {
+  const lines = source.split('\n');
+  const indents = lines
+    .filter((line) => line.trim() !== '')
+    .map((line) => /^[ \t]*/.exec(line)?.[0].length ?? 0);
+  const common = indents.length ? Math.min(...indents) : 0;
+  if (common === 0) return source;
+  return lines.map((line) => (line.trim() === '' ? line.trim() : line.slice(common))).join('\n');
+}
 
 /** Whether a console line is a GemDB command rather than Python. */
 export function isConsoleCommand(line: string): boolean {
@@ -89,6 +112,10 @@ export function parseConsoleCommand(line: string): ConsoleCommand | undefined {
       if (!key) return { kind: 'invalid', message: `Give it a key. ${usageOf('%persist')}` };
       return { kind: 'persist', expression, key };
     }
+    case 'inspect':
+      return rest
+        ? { kind: 'inspect', expression: rest.trim() }
+        : { kind: 'invalid', message: `Inspect what? ${usageOf('%inspect')}` };
     case 'pending':
     case 'commit':
     case 'names':

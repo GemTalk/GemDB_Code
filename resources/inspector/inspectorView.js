@@ -113,6 +113,7 @@
       '<span class="obj-class"></span>' +
       '<span class="obj-sep" style="display:none">&#8250;</span>' +
       '<span class="obj-label"></span>' +
+      '<span class="header-origin"></span>' +
       '<span class="header-oop"></span>' +
       '<span class="header-badge"></span>' +
       '<button class="nav-btn nav-refresh" title="Read this object again">&#8635;</button>' +
@@ -130,6 +131,7 @@
       objClass: root.querySelector('.obj-class'),
       objSep: root.querySelector('.obj-sep'),
       objLabel: root.querySelector('.obj-label'),
+      headerOrigin: root.querySelector('.header-origin'),
       headerOop: root.querySelector('.header-oop'),
       badge: root.querySelector('.header-badge'),
       tabBar: root.querySelector('.tab-bar'),
@@ -188,13 +190,16 @@
     col.editable = !!msg.editable;
     col.label = msg.label || '';
     col.className = col.header ? col.header.row.type : '';
-    col.title = col.className;
+    col.title = titleFor(col.label, col.className);
 
     var e = col.el;
     e.objClass.textContent = col.className;
     e.objSep.style.display = col.label ? '' : 'none';
     e.objLabel.textContent = col.label;
     e.objLabel.title = col.header ? col.header.row.value : '';
+    // Where the object was found, quietly, beside its OOP: the file it came from (more on hover).
+    e.headerOrigin.textContent = msg.origin ? msg.origin.text : '';
+    e.headerOrigin.title = msg.origin ? msg.origin.detail : '';
     e.headerOop.textContent = col.header ? 'oop ' + col.header.oop : '';
     e.badge.textContent = col.header && col.header.committed ? 'committed' : 'not committed';
     e.badge.classList.toggle('committed', !!(col.header && col.header.committed));
@@ -206,16 +211,58 @@
     renderNav(col);
 
     var tabs = tabsFor(col.header);
-    e.tabBar.innerHTML = tabs
-      .map(function (t) {
-        return '<div class="tab" data-tab="' + t.id + '">' + esc(t.label) + '</div>';
-      })
-      .join('');
+    // Add to Persisted Objects… for the column's own object sits at the end of the tab row,
+    // offered where adding is (see showPersist).
+    e.tabBar.innerHTML =
+      tabs
+        .map(function (t) {
+          return '<div class="tab" data-tab="' + t.id + '">' + esc(t.label) + '</div>';
+        })
+        .join('') +
+      (col.editable
+        ? '<button class="btn tab-action" data-persist-column="1" title="Add this object under ' +
+          'gemdb.root. It persists at the notebook\u2019s next commit.">Add to Persisted Objects\u2026</button>'
+        : '');
     var first = tabs[0].id;
     if (keepTab) {
       for (var i = 0; i < tabs.length; i++) if (tabs[i].id === keepTab) first = keepTab;
     }
     activateTab(col, first);
+  }
+
+  /** Longest expression the panel title carries before it is cut from the front. */
+  var TITLE_LABEL_CHARS = 28;
+
+  /**
+   * The editor tab's title for a column: what it was opened on, then its type
+   * (`counter · function`), so several open Inspectors can be told apart by
+   * the variable rather than by a type they may share. A long expression keeps
+   * its last whole steps, the part that names this object: `…orders[11999].lines`;
+   * a last step too long on its own keeps its start: `…["stack_invoice_repo…`.
+   */
+  function titleFor(label, type) {
+    if (!label) return type || '';
+    var shown = label;
+    if (label.length > TITLE_LABEL_CHARS) {
+      // Cut at the first step boundary (`.name` or `[…]`) that leaves a short enough tail.
+      shown = '';
+      for (var at = label.length - TITLE_LABEL_CHARS; at < label.length; at++) {
+        var c = label.charAt(at);
+        if (c === '.' || c === '[') {
+          shown = '\u2026' + label.slice(c === '.' ? at + 1 : at);
+          break;
+        }
+      }
+      if (!shown) {
+        // The last step alone is too long (a long dict key): keep its start, which is the part
+        // a reader recognises — `…["stack_invoice_repo…` — rather than a fragment of its end.
+        var start = Math.max(label.lastIndexOf('.'), label.lastIndexOf('['));
+        var step =
+          start >= 0 ? label.slice(label.charAt(start) === '.' ? start + 1 : start) : label;
+        shown = (start > 0 ? '\u2026' : '') + step.slice(0, TITLE_LABEL_CHARS - 2) + '\u2026';
+      }
+    }
+    return type ? shown + ' \u00b7 ' + type : shown;
   }
 
   function renderNav(col) {
@@ -287,15 +334,20 @@
 
   // ── Repr ──────────────────────────────────
 
+  /**
+   * The whole repr, and str() under it when it says something else. Both sit
+   * in one scroller and take the height their text needs, so a one-line repr
+   * is not followed by half a pane of nothing.
+   */
   function renderRepr(pane, data) {
-    var html = '';
+    var html = '<div class="repr-pane">';
     if (data.str) html += '<div class="repr-label">repr()</div>';
     html += '<div class="detail-value repr-text"></div>';
     if (data.str)
       html += '<div class="repr-label">str()</div><div class="detail-value str-text"></div>';
     if (data.cut)
       html += '<div class="repr-note">Cut short: it is longer than this panel shows.</div>';
-    pane.innerHTML = html;
+    pane.innerHTML = html + '</div>';
     pane.querySelector('.repr-text').textContent = data.repr;
     if (data.str) pane.querySelector('.str-text').textContent = data.str;
   }
@@ -312,7 +364,10 @@
     var tab = col.activeTab;
     var labelHead = tab === 'entries' ? 'Key' : tab === 'items' ? 'Index' : 'Name';
     var html = '';
-    if (tab === 'items' || tab === 'entries') html += pagerHtml(col, rows.length);
+    // The pager only when there is more than one page: on a small dict it is clutter.
+    if ((tab === 'items' || tab === 'entries') && totalFor(col) > PAGE_SIZE) {
+      html += pagerHtml(col, rows.length);
+    }
     html += '<div class="table-wrap"><table class="rows"><thead><tr>';
     html +=
       '<th class="cell-label">' +
@@ -902,6 +957,7 @@
       containerRef: at.containerRef,
       tab: at.inGroup ? 'attributes' : col.activeTab,
       editable: col.editable && !at.row.readOnly,
+      persistable: col.editable,
     };
   }
 
@@ -913,10 +969,21 @@
     menu.style.top = Math.max(0, Math.min(y, window.innerHeight - h - 4)) + 'px';
   }
 
+  /**
+   * Add to Persisted Objects… (on a row's menu, and the tab row's button for
+   * the column's object) is offered where Edit Value… is: in a notebook's (or
+   * a debugged file's) session, whose next commit writes it.
+   */
+  function showPersist(menu, offered) {
+    var items = menu.querySelectorAll('[data-action="persist"], [data-persist-sep]');
+    for (var i = 0; i < items.length; i++) items[i].style.display = offered ? '' : 'none';
+  }
+
   function showCtxMenu(x, y, target) {
     ctxTarget = target;
     var edit = ctxMenu.querySelector('[data-action="edit"]');
     if (edit) edit.style.display = target.editable ? '' : 'none';
+    showPersist(ctxMenu, target.persistable);
     placeMenu(ctxMenu, x, y);
   }
 
@@ -981,6 +1048,8 @@
       post({ command: 'copyText', text: t.row.value, what: 'Value' });
     } else if (action === 'copyExpression') {
       post({ command: 'copyText', text: labelFor(col, t), what: 'Expression' });
+    } else if (action === 'persist') {
+      post({ command: 'addToPersisted', handle: t.row.handle, name: labelFor(col, t) });
     }
   }
 
@@ -1005,6 +1074,11 @@
           remember: false,
           keepTab: true,
         });
+        return;
+      }
+      if (t.closest('[data-persist-column]')) {
+        // The column's own object, under the expression it was reached by.
+        post({ command: 'addToPersisted', handle: col.handle, name: col.label || col.className });
         return;
       }
       var tab = t.closest('.tab');
@@ -1302,5 +1376,10 @@
   }
 
   var root = typeof globalThis !== 'undefined' ? globalThis : window;
-  root.InspectorView = { init: init, tabsFor: tabsFor, childExpression: childExpression };
+  root.InspectorView = {
+    init: init,
+    tabsFor: tabsFor,
+    childExpression: childExpression,
+    titleFor: titleFor,
+  };
 })();

@@ -1,12 +1,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   __debugFactories,
   __debugStarts,
   DebugAdapterInlineImplementation,
   NotebookCellKind,
   SourceBreakpoint,
+  commands,
   debug,
   workspace,
 } from '../__mocks__/vscode';
@@ -950,6 +951,42 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
       out: [{ category: 'stderr', output: expect.stringMatching(/not an object of its own/) }],
     });
   });
+  it('opens a console result in the Inspector with %inspect, and keeps a watch’s value to inspect', async () => {
+    const nb = notebook('dc-inspect');
+    const opened: unknown[] = [];
+    const spy = vi
+      .spyOn(commands, 'executeCommand')
+      .mockImplementation((id: string, ...args: unknown[]) => {
+        if (id === 'gemdb.inspector.openPaused') opened.push(args[0]);
+        return Promise.resolve(undefined);
+      });
+    let watched: number | undefined;
+    let none = '';
+    let pasted = '';
+    try {
+      await inCell(nb, 'def go(n):\n    breakpoint()\n    return n\ngo(41)', async (dap) => {
+        await dap.evaluate('%inspect n + 1');
+        none = (await dap.evaluate('%inspect None')).message ?? '';
+        await dap.evaluate('n + 1', { context: 'watch' });
+        watched = pauseForOwner(nb.key)?.watchHandle?.('n + 1');
+        // A line pasted with a leading space runs, rather than raising IndentationError.
+        pasted = await dap.value(' n * 2');
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    closeSessionFor(nb.key);
+
+    expect(opened).toEqual([
+      expect.objectContaining({ ownerKey: nb.key, label: 'n + 1', handle: expect.any(Number) }),
+    ]);
+    expect((opened[0] as { frame?: { name: string } }).frame?.name).toBe('go');
+    expect(none).toMatch(/nothing to inspect/);
+    // The watch's value is a plain int, with nothing to open, and still has a handle to inspect.
+    expect(watched).toBeGreaterThan(0);
+    expect(pasted).toBe('82');
+  });
+
   it('runs GemDB’s % commands: %persist, %names, %commit, and completes them', async () => {
     const nb = notebook('dc-commands');
     const seen: Record<string, unknown> = {};
@@ -1020,7 +1057,14 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
       text: "p: list = [('B400', '2', 'str'), ('A200', 1, 'int')]\n",
     });
     expect(seen.inRoot).toBe("[('B400', '2', 'str'), ('A200', 1, 'int')]");
-    expect(seen.completeCommands).toEqual(['%persist', '%pending', '%commit', '%names', '%help']);
+    expect(seen.completeCommands).toEqual([
+      '%persist',
+      '%inspect',
+      '%pending',
+      '%commit',
+      '%names',
+      '%help',
+    ]);
     expect(seen.completeNames).toEqual(['p']);
     expect(seen.commit).toMatchObject({
       ok: true,

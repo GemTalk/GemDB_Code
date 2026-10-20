@@ -19,6 +19,9 @@ import {
   keyPositionQuery,
   parseChildren,
   parseConsoleReply,
+  parseSaveSuggestion,
+  saveSuggestionQuery,
+  saveToRootQuery,
   setVariableQuery,
 } from '../pauseVariables';
 import { ensureProcesses, isRunning, stopNetldi, stopStone } from '../processes';
@@ -299,6 +302,18 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Inspector against a real 
     );
     expect(parseChildren(back)[0]?.value).toBe('3');
     expect((await runPython('p.x', nb)).value).toBe('3');
+  });
+
+  it("adds an Inspector's object under gemdb.root, as Add to Persisted Objects… does", async () => {
+    const handle = (await open('p')).row.handle;
+    expect(
+      parseSaveSuggestion(await run(saveSuggestionQuery(handle, INSPECTOR_REGISTRY))).type,
+    ).toBe('Point');
+    expect(await run(saveToRootQuery(handle, 'inspected_p', INSPECTOR_REGISTRY))).toBe("'saved'");
+    expect((await runPython('import gemdb\ngemdb.root["inspected_p"] is p', nb)).value).toBe(
+      'True',
+    );
+    await runPython('import gemdb\ndel gemdb.root["inspected_p"]', nb);
   });
 
   it('keeps the object readable after the registry it came from is dropped', async () => {

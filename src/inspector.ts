@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { jupyterTraceback } from './consoleTraceback';
-import { DEBUG_TYPE, pauseForDebugSession, placeFrame } from './debugger';
+import { DEBUG_TYPE, DapFrame, pauseForDebugSession, placeFrame } from './debugger';
 import {
   INSPECTOR_REGISTRY,
   InspectorHeader,
@@ -32,6 +32,7 @@ import {
   setVariableQuery,
 } from './pauseVariables';
 import {
+  AddTarget,
   ReadIn,
   SavedObjectsProvider,
   SavedRow,
@@ -91,6 +92,11 @@ export interface InspectTarget {
   handle: number;
   /** What the column header calls it: the row's name, which a child column extends. */
   label: string;
+  /**
+   * Where it was found, said quietly in the header beside the OOP: the paused frame's file
+   * (`special_values.py`, its function on hover), or Persisted Objects.
+   */
+  origin?: { text: string; detail: string };
 }
 
 type Mode = 'display' | 'execute' | 'inspect';
@@ -133,6 +139,7 @@ type InspectorMessage =
     }
   | { command: 'revertSlot'; columnId: number; containerRef: number; name: string }
   | { command: 'fetchSource'; columnId: number; handle: number; owner: string; name: string }
+  | { command: 'addToPersisted'; handle: number; name: string }
   | { command: 'copyText'; text: string; what: string }
   | { command: 'setTitle'; title: string }
   | { command: 'closePanel' };
@@ -215,7 +222,7 @@ export class InspectorPanel {
       : inNotebook(readIn.ownerKey, code, { budget });
   }
 
-  /** What every title says after the object: which session it is read in. */
+  /** The session the object is read in, by name: its notebook's or debugged file's, or `committed`. */
   private where(): string {
     const readIn = this.target.readIn;
     if (readIn.session === 'extension') return 'committed';
@@ -262,6 +269,7 @@ export class InspectorPanel {
         label,
         header,
         editable: this.editable,
+        ...(this.target.origin ? { origin: this.target.origin } : {}),
         ...extra,
       });
     } catch (e) {
@@ -277,7 +285,6 @@ export class InspectorPanel {
     try {
       switch (msg.command) {
         case 'ready':
-          this.post({ command: 'where', where: this.where() });
           await this.postColumn(
             'addRoot',
             0,
@@ -362,14 +369,16 @@ export class InspectorPanel {
           });
           return;
         }
+        case 'addToPersisted':
+          this.addToPersisted(msg.handle, msg.name);
+          return;
         case 'copyText':
           await vscode.env.clipboard.writeText(msg.text);
           vscode.window.setStatusBarMessage(`${msg.what} copied`, 2000);
           return;
         case 'setTitle':
-          this.panel.title = msg.title
-            ? `Inspector: ${msg.title} · ${this.where()}`
-            : `Inspector · ${this.where()}`;
+          // The variable and its type (`counter · function`), short enough to read on a tab.
+          this.panel.title = msg.title ? `Inspector: ${msg.title}` : 'Inspector';
           return;
         case 'closePanel':
           this.panel.dispose();
@@ -484,6 +493,32 @@ export class InspectorPanel {
     return {
       source: `# No source to show: it was defined in ${place}, and that is not open, or has changed since.`,
     };
+  }
+
+  /**
+   * Add an object under `gemdb.root` — **Add to Persisted Objects…**, the
+   * same steps and words as on a Variables row (`addToPersistedObjects` in
+   * savedObjects.ts). Only in a notebook's or a debugged file's session,
+   * whose next commit writes it; in the extension's own session nobody would.
+   */
+  private addToPersisted(handle: number, name: string): void {
+    const readIn = this.target.readIn;
+    if (readIn.session !== 'notebook') {
+      void vscode.window.showInformationMessage(
+        'This object is read in GemDB’s own session, so adding it from here would never be ' +
+          'committed. It is already persisted: Copy as Expression gives the way to reach it.',
+      );
+      return;
+    }
+    const target: AddTarget = {
+      query: (code) => this.query(code, false),
+      ownerKey: readIn.ownerKey,
+      notebook: this.where(),
+      handle,
+      name,
+      registry: INSPECTOR_REGISTRY,
+    };
+    void vscode.commands.executeCommand('gemdb.savedObjects.addFromInspector', target);
   }
 
   /** Identifies one row that can be edited: the registry entry it was listed under, and its name. */
@@ -665,6 +700,8 @@ export class InspectorPanel {
     <div class="ctx-sep"></div>
     <div class="ctx-item" data-action="copyValue">Copy Value</div>
     <div class="ctx-item" data-action="copyExpression">Copy as Expression</div>
+    <div class="ctx-sep" data-persist-sep></div>
+    <div class="ctx-item" data-action="persist">Add to Persisted Objects…</div>
   </div>
   <div id="headerCtxMenu" class="ctx-menu">
     <div class="ctx-item" data-action="copy">Copy</div>
@@ -699,29 +736,93 @@ const NOT_PAUSED =
   'Inspect works on a variable in Run and Debug, while a GemDB notebook cell or Debug Python File ' +
   'run is paused in the debugger.';
 
-/** Inspect the right-clicked Variables row's object, reached by its handle in the pause's registry. */
-export function inspectVariable(context: VariableContext): void {
+/**
+ * What VS Code hands a command on a Watch row: a root watch comes as its
+ * `expression`, a row opened under one as a `variable`, like a Variables row.
+ */
+type RowContext = VariableContext & {
+  expression?: { name?: string; expression?: string; variablesReference?: number };
+};
+
+/**
+ * Inspect the right-clicked Variables or Watch row's object, reached by its
+ * handle in the pause's registry: the row's own reference when it opens, else
+ * the handle its listing recorded, else, for a watch, the handle its last
+ * evaluation answered (`Pause.watchHandle`), so a plain value inspects too.
+ */
+export function inspectVariable(context: RowContext): void {
   const session = vscode.debug.activeDebugSession;
   const pause = pauseForDebugSession(context.sessionId ?? session?.id);
   const variable = context.variable;
-  if (!session || session.type !== DEBUG_TYPE || !pause?.ownerKey || !variable) {
+  const watched = context.expression;
+  const name = variable?.name ?? watched?.expression ?? watched?.name;
+  if (!session || session.type !== DEBUG_TYPE || !pause?.ownerKey || !name) {
     void vscode.window.showErrorMessage(NOT_PAUSED);
     return;
   }
+  const reference = variable?.variablesReference ?? watched?.variablesReference ?? 0;
   const handle =
-    variable.variablesReference > 0
-      ? variable.variablesReference
-      : pause.handleFor?.(context.container?.variablesReference ?? 0, variable.name);
+    reference > 0
+      ? reference
+      : (pause.handleFor?.(context.container?.variablesReference ?? 0, name) ??
+        pause.watchHandle?.(name));
   if (!handle) {
-    void vscode.window.showErrorMessage(`"${variable.name}" is not an object of its own.`);
+    void vscode.window.showErrorMessage(`"${name}" is not an object of its own.`);
     return;
   }
   InspectorPanel.open({
     readIn: { session: 'notebook', ownerKey: pause.ownerKey },
     from: REGISTRY,
     handle,
-    label: variable.name,
+    label: name,
+    origin: frameOrigin(pause, session),
   });
+}
+
+/** `%inspect` in the Debug Console (`debugger.ts`): open a console result. */
+export function inspectPaused(args: {
+  ownerKey: string;
+  handle: number;
+  label: string;
+  frame?: DapFrame;
+  run: string;
+}): void {
+  const file = args.frame?.source?.name ?? args.run;
+  InspectorPanel.open({
+    readIn: { session: 'notebook', ownerKey: args.ownerKey },
+    from: REGISTRY,
+    handle: args.handle,
+    label: args.label,
+    origin: {
+      text: file,
+      detail: args.frame
+        ? `Inspected from the Debug Console in ${args.frame.name}, in ${file}, paused at line ${args.frame.line}`
+        : `Inspected from the Debug Console while ${args.run} was paused`,
+    },
+  });
+}
+
+/**
+ * The file of the frame selected in Call Stack (the one whose Variables were
+ * right-clicked), `special_values.py`, with its function and line for the
+ * tooltip; the paused run's name alone when no frame is selected.
+ */
+function frameOrigin(
+  pause: { label: string; frames: DapFrame[] },
+  session: vscode.DebugSession,
+): { text: string; detail: string } {
+  const item = vscode.debug.activeStackItem;
+  const frameId =
+    item instanceof vscode.DebugStackFrame && item.session.id === session.id
+      ? item.frameId
+      : undefined;
+  const frame = pause.frames.find((f) => f.id === frameId) ?? pause.frames[0];
+  if (!frame) return { text: pause.label, detail: `Inspected while ${pause.label} was paused` };
+  const file = frame.source?.name ?? pause.label;
+  return {
+    text: file,
+    detail: `Inspected from ${frame.name}, in ${file}, paused at line ${frame.line}`,
+  };
 }
 
 /** Inspect a Persisted Objects row's object, if the row still belongs to what the view shows. */
@@ -733,7 +834,17 @@ export function inspectPersisted(view: SavedObjectsProvider, row: SavedRow | und
     );
     return;
   }
-  InspectorPanel.open({ ...target, from: PERSISTED_REGISTRY });
+  InspectorPanel.open({
+    ...target,
+    from: PERSISTED_REGISTRY,
+    origin: {
+      text: 'Persisted Objects',
+      detail:
+        target.readIn.session === 'extension'
+          ? 'Inspected from Persisted Objects: committed under gemdb.root'
+          : 'Inspected from Persisted Objects: added by its notebook, not committed yet',
+    },
+  });
 }
 
 export function registerInspector(
@@ -742,7 +853,9 @@ export function registerInspector(
 ): vscode.Disposable {
   extensionRoot = extensionPath;
   return vscode.Disposable.from(
-    vscode.commands.registerCommand(INSPECT_VARIABLE, (c: VariableContext) => inspectVariable(c)),
+    vscode.commands.registerCommand(INSPECT_VARIABLE, (c: RowContext) => inspectVariable(c)),
+    // Internal, for %inspect in the Debug Console.
+    vscode.commands.registerCommand('gemdb.inspector.openPaused', inspectPaused),
     vscode.commands.registerCommand(INSPECT_PERSISTED, (row: SavedRow) =>
       inspectPersisted(view, row),
     ),

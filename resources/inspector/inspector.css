@@ -320,6 +320,8 @@ tr.found td { background: var(--vscode-editor-findMatchHighlightBackground, var(
   font-size: 0.75em; color: var(--vscode-descriptionForeground);
   border-bottom: 1px solid var(--vscode-panel-border); padding: 6px 3px 1px;
 }
+.repr-pane { flex: 1; min-height: 0; overflow: auto; }
+.repr-pane .detail-value { flex: none; overflow: visible; min-height: 0; }
 .repr-label { font-size: 0.75em; color: var(--vscode-descriptionForeground); padding: 6px 10px 0; }
 .repr-note { font-size: 0.8em; color: var(--vscode-descriptionForeground); padding: 4px 10px; }
 /* Which Smalltalk class implements a built-in method: a note about the code, not part of it. */
@@ -327,3 +329,12 @@ tr.found td { background: var(--vscode-editor-findMatchHighlightBackground, var(
   font-family: var(--vscode-font-family); font-size: 0.75em; white-space: normal;
   color: var(--vscode-descriptionForeground); margin-bottom: 4px; user-select: none;
 }
+/* Add to Persisted Objects…, at the far end of the tab row. */
+.tab-action { margin: 2px 6px 2px auto; align-self: center; white-space: nowrap; flex-shrink: 0; }
+/* Where the object was found, beside its OOP and in the same quiet type. */
+.header-origin {
+  margin-left: auto; font-size: 0.78em; color: var(--vscode-descriptionForeground);
+  white-space: nowrap; flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+.header-origin:empty { display: none; }
+.header-origin:not(:empty) + .header-oop { margin-left: 8px; }

@@ -464,8 +464,10 @@ database, select that kernel from the kernel picker at the top right.
   listed, a list or dict as one row that opens) and leaves its name at the prompt, or `_` for a
   nested row, ready for the next line, or **Evaluate with self…**,
   which runs an expression with `self` bound to it (`len(self.history)`) and shows the answer
-  there. Lines starting with `%` are GemDB commands, not Python: `%persist p` adds `p` to
-  Persisted Objects (`%persist expr as key` for anything else), `%pending` lists the persisted
+  there. A line pasted with leading spaces runs as if typed without them. Lines starting with `%`
+  are GemDB commands, not Python: `%persist p` adds `p` to Persisted Objects (`%persist expr as
+  key` for anything else), `%inspect p` opens `p`, or any expression, in an Inspector (below),
+  `%pending` lists the persisted
   objects the notebook's next commit writes — each by its path under `gemdb.root`, with a link
   (Ctrl+click) that shows it in Persisted Objects, where each changed object is marked **M**, its
   hover sets the committed value beside the new one, and right-click **Revert to Committed Value**
@@ -499,7 +501,8 @@ database, select that kernel from the kernel picker at the top right.
   discard what is pending.
   **Debug Python File in GemDB** does the same for a `.py` file (see above). In the GemDB Shell
   and in **Run Python File in GemDB**, `breakpoint()` prints where it was and the code carries on.
-- **Inspect**, on a Variables row or a Persisted Objects row, opens the object in an Inspector
+- **Inspect**, on a Variables row, a Watch row or a Persisted Objects row (or `%inspect` in the
+  Debug Console), opens the object in an Inspector
   beside the editor: a strip of columns, one object each, with tabs for what it has — its
   **Attributes** (grouped as in Variables, the groups opening in place), its **Items** or
   **Entries** a page of 100 at a time with a box to jump to a position or a key, its whole
@@ -512,8 +515,9 @@ database, select that kernel from the kernel picker at the top right.
   outlives the pause: it reads its object in the session that holds it, so it keeps working after
   the cell resumes and between cells, and says so when the notebook is busy running one (↻ reads
   it again). **Edit Value…** changes a row, joining the notebook's transaction as **Set Value**
-  does, and ↺ puts back what the row held before; an object opened from Persisted Objects'
-  committed entries is read-only there.
+  does, and ↺ puts back what the row held before. **Add to Persisted Objects…**, on a row's menu or
+  at the end of a column's tabs, adds that object under `gemdb.root` as it does from Variables. An object
+  opened from Persisted Objects' committed entries is read-only there, and offers neither.
 - Each notebook has its own session and its own transaction, so a commit in one notebook never
   commits another notebook's half-finished changes. Closing a notebook ends its session and discards
   anything it has not committed.

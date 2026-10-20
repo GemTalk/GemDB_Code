@@ -135,13 +135,30 @@ describe('opening', () => {
     expect(postedOf('columnError')[0]!.message).toMatch(/running something.*Refresh/);
   });
 
-  it('titles the panel with the type and the session it reads in', async () => {
+  it('titles the panel with what the page names, and nothing more', async () => {
     open({ session: 'notebook', ownerKey: NB });
-    await receive({ command: 'setTitle', title: 'Point' });
-    expect(panel.title).toBe('Inspector: Point · demo.ipynb');
-    open({ session: 'extension' });
-    await receive({ command: 'setTitle', title: 'list' });
-    expect(panel.title).toBe('Inspector: list · committed');
+    await receive({ command: 'setTitle', title: 'counter · function' });
+    expect(panel.title).toBe('Inspector: counter · function');
+    await receive({ command: 'setTitle', title: '' });
+    expect(panel.title).toBe('Inspector');
+  });
+});
+
+describe('origin', () => {
+  it('passes where the object came from to every column', async () => {
+    const origin = { text: 'special_values.py', detail: 'Inspected from main' };
+    InspectorPanel.open({
+      readIn: { session: 'notebook', ownerKey: NB },
+      from: 'GemDbPauseRefs',
+      handle: 4,
+      label: 'p',
+      origin,
+    });
+    panel = __webviewPanels[__webviewPanels.length - 1]!;
+    await receive({ command: 'ready' });
+    await receive({ command: 'inspectRow', sourceColumnId: 0, handle: 31, label: 'p.x' });
+    expect(postedOf('addRoot')[0]!.origin).toEqual(origin);
+    expect(postedOf('addChild')[0]!.origin).toEqual(origin);
   });
 });
 
@@ -239,6 +256,35 @@ describe('the registry', () => {
     expect(calls.filter((c) => c.code.includes("removeKey: #'GemDbInspectorRefs'"))).toEqual([
       expect.objectContaining({ where: NB }),
     ]);
+  });
+});
+
+describe('Add to Persisted Objects…', () => {
+  it("hands the shared command the object's session, registry and name", async () => {
+    const vscode = await import('../__mocks__/vscode');
+    const spy = vi.spyOn(vscode.commands, 'executeCommand').mockResolvedValue(undefined);
+    open({ session: 'notebook', ownerKey: NB });
+    await receive({ command: 'addToPersisted', handle: 31, name: 'p.tags' });
+    expect(spy).toHaveBeenCalledWith(
+      'gemdb.savedObjects.addFromInspector',
+      expect.objectContaining({
+        ownerKey: NB,
+        notebook: 'demo.ipynb',
+        handle: 31,
+        name: 'p.tags',
+        registry: INSPECTOR_REGISTRY,
+      }),
+    );
+    spy.mockRestore();
+  });
+
+  it('declines in GemDB’s own session, where nothing would commit it', async () => {
+    const vscode = await import('../__mocks__/vscode');
+    const spy = vi.spyOn(vscode.commands, 'executeCommand').mockResolvedValue(undefined);
+    open({ session: 'extension' });
+    await receive({ command: 'addToPersisted', handle: 31, name: 'p.tags' });
+    expect(spy).not.toHaveBeenCalledWith('gemdb.savedObjects.addFromInspector', expect.anything());
+    spy.mockRestore();
   });
 });
 

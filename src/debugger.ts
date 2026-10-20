@@ -10,6 +10,7 @@ import {
   helpText,
   isConsoleCommand,
   objectLink,
+  dedented,
   parseConsoleCommand,
   pendingText,
   persistedCompletions,
@@ -141,6 +142,11 @@ export type ConsoleAnswer =
       type?: string;
       /** Opens the result like a Variables row; 0 for a leaf. */
       variablesReference: number;
+      /**
+       * The result's position in the pause's registry, leaf or not; 0 for None
+       * or a statement. What Inspect opens a console or watch result by.
+       */
+      handle?: number;
       indexedVariables?: number;
       namedVariables?: number;
       /** How its children are read: a container's items, or an object's attributes. */
@@ -176,6 +182,8 @@ export interface Pause {
   handleFor?(containerRef: number, name: string): number | undefined;
   /** Run a query in the paused session (see `HaltRequest.query`). */
   query?(code: string): Promise<string>;
+  /** The registry handle of watch `expression`'s result, as last evaluated at this pause. */
+  watchHandle?(expression: string): number | undefined;
   /**
    * Run Debug Console or watch input in frame `frameId`, with that frame's
    * names in scope, until it finishes or `signal` aborts it. On a saved stack
@@ -974,7 +982,9 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
    */
   private evaluate(request: DapRequest): void {
     const context = String(request.arguments?.context ?? 'repl');
-    const source = String(request.arguments?.expression ?? '');
+    const typed = String(request.arguments?.expression ?? '');
+    // Run what was typed without its shared indentation, so a line pasted with a leading space runs.
+    const source = context === 'repl' || context === 'watch' ? dedented(typed) : typed;
     const pause = this.pause;
     if (context === 'clipboard') {
       // Copy Value on a Variables row: the expression is the row's value
@@ -1263,6 +1273,40 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
           if (answer.startsWith('Error: ')) throw new Error(answer.slice('Error: '.length));
           tellView('gemdb.savedObjects.refresh');
           say(`Committed ${pause.label}: its changes are saved in the database.`);
+          done();
+          return;
+        }
+        case 'inspect': {
+          if (!pause.evaluate || !pause.ownerKey)
+            throw new Error('Nothing can be inspected from here.');
+          // Run once, in the console's own names, so the expression means what it means here.
+          const answer = await pause.evaluate(
+            command.expression,
+            frameId,
+            'repl',
+            new AbortController().signal,
+          );
+          if (answer.output) this.event('output', { category: 'stdout', output: answer.output });
+          if (answer.kind !== 'value') {
+            this.fail(request, answer.kind === 'error' ? answer.traceback : INTERRUPTED, false);
+            return;
+          }
+          if (!answer.handle) {
+            this.fail(
+              request,
+              `${command.expression} is None, or not a value: nothing to inspect.`,
+              false,
+            );
+            return;
+          }
+          const frame = pause.frames.find((f) => f.id === frameId) ?? pause.frames[0];
+          tellView('gemdb.inspector.openPaused', {
+            ownerKey: pause.ownerKey,
+            handle: answer.handle,
+            label: command.expression,
+            frame,
+            run: pause.label,
+          });
           done();
           return;
         }
@@ -1720,11 +1764,31 @@ export interface ConsoleHost {
 /** A pause's Debug Console, run through `host`. */
 export function debugConsole(
   host: ConsoleHost,
-): Pick<Pause, 'evaluate' | 'showRow' | 'consoleName' | 'consoleNames' | 'persistedKeys'> {
+): Pick<
+  Pause,
+  'evaluate' | 'showRow' | 'consoleName' | 'consoleNames' | 'persistedKeys' | 'watchHandle'
+> {
   const consoleRefs = new Map<number, number>();
+  // Each watch's result as last evaluated, by its expression: Inspect on a Watch row finds it here.
+  const watches = new Map<string, number>();
   return {
-    evaluate: (source, frameId, context, signal, selfHandle) =>
-      evaluateAt(host, consoleRefs, source, frameId, context, signal, selfHandle),
+    evaluate: async (source, frameId, context, signal, selfHandle) => {
+      const answer = await evaluateAt(
+        host,
+        consoleRefs,
+        source,
+        frameId,
+        context,
+        signal,
+        selfHandle,
+      );
+      if (context === 'watch') {
+        if (answer.kind === 'value' && answer.handle) watches.set(source.trim(), answer.handle);
+        else watches.delete(source.trim());
+      }
+      return answer;
+    },
+    watchHandle: (expression) => watches.get(expression.trim()),
     showRow: (handle, name) => showRowAt(host, handle, name),
     consoleName: (frameId, name, handle) => consoleNameAt(host, consoleRefs, frameId, name, handle),
     consoleNames: (frameId) => consoleNamesAt(host, consoleRefs, frameId),
@@ -1833,6 +1897,7 @@ async function evaluateAt(
         value: context === 'watch' ? row.value : reply.row.value,
         ...(row.type ? { type: row.type } : {}),
         variablesReference: row.variablesReference,
+        ...(reply.row.handle ? { handle: reply.row.handle } : {}),
         ...(row.indexedVariables ? { indexedVariables: row.indexedVariables } : {}),
         ...(row.namedVariables ? { namedVariables: row.namedVariables } : {}),
         ...(reply.row.kind ? { children: reply.row.kind } : {}),

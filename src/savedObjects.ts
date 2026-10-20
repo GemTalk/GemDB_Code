@@ -22,6 +22,7 @@ import {
   PendingChange,
   PathStep,
   PERSISTED_REGISTRY,
+  REGISTRY,
   PauseVariable,
   ROOT_LISTING_LIMIT,
   abortQuery,
@@ -1523,15 +1524,16 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
 
   /**
    * Where the Inspector finds a row's object: the session to read it in and its
-   * position in this view's registry. Undefined for a row with no object of its
-   * own (a group, a message, a saved stack) and for a row from before the view
-   * was last read, whose position may now hold something else.
+   * position in this view's registry. A saved stack is one too: it is a dict
+   * under `gemdb.root` (`savedStacks.ts`). Undefined for a row with no object of
+   * its own (a group, a message) and for a row from before the view was last
+   * read, whose position may now hold something else.
    */
   inspectTarget(row: SavedRow): { readIn: ReadIn; handle: number; label: string } | undefined {
     if (!this.isCurrent(row)) return undefined;
     switch (row.kind) {
       case 'entry':
-        return row.entry.ref && !row.entry.stack
+        return row.entry.ref
           ? {
               readIn: { session: 'extension' },
               handle: row.entry.ref,
@@ -1723,7 +1725,6 @@ async function saveVariable(
     );
     return;
   }
-  const query = pause.query;
   const handle =
     variable.variablesReference > 0
       ? variable.variablesReference
@@ -1732,12 +1733,48 @@ async function saveVariable(
     void vscode.window.showErrorMessage(`"${variable.name}" is not an object that can be added.`);
     return;
   }
+  await addToPersistedObjects(view, treeViews, {
+    query: pause.query,
+    ownerKey: pause.ownerKey,
+    notebook: pause.label,
+    handle,
+    name: variable.name,
+    registry: REGISTRY,
+  });
+}
+
+/** An object to add under `gemdb.root`: where it is, and what to call it while asking. */
+export interface AddTarget {
+  /** Runs a query in the session that holds the object. */
+  query: (code: string) => Promise<string>;
+  ownerKey: string;
+  /** The notebook's (or debugged file's) name, for the toast and the view. */
+  notebook: string;
+  /** Its position in `registry`. */
+  handle: number;
+  /** What the user knows it as: a Variables row's name, an Inspector row's expression. */
+  name: string;
+  /** The pause's registry, or the Inspector's. */
+  registry: string;
+}
+
+/**
+ * Add an object under `gemdb.root`, asking for the key: what **Add to
+ * Persisted Objects…** does, from a Variables row and from the Inspector
+ * alike, so the two read and behave the same. It does not commit.
+ */
+export async function addToPersistedObjects(
+  view: SavedObjectsProvider,
+  treeViews: Map<string, vscode.TreeView<SavedRow>>,
+  target: AddTarget,
+): Promise<void> {
+  const { query, handle, name, registry } = target;
   try {
-    const { type, label } = parseSaveSuggestion(await query(saveSuggestionQuery(handle)));
-    const base = suggestKey({ name: variable.name, type, label });
+    const { type, label } = parseSaveSuggestion(await query(saveSuggestionQuery(handle, registry)));
+    const base = suggestKey({ name, type, label });
     const suggested = unquote(orThrow(await query(freeKeyQuery(base))));
     const key = await vscode.window.showInputBox({
-      title: `Add ${variable.name} to Persisted Objects`,
+      title: `Add ${name} to Persisted Objects`,
       prompt:
         'Its key under gemdb.root. It persists at the notebook’s next commit; Python reads it ' +
         'back with gemdb.root[key].',
@@ -1755,15 +1792,15 @@ async function saveVariable(
       },
     });
     if (key === undefined) return;
-    orThrow(await query(saveToRootQuery(handle, key)));
+    orThrow(await query(saveToRootQuery(handle, key, registry)));
     view.notePending({
       key,
       type,
-      ownerKey: pause.ownerKey,
-      notebook: pause.label,
+      ownerKey: target.ownerKey,
+      notebook: target.notebook,
       at: new Date().toISOString(),
     });
-    log(`Saved ${variable.name} as ${accessCode(key)} (${pause.label}), not yet committed`);
+    log(`Saved ${name} as ${accessCode(key)} (${target.notebook}), not yet committed`);
     // Show it land: the Persisted Objects beside the Variables, opened if closed.
     const shown = treeViews.get(DEBUG_VIEW_ID);
     if (shown) {
@@ -1772,12 +1809,15 @@ async function saveVariable(
         .catch((e: unknown) => log(`Could not show ${key}: ${errorMessage(e)}`));
     }
     const copy = 'Copy Code';
-    const choice = await vscode.window.showInformationMessage(savedNotice(key, pause.label), copy);
+    const choice = await vscode.window.showInformationMessage(
+      savedNotice(key, target.notebook),
+      copy,
+    );
     if (choice === copy) {
       await vscode.env.clipboard.writeText(`import gemdb\n\nsaved = ${accessCode(key)}\n`);
     }
   } catch (e) {
-    void vscode.window.showErrorMessage(`Could not add ${variable.name}: ${errorMessage(e)}`);
+    void vscode.window.showErrorMessage(`Could not add ${name}: ${errorMessage(e)}`);
   }
 }
 
@@ -2455,6 +2495,10 @@ export function registerSavedObjects(context: vscode.ExtensionContext): SavedObj
   context.subscriptions.push(
     vscode.commands.registerCommand('gemdb.saveVariable', (ctx: VariableContext) =>
       saveVariable(view, treeViews, ctx),
+    ),
+    // Internal, for the Inspector (`inspector.ts`): its Add to Persisted Objects….
+    vscode.commands.registerCommand('gemdb.savedObjects.addFromInspector', (target: AddTarget) =>
+      addToPersistedObjects(view, treeViews, target),
     ),
     vscode.commands.registerCommand('gemdb.savedObjects.refresh', () => view.refresh()),
     vscode.commands.registerCommand('gemdb.savedObjects.goToItem', (row: SavedRow) =>

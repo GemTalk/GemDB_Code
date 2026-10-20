@@ -66,6 +66,7 @@ interface Api {
   init(opts: unknown): View;
   tabsFor(h: Header | null): { id: string; label: string }[];
   childExpression(base: string, tab: string, name: string): string;
+  titleFor(label: string, type: string): string;
 }
 
 const api = (): Api => (globalThis as unknown as { InspectorView: Api }).InspectorView;
@@ -103,7 +104,7 @@ beforeEach(() => {
   document.body.innerHTML =
     '<div id="strip"></div>' +
     '<div id="ctx" class="ctx-menu">' +
-    ['inspect', 'dive', 'edit', 'copyValue', 'copyExpression']
+    ['inspect', 'dive', 'edit', 'copyValue', 'copyExpression', 'persist']
       .map((a) => `<div class="ctx-item" data-action="${a}"></div>`)
       .join('') +
     '</div>' +
@@ -190,9 +191,50 @@ describe('the column header', () => {
     expect(col.el.root.querySelector('.header-badge')!.textContent).toBe('not committed');
   });
 
-  it('titles the panel by the type', () => {
+  it('titles the panel by what it was opened on, then the type', () => {
     openRoot();
-    expect(sent('setTitle').pop()).toEqual({ command: 'setTitle', title: 'Point' });
+    expect(sent('setTitle').pop()).toEqual({ command: 'setTitle', title: 'p · Point' });
+  });
+
+  it('keeps the end of a long expression in the title, which names this object', () => {
+    expect(api().titleFor('gemdb.root["warehouse"].orders[11999].lines', 'list')).toBe(
+      '…orders[11999].lines · list',
+    );
+    expect(api().titleFor('', 'int')).toBe('int');
+    expect(api().titleFor('gemdb.root["stack_invoice_report_py_20261019_1440"]', 'dict')).toBe(
+      '…["stack_invoice_report_py_… · dict',
+    );
+  });
+});
+
+describe('where the object came from', () => {
+  it('says so quietly in the header beside the OOP, with the detail on hover', () => {
+    const origin = {
+      text: 'special_values.py',
+      detail: 'Inspected from main, in special_values.py, paused at line 179',
+    };
+    view.handleHostMessage({
+      command: 'addRoot',
+      columnId: 0,
+      handle: 7,
+      label: 'counter',
+      header: header(),
+      editable: true,
+      origin,
+    });
+    const note = view.columns
+      .get(0)!
+      .el.root.querySelector('.header .header-origin') as HTMLElement;
+    expect(note.textContent).toBe('special_values.py');
+    expect(note.title).toBe(origin.detail);
+    // Next to the OOP, not among the tabs.
+    expect((note.nextElementSibling as HTMLElement).className).toBe('header-oop');
+    expect(view.columns.get(0)!.el.root.querySelector('.tab-bar .header-origin')).toBeNull();
+  });
+
+  it('says nothing when the panel was not told', () => {
+    const col = openRoot();
+    expect(col.el.root.querySelector('.header-origin')!.textContent).toBe('');
   });
 });
 
@@ -346,6 +388,45 @@ describe('editing', () => {
   });
 });
 
+describe('Add to Persisted Objects…', () => {
+  const rightClick = (el: Element) =>
+    el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
+
+  it("adds a row's object under the expression that reaches it", () => {
+    const col = openRoot();
+    sendRows(0, 'attributes', [row({ name: 'tags', handle: 51 })]);
+    rightClick(col.el.contentPane.querySelector('tr[data-row="0"]')!);
+    click(document.querySelector('#ctx [data-action="persist"]'));
+    expect(sent('addToPersisted')).toEqual([
+      { command: 'addToPersisted', handle: 51, name: 'p.tags' },
+    ]);
+  });
+
+  it("adds the column's own object from the button at the end of its tab row", () => {
+    const col = openRoot();
+    const button = col.el.root.querySelector('.tab-bar [data-persist-column]')!;
+    expect(button.textContent).toBe('Add to Persisted Objects…');
+    click(button);
+    expect(sent('addToPersisted').at(-1)).toEqual({
+      command: 'addToPersisted',
+      handle: 7,
+      name: 'p',
+    });
+    // A button, not a tab: the tabs are still what tabsFor gives.
+    expect(tabIds(col)).toEqual(['attributes', 'repr', 'class', 'eval']);
+  });
+
+  it('is not offered on an object read in GemDB’s own session', () => {
+    const col = openRoot(header(), 'gemdb.root["p"]', false);
+    sendRows(0, 'attributes', [row()]);
+    rightClick(col.el.contentPane.querySelector('tr[data-row="0"]')!);
+    expect(
+      (document.querySelector('#ctx [data-action="persist"]') as HTMLElement).style.display,
+    ).toBe('none');
+    expect(col.el.root.querySelector('[data-persist-column]')).toBeNull();
+  });
+});
+
 describe('paging Items and Entries', () => {
   const items = (start: number, n: number) =>
     Array.from({ length: n }, (_, i) => row({ name: `[${start + i}]`, handle: 100 + i }));
@@ -391,8 +472,14 @@ describe('paging Items and Entries', () => {
     expect(col.el.contentPane.querySelector('tr.found')!.textContent).toContain('[249]');
   });
 
+  it('shows no pager when everything fits on one page', () => {
+    const col = openRoot(header({ kind: 'dict', type: 'dict', size: 8 }));
+    sendRows(0, 'entries', [row({ name: "'kind'" })]);
+    expect(col.el.contentPane.querySelector('.pager')).toBeNull();
+  });
+
   it('says when nothing was found', () => {
-    const col = openRoot(header({ kind: 'dict', type: 'dict', size: 3 }));
+    const col = openRoot(header({ kind: 'dict', type: 'dict', size: 300 }));
     sendRows(0, 'entries', [row({ name: "'a'" })]);
     view.handleHostMessage({
       command: 'goToResult',
@@ -483,6 +570,8 @@ describe('the Repr and Class tabs', () => {
     });
     expect(col.el.contentPane.querySelector('.repr-text')!.textContent).toBe("'a\\nb'");
     expect(col.el.contentPane.querySelector('.str-text')!.textContent).toBe('a\nb');
+    // One scroller holds both, so neither stretches to fill the pane.
+    expect(col.el.contentPane.querySelectorAll('.repr-pane .detail-value')).toHaveLength(2);
   });
 
   it('lists methods by the class that defines them, and asks for one source on click', () => {
