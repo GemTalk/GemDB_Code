@@ -175,25 +175,38 @@ jobs:
       # integration suite against a real database on each of the three
       # architectures — which is a stronger gate than one run here could be.
       # What matters is that it actually passed.
-      - name: Require ci-complete to have passed on this commit
+      - name: Require this commit's push CI run to have passed
         run: |
-          # A commit can carry several ci-complete runs, because a failed run
-          # can be retried. Order is not guaranteed, so sort by start time and
-          # read the newest: taking an arbitrary one risks reading a stale
-          # success for a commit whose latest run failed.
-          conclusion=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
-            --paginate --jq '.check_runs[] | select(.name == "ci-complete") | [.started_at, .conclusion] | @tsv' |
-            sort -r | head -1 | cut -f2)
-          if [ -z "$conclusion" ]; then
-            echo "error: no ci-complete check run found for $GITHUB_SHA." >&2
+          # Push runs only, the same ones the next step takes the packages
+          # from: a dispatch can bundle grail-ref/mcp-ref other than the pins,
+          # so its verdict is about a different payload. Reading any event
+          # would let a red dispatch block a green commit, or a green one pass
+          # a red commit only for the next step to fail.
+          #
+          # The run's conclusion is ci-complete's: ci-complete needs every
+          # other job, so the run fails exactly when it does. A retry re-runs
+          # the same run, which then reports the latest attempt; sorting still
+          # guards against a commit pushed to main more than once.
+          latest=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${GITHUB_SHA}&event=push&per_page=50" \
+            --jq '.workflow_runs[] | select(.name == "CI") | [.created_at, .status, .conclusion // ""] | @tsv' |
+            sort -r | head -1)
+          if [ -z "$latest" ]; then
+            echo "error: no push-triggered CI run found for $GITHUB_SHA." >&2
             echo "CI may still be running, or this commit never went through it." >&2
             exit 1
           fi
-          if [ "$conclusion" != "success" ]; then
-            echo "error: ci-complete concluded '$conclusion' for $GITHUB_SHA, not success." >&2
+          status=$(printf '%s' "$latest" | cut -f2)
+          conclusion=$(printf '%s' "$latest" | cut -f3)
+          if [ "$status" != "completed" ]; then
+            echo "error: the push CI run for $GITHUB_SHA is still $status; dispatch again once it finishes." >&2
             exit 1
           fi
-          echo "ci-complete passed on $GITHUB_SHA."
+          if [ "$conclusion" != "success" ]; then
+            echo "error: the push CI run for $GITHUB_SHA concluded '$conclusion', not success." >&2
+            exit 1
+          fi
+          echo "The push CI run passed on $GITHUB_SHA."
 
       # The packages this release publishes already exist, and this is where
       # they are. Resolved here rather than in `collect` so that "CI's artifacts
