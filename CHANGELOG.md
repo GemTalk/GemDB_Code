@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-10-20
+
+The engine is unchanged at GemStone 4.0.0.a5, so a database GemDB Code 1.8.0 created carries over.
+The bundled Python runtime moves forward, and GemDB Code asks before installing it into a database
+that already has Python support.
+
 ### Added
 
 - **See every session on the database.** Click the Sessions row in the GemDB view, or run **GemDB:
@@ -18,6 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read is a brief administrator login, and logins are what the database has few of. When that
   login is refused — the database has no session left to give — it shows the names and processes
   any session can see, and still offers to close this window's own notebooks.
+
+### Changed
+
+- **A newer Python runtime.** Your own copy of a package Grail ships (Flask, Werkzeug, Jinja2,
+  MarkupSafe, ItsDangerous, Blinker, Django, asgiref, sqlparse, twilio), installed in a venv or on
+  `sys.path`, is now imported in preference to the bundled one, which used to win every time. A
+  class statement binds its name only once the class is complete, so a class whose body,
+  metaclass or decorator raises leaves the name as it was. Assigning `__defaults__` or
+  `__kwdefaults__` takes effect even when it adds or removes a default. numpy's `loadtxt`,
+  `np.save`/`np.load` and `np.char` now match CPython.
 
 ### Fixed
 
@@ -1137,7 +1153,8 @@ gets out of the way.
 - **`sys.exit(n)` exits 1 rather than `n`**, and **`input()` is not yet
   supported**. Both are upstream in Grail.
 
-[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.8.1...HEAD
+[1.8.1]: https://github.com/GemTalk/GemDB_Code/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.4...v1.6.0
