@@ -400,6 +400,28 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Inspector against a real 
     await runPython('p.x = 3', nb);
   });
 
+  it('keeps an object’s OOP when it is committed, so an edit’s ↺ outlives the commit', async () => {
+    await runPython('class _Probe:\n    pass\nprobe = _Probe()', nb);
+    const before = (await open('probe')).oop;
+    await runPython('import gemdb\ngemdb.root["probe_oop"] = probe\ngemdb.commit()', nb);
+    const after = await open('probe');
+    expect(after.committed).toBe(true);
+    expect(after.oop).toBe(before);
+    await runPython('import gemdb\ndel gemdb.root["probe_oop"]\ngemdb.commit()', nb);
+  });
+
+  it('can still open a value an Evaluate made when its changes are thrown away', async () => {
+    const handle = (await open('p')).row.handle;
+    const reply = parseConsoleReply(
+      await run(inspectorEvaluateQuery(handle, '[1, 2, 3]', nb.key, REG, true)),
+    );
+    expect(reply.kind).toBe('value');
+    if (reply.kind !== 'value') return;
+    const made = parseHeader(await run(openQuery(REG, reply.row.handle, REG)));
+    expect(made.row.type).toBe('list');
+    expect((await rows(made.row.handle)).map((r) => r.value)).toEqual(['1', '2', '3']);
+  });
+
   it('throws away what an Evaluate changed when asked to, as in GemDB’s own session', async () => {
     await runPython('import gemdb\ngemdb.root["probe_point"] = p\ngemdb.commit()', nb);
     const handle = (await open('p')).row.handle;

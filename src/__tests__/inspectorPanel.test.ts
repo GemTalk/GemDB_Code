@@ -438,7 +438,7 @@ describe('source', () => {
         source: '    def __init__(self):\n        pass',
       });
       expect((await fetchSource(['where', file, '3'].join(FIELD))).source).toBe(
-        `# No source to show: it was defined in ${file}, line 3, and that is not open, or has changed since.`,
+        `# No source to show: it was defined in ${file}, line 3, and that is not open, has changed since, or does not show it written inside class B.`,
       );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

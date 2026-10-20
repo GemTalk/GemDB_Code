@@ -630,9 +630,12 @@ export class InspectorPanel {
     }
     const place =
       file === '<grail>' ? `a notebook cell, at its line ${line}` : `${file}, line ${line}`;
-    return {
-      source: `# No source to show: it was defined in ${place}, and that is not open, or has changed since.`,
-    };
+    // The owner check declines a def it cannot place inside its class: under a class header over
+    // several lines, under `if TYPE_CHECKING:`, or assigned onto the class afterwards.
+    const why = within
+      ? `that is not open, has changed since, or does not show it written inside class ${within}`
+      : 'that is not open, or has changed since';
+    return { source: `# No source to show: it was defined in ${place}, and ${why}.` };
   }
 
   /**

@@ -209,7 +209,9 @@ labelled with the expression (or `(evaluated)` for several lines).
   (`__firstlineno__`). The panel finds the lines itself (`sourceAt`): in a file on disk, or in the
   open notebook's cells, the latest cell first, and only a `def` inside the class it belongs to,
   so one class's `__init__` is not shown as another's. A cell edited since it ran shows only
-  where the member was.
+  where the member was, and so does a `def` the check cannot place inside its class: under a
+  class header over several lines, under `if TYPE_CHECKING:`, or assigned onto the class
+  afterwards. Showing nothing there is the price of never showing the wrong one.
 - **`function` reports Smalltalk to Python**: its `__bases__` is `(BlockClosure,)`, its type's
   docstring is `object`'s, and an AttributeError on one names `ExecBlock`. Filed as
   GemTalk/Grail#1724; the Class tab shows what Grail answers.
