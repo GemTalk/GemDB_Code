@@ -97,6 +97,18 @@ ten seconds gets SIGTERM, which skips `finally`. The temporary files are
 removed only after topaz has gone, because the driver writes the status file
 as it unwinds and would otherwise recreate one the trap had just removed.
 
+That measurement spawned the wrapper as the pty's own process, which a
+terminal tab never does: there the tab's shell owns the pty, and the wrapper
+is its job. Closing the tab then hangs the wrapper up twice, once from the
+shell passing the hangup on and once from the kernel, and on Ubuntu 26.04
+(bash 5.3) the second arrived as the trap began and ended the wrapper on its
+first line: topaz was left running under init, no `finally` ran, and the
+temporary files stayed. 1.8.0 shipped like that, and closing a tab on Linux
+stopped the run in two tries out of seven. On macOS no second hangup reached
+the trap. So the trap now ignores SIGHUP, and the integration test closes a
+pty with an interactive shell in front of the wrapper, which fails against
+the 1.8.0 wrapper on Linux.
+
 Errors in the driver are caught as
 `AbstractException`, not `Error`: Grail's Python exceptions live outside the
 `Error` branch, which is why grail.tpz's own file mode exits 0 on a Python

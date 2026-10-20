@@ -329,18 +329,29 @@ exit [lindex $result 3]
     await new Promise((resolve) =>
       execFile('bash', [cliPath(), '-c', 'print(1)'], { cwd: workDir, env }, resolve),
     );
-    // Closing expect's side of the pty is what closing a terminal tab does:
-    // the kernel hangs up the foreground process group, wrapper and topaz.
+    // Closing expect's side of the pty is what closing a terminal tab does.
+    // The wrapper runs as a job of an interactive shell that owns the pty, as
+    // in a tab, and not as the pty's own process: then the shell passes the
+    // hangup on and the kernel sends one too, and on Linux the second ended
+    // the wrapper before its trap could stop topaz. Spawned directly, it was
+    // hung up once, and this passed against that wrapper.
     const scriptPath = path.join(workDir, 'hangup.exp');
     fs.writeFileSync(
       scriptPath,
       `set timeout 90
-spawn bash ${cliPath()} quiet.py
+set env(PS1) "ready> "
+spawn bash --norc --noprofile -i
+expect {
+  -ex "ready> " {}
+  timeout { puts stderr "TIMEOUT waiting for the shell"; exit 9 }
+}
+send "bash ${cliPath()} quiet.py\\r"
 expect {
   -ex "serving" {}
   timeout { puts stderr "TIMEOUT waiting to serve"; exit 9 }
 }
-puts "WRAPPER=[exp_pid] TOPAZ=[exec pgrep -P [exp_pid] -x topaz]"
+set wrapper [exec pgrep -P [exp_pid] -x bash]
+puts "WRAPPER=$wrapper TOPAZ=[exec pgrep -P $wrapper -x topaz]"
 close
 `,
     );
