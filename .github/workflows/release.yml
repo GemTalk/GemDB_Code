@@ -208,9 +208,13 @@ jobs:
           # and an expired one is listed with `"expired": true` rather than
           # vanishing, so a naive name check would find three artifacts and
           # then fail to download them.
+          #
+          # Push runs only: a dispatch can bundle a ref other than the pins in
+          # vendor-pins.sh (grail-ref, mcp-ref), so its packages are not what
+          # this commit says it ships.
           candidates=$(gh api \
             "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${GITHUB_SHA}&status=success&per_page=50" \
-            --jq '.workflow_runs[] | select(.name == "CI") | [.created_at, .id] | @tsv' |
+            --jq '.workflow_runs[] | select(.name == "CI" and .event == "push") | [.created_at, .id] | @tsv' |
             sort -r | cut -f2)
 
           if [ -z "$candidates" ]; then

@@ -53,7 +53,16 @@ on:
 concurrency:
   # Per-ref: a new commit on the same PR cancels the older in-flight run. Merge
   # queue entries each get their own ref, so they never cancel one another.
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  #
+  # Pushes to main and dispatches get a group per run instead, so nothing
+  # cancels them. A main run is what release.yml publishes from: it needs
+  # ci-complete green on that exact commit and the 90-day .vsix uploads, so a
+  # merge that cancelled the previous merge's run left that commit
+  # unreleasable until someone re-ran CI on it. `cancel-in-progress: false`
+  # would not be enough, since GitHub still cancels a *pending* run once a
+  # newer one queues behind the same in-progress run. The run id, not the sha,
+  # keeps a dispatch on a main commit out of that commit's push group.
+  group: ci-${{ github.workflow }}-${{ github.ref }}${{ (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 # An explicit block instead of the default GITHUB_TOKEN scope. Nothing here
