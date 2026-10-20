@@ -2,7 +2,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { dedented } from './consoleCommands';
+import { dedented, withoutComment } from './consoleCommands';
 import { jupyterTraceback } from './consoleTraceback';
 import { DEBUG_TYPE, DapFrame, pauseForDebugSession, placeFrame } from './debugger';
 import {
@@ -741,10 +741,13 @@ export class InspectorPanel {
       }
       if (reply.kind === 'failed') throw new Error(reply.message);
       if (reply.kind === 'interrupted') throw new Error('Interrupted.');
-      if (reply.kind !== 'value') throw new Error('That is not a value.');
-      // Then stored as Set Value stores one (setattr, or assignment), by the object's handle.
+      // Then stored as Set Value stores one (setattr, or assignment), by the object's handle. A
+      // None answers `none`, with no row: the parentheses make a statement a SyntaxError, so
+      // `none` here can only be the value None, which is stored as Set Value would store it.
       const raw = await this.query(
-        setVariableQuery(0n, containerRef, name, '', 0, this.registry, reply.row.handle),
+        reply.kind === 'value'
+          ? setVariableQuery(0n, containerRef, name, '', 0, this.registry, reply.row.handle)
+          : setVariableQuery(0n, containerRef, name, 'None', 0, this.registry),
         READ,
       );
       if (raw.startsWith('Error: ')) throw new Error(raw.slice('Error: '.length));
@@ -941,7 +944,7 @@ export class InspectorPanel {
  * lines would put newlines in the header and the tab, so it is `(evaluated)`.
  */
 function labelOf(source: string): string {
-  const text = source.trim();
+  const text = withoutComment(source).trim();
   return text.includes('\n') ? '(evaluated)' : text;
 }
 
@@ -1001,7 +1004,7 @@ export async function inspectVariable(context: RowContext): Promise<void> {
     readIn: { session: 'notebook', ownerKey: pause.ownerKey },
     from: REGISTRY,
     handle,
-    label: name,
+    label: labelOf(name),
     origin: frameOrigin(pause, session),
   });
 }

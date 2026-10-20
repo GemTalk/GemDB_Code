@@ -587,8 +587,8 @@ export function chooseNotebook(
  * `PAUSED_QUERY_BUDGET_MS`, as a paused query always is by default, for a read
  * that runs the user's `__repr__`. A caller that says `budget: false` gets no
  * budget at a pause either, and `passHalts` runs past a breakpoint() the query
- * reaches, as a Debug Console line does; with neither said, a paused query runs
- * as a Variables read does (`PausedQueryOptions`).
+ * reaches, as a Debug Console line does, paused or not; with neither said, a
+ * paused query runs as a Variables read does (`PausedQueryOptions`).
  *
  * Direct runs on one notebook are chained, one at a time, as the extension
  * session's are (`extensionQuery`) and a pause's are: a session runs one call
@@ -616,7 +616,11 @@ export async function inNotebook(
       ? setInterval(() => interruptSessionFor(ownerKey), PAUSED_QUERY_BUDGET_MS)
       : undefined;
     try {
-      return await session.executeAsync(code);
+      return await session.executeAsync(
+        code,
+        undefined,
+        options.passHalts ? { passHalts: true } : {},
+      );
     } finally {
       clearInterval(timer);
     }

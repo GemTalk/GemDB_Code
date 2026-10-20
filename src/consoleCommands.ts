@@ -71,6 +71,28 @@ export type ConsoleCommand =
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /**
+ * `source` without a trailing `# comment` on its last line, for a label made
+ * from it: `x  # note` labels its children `x.y`, not `(x  # note).y`, which
+ * would comment out its own `).y`. A `#` inside a string literal stays.
+ */
+export function withoutComment(source: string): string {
+  let quote: string | undefined;
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i];
+    if (quote) {
+      if (c === '\\') i++;
+      else if (c === quote) quote = undefined;
+    } else if (c === '"' || c === "'") quote = c;
+    else if (c === '#') {
+      const end = source.indexOf('\n', i);
+      if (end < 0) return source.slice(0, i).trimEnd();
+      i = end;
+    }
+  }
+  return source;
+}
+
+/**
  * What was typed in the Debug Console or a watch, without the indentation
  * every line of it shares, as Python's `textwrap.dedent` takes it off: a line
  * pasted from a document or a chat often starts with a space, which Python

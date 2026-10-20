@@ -14,6 +14,7 @@ import {
   parseConsoleCommand,
   pendingText,
   persistedCompletions,
+  withoutComment,
 } from './consoleCommands';
 import { PlacedFrame, jupyterTraceback } from './consoleTraceback';
 import {
@@ -1303,7 +1304,7 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
           tellView('gemdb.inspector.openPaused', {
             ownerKey: pause.ownerKey,
             handle: answer.handle,
-            label: command.expression,
+            label: withoutComment(command.expression),
             frame,
             run: pause.label,
           });

@@ -505,6 +505,17 @@ describe('editing', () => {
     expect(calls[1]!.code).toContain('ifTrue: [reg at: 33]');
   });
 
+  it('stores None when the expression is None, which answers with no row of its own', async () => {
+    await open({ session: 'notebook', ownerKey: NB });
+    answer = (code) =>
+      code.includes('kind := #value') ? record(['none', '0', '', '']) : standardAnswers(code);
+    calls.length = 0;
+    await receive({ ...edit, valueHandle: 31, expression: 'None' });
+    expect(postedOf('setSlotResult').at(-1)).toMatchObject({ ok: true });
+    expect(calls[1]!.code).toContain('(\nNone\n)');
+    expect(calls[1]!.code).not.toContain('ifTrue: [reg at: 33]');
+  });
+
   it('marks the row, keeps the mark across a Refresh, and puts back the value it first held', async () => {
     await open({ session: 'notebook', ownerKey: NB });
     await receive({ ...edit, valueHandle: 31 });

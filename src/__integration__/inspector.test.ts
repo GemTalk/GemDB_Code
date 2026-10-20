@@ -389,6 +389,17 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Inspector against a real 
     await runPython('p.x = 3', nb);
   });
 
+  it('stores None as an edit, which answers none rather than a row', async () => {
+    const handle = (await open('p')).row.handle;
+    const reply = parseConsoleReply(
+      await run(inspectorEvaluateQuery(handle, '(\nNone\n)', nb.key, REG)),
+    );
+    expect(reply.kind).toBe('none');
+    await run(setVariableQuery(0n, handle, 'x', 'None', 0, REG));
+    expect((await runPython('p.x is None', nb)).value).toBe('True');
+    await runPython('p.x = 3', nb);
+  });
+
   it('throws away what an Evaluate changed when asked to, as in GemDB’s own session', async () => {
     await runPython('import gemdb\ngemdb.root["probe_point"] = p\ngemdb.commit()', nb);
     const handle = (await open('p')).row.handle;

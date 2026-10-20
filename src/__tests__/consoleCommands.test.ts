@@ -6,6 +6,7 @@ import {
   isConsoleCommand,
   objectLink,
   dedented,
+  withoutComment,
   parseConsoleCommand,
   pendingText,
   persistedCompletions,
@@ -448,6 +449,15 @@ describe('leaving out what reads exactly as committed', () => {
     expect(pendingText(withoutUnchanged(onlyTwo, same, same), 'a.ipynb', String)).toBe(
       'Nothing changes on commit: the 2 objects a.ipynb changed read as committed again — reverted, or set to what they already held.',
     );
+  });
+});
+
+describe('withoutComment', () => {
+  it('takes a trailing comment off, and leaves a # inside a string', () => {
+    expect(withoutComment('x  # note')).toBe('x');
+    expect(withoutComment("d['#'].y")).toBe("d['#'].y");
+    expect(withoutComment('d["a\\"#"]  # why')).toBe('d["a\\"#"]');
+    expect(withoutComment('p.x')).toBe('p.x');
   });
 });
 

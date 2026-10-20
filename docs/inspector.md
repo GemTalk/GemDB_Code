@@ -142,19 +142,20 @@ finishes (↻ re-reads the column's object, keeping its tab, page, Class sub-tab
 Reads carry the two-second budget a Variables read does. **The user's own code** — an Evaluate
 line, an edit's expression — runs in a notebook's session as a Debug Console line does: no time
 limit, and straight past a `breakpoint()` it reaches (`{ budget: false, passHalts: true }`, which
-`inNotebook` hands to the pause). In the extension's session it keeps the budget, so a runaway
+`inNotebook` hands to the pause, or to `executeAsync` between cells, so the debugger never opens
+on the Inspector's own query). In the extension's session it keeps the budget, so a runaway
 line cannot hold the session Persisted Objects reads with.
 
 ## Edits
 
 **Edit Value…** sees what the Evaluate tab sees: the typed text runs as an Evaluate line does
 (`self` is the column's object, the program's names are in scope), in parentheses, so a statement
-fails as a SyntaxError rather than storing `None`, Set Value's own rule. The value it produces is
-then stored as **Set Value** stores one — `setattr`, or assignment — by `setVariableQuery` with
-`valueHandle`. Like Set Value, it changes the object in its session's transaction, and the next
-commit writes it. The editor starts with the row's value as shown; Enter on it unchanged is no
-change, since that text is a repr (perhaps cut short, perhaps `list with 150 items`), not Python
-that rebuilds the object.
+fails as a SyntaxError rather than storing `None`, Set Value's own rule, while an expression whose
+value is None stores None. The value it produces is then stored as **Set Value** stores one —
+`setattr`, or assignment — by `setVariableQuery` with `valueHandle`. Like Set Value, it changes
+the object in its session's transaction, and the next commit writes it. The editor starts with the
+row's value as shown; Enter on it unchanged is no change, since that text is a repr (perhaps cut
+short, perhaps `list with 150 items`), not Python that rebuilds the object.
 
 ↺ puts back what the row held **before its first edit**: the row's own handle, which the listing
 registered, is kept, by the column object's OOP and the row's name — which a Refresh does not

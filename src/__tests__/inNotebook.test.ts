@@ -11,6 +11,7 @@ const NB = 'file:///demo.ipynb';
 let pauseQuery: ((code: string, options?: unknown) => Promise<string>) | undefined;
 let inFlight = 0;
 const ran: string[] = [];
+const directOptions: unknown[] = [];
 
 vi.mock('../debugger', () => ({
   pauseForOwner: () => (pauseQuery ? { query: pauseQuery } : undefined),
@@ -25,7 +26,8 @@ vi.mock('../session', async (importOriginal) => {
     sessionForIfOpen: (key: string) =>
       key === NB
         ? {
-            executeAsync: async (code: string) => {
+            executeAsync: async (code: string, _out?: unknown, options?: unknown) => {
+              directOptions.push(options);
               if (inFlight > 0) throw new Error('This session is busy running something else.');
               inFlight++;
               await new Promise((resolve) => setTimeout(resolve, 5));
@@ -69,5 +71,13 @@ describe('inNotebook', () => {
       { budget: true, passHalts: false },
       undefined,
     ]);
+  });
+
+  it('runs past a breakpoint() on an idle notebook too, when the caller asks', async () => {
+    pauseQuery = undefined;
+    directOptions.length = 0;
+    await inNotebook(NB, 'evaluate', { budget: false, passHalts: true });
+    await inNotebook(NB, 'a read', { budget: true });
+    expect(directOptions).toEqual([{ passHalts: true }, {}]);
   });
 });
