@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { __setSetting } from '../__mocks__/vscode';
-import { createDatabase } from '../database';
+import { IMAGE_RECORD, INITIAL_EXTENT, createDatabase } from '../database';
 import { databaseExists, databasePath, extentPath } from '../paths';
 
 // Passes through unless a test hooks it: the extent's chmod is the last step
@@ -45,7 +45,7 @@ function makeEngine(withExtent = true): string {
   fs.mkdirSync(path.join(dir, 'bin'));
   fs.writeFileSync(path.join(dir, 'sys', 'community.starter.key'), 'key');
   fs.writeFileSync(path.join(dir, 'data', 'system.conf'), '# defaults');
-  if (withExtent) fs.writeFileSync(path.join(dir, 'bin', 'extent0.dbf'), 'extent');
+  if (withExtent) fs.writeFileSync(path.join(dir, 'bin', INITIAL_EXTENT), 'extent');
   return dir;
 }
 
@@ -181,5 +181,19 @@ describe('creating the database', () => {
     expect(() => createDatabase(engine)).toThrow(/holds notes\.txt\)/);
     expect(fs.readdirSync(databasePath())).toEqual(['notes.txt']);
     expect(fs.existsSync(staging())).toBe(false);
+  });
+});
+
+describe('the image the database starts from', () => {
+  it('is the engine’s Rowan extent, and the database records so', () => {
+    fs.writeFileSync(path.join(engine, 'bin', 'extent0.dbf'), 'plain');
+
+    createDatabase(engine);
+
+    expect(INITIAL_EXTENT).toBe('extent0.rowan3.dbf');
+    expect(fs.readFileSync(extentPath(), 'utf8')).toBe('extent');
+    expect(fs.readFileSync(path.join(databasePath(), 'conf', IMAGE_RECORD), 'utf8').trim()).toBe(
+      INITIAL_EXTENT,
+    );
   });
 });

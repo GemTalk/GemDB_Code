@@ -693,6 +693,14 @@ fi
 # was before. The files go last, because the driver writes the status file as
 # it unwinds. They are listed in a loop rather than kept in an array, because
 # 3.2 calls an empty array unbound under set -u.
+#
+# A terminal hangs this script up twice, and the trap ignores the second. The
+# tab's own shell, not this script, owns the terminal: on a hangup it passes
+# SIGHUP on to its job, and the kernel hangs up the foreground group as well.
+# Measured on Ubuntu 26.04 (bash 5.3), the second arrived as end_run began and
+# ended the script on its first line, leaving topaz running, the finally
+# blocks unrun and the files behind; on macOS none reached the trap. A script
+# that owns the terminal itself, as under expect, is hung up only once.
 CODE_FILE=""
 GEMDB_STATUS_FILE=""
 GEMDB_TOPAZ_LOG=""
@@ -715,6 +723,7 @@ stop_topaz() {
   wait_for_exit "$pid" 50 || true
 }
 end_run() {
+  trap '' HUP
   if [ -n "$TOPAZ_RUNNING" ]; then stop_topaz; fi
   local f
   for f in "$CODE_FILE" "\${CODE_FILE%.py}" "$GEMDB_STATUS_FILE" "$GEMDB_TOPAZ_LOG"; do

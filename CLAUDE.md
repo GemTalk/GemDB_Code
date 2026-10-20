@@ -159,7 +159,12 @@ in that row rather than leaving it to be discovered at a `SessionLimitError`.
 
 `sessionRegistry()` is the map from a session to the UI that owns it, idlest
 first, carrying GemStone's own session serial so a row here can be matched to
-`gemdb.sessions.all()` over there. The status view shows it.
+`gemdb.sessions.all()` over there. The status view shows it, and clicking that
+row opens the Sessions tab (`sessionsView.ts`), which lists every session on
+the database. It reads as DataCurator, because `gemdb` is refused
+`descriptionOfSession:` for any session but its own (2151, measured on a5) —
+so it reads on demand and never polls, and falls back to the shared cache's
+names when that login is refused.
 
 That registry is private to one extension host, which is why every session also
 publishes itself with **`System cacheName:`** — `cacheNameFor` in `session.ts`.
@@ -254,6 +259,15 @@ first-install path, and `assertSafeToStart` before the stone starts (the
 `beforeStoneStart` that `ensureProcesses` runs inside the stone lock), because
 an extension update reaches that line without preparing anything — engine
 downloaded, database present, Grail staged, so `isInstalled()` is true.
+
+**The database starts from the Rowan image, and one that did not is refused
+the same way.** Grail and the MCP server became Rowan projects on 2026-10-19,
+and Rowan cannot be added to an image afterwards, so `createDatabase` copies
+`bin/extent0.rowan3.dbf` and records it in `conf/image`.
+`assertDatabaseHasRowan`, beside `assertDatabaseMatchesEngine` in both places,
+refuses a database without that record — one GemDB 1.8 or earlier made from
+the plain `extent0.dbf` — because the engine version is the same, so the
+version guard cannot tell them apart. See `docs/grail.md`.
 
 **Below its free-space threshold the stone stops collecting garbage.** GemDB
 caps the extent at the license's 10240 MB, reserves it on disk, and sets a

@@ -18,7 +18,23 @@ prepared extent made the first install fast and made every upgrade afterwards
 take a different, less-exercised path, which is precisely backwards: the path
 that has to keep working for the life of the database is the one that should
 run every time. So `createDatabase` always copies the engine's own
-`bin/extent0.dbf`, and `ensureRunning` files Grail in.
+`bin/extent0.rowan3.dbf`, and `ensureRunning` installs Grail into it.
+
+**Grail is a Rowan project, so the database starts from the Rowan image.**
+From Grail #1721 (2026-10-19) Grail is Tonel packages in `src/Grail-*` with a
+Rowan project in `rowan/`, and its installer loads them with Rowan
+(`scripts/install_rowan.gs`) instead of filing in `src/smalltalk/install.gs`.
+Rowan cannot be added to an image afterwards, so GemDB creates its database
+from `extent0.rowan3.dbf` (`INITIAL_EXTENT` in `database.ts`) and records that
+in `conf/image`. A database without the record was made by GemDB 1.8 or earlier
+from the plain `extent0.dbf`, and `assertDatabaseHasRowan` refuses it before
+setup and before the stone starts, as `assertDatabaseMatchesEngine` does for an
+engine change. Moving such a database across is manual: recreate it.
+`install-grail.sh` also probes for Rowan before loading, which is what catches
+an external database. The Rowan load runs in one gem with
+`GEM_TEMPOBJ_CACHE_SIZE=1000000`, Grail's own figure, because it compiles the
+whole project as one patch set. It needs no privilege beyond the two `gemdb`
+holds: measured on 4.0.0.a5, `grail.test.ts` loads it as `gemdb`.
 
 What that costs is minutes of topaz on a first run, worth paying once per user
 and not worth paying once per integration test file — so
@@ -96,6 +112,18 @@ within a quarter of a second in the measurement. A topaz still running after
 ten seconds gets SIGTERM, which skips `finally`. The temporary files are
 removed only after topaz has gone, because the driver writes the status file
 as it unwinds and would otherwise recreate one the trap had just removed.
+
+That measurement spawned the wrapper as the pty's own process, which a
+terminal tab never does: there the tab's shell owns the pty, and the wrapper
+is its job. Closing the tab then hangs the wrapper up twice, once from the
+shell passing the hangup on and once from the kernel, and on Ubuntu 26.04
+(bash 5.3) the second arrived as the trap began and ended the wrapper on its
+first line: topaz was left running under init, no `finally` ran, and the
+temporary files stayed. 1.8.0 shipped like that, and closing a tab on Linux
+stopped the run in two tries out of seven. On macOS no second hangup reached
+the trap. So the trap now ignores SIGHUP, and the integration test closes a
+pty with an interactive shell in front of the wrapper, which fails against
+the 1.8.0 wrapper on Linux.
 
 Errors in the driver are caught as
 `AbstractException`, not `Error`: Grail's Python exceptions live outside the

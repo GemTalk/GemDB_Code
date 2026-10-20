@@ -11,52 +11,39 @@
 # Bumping a pin is a one-line PR to this file; a green CI run on it is the
 # proof the new upstream commit works.
 
-# Grail: main as of 2026-10-18, 71 commits (31 PRs) on from the previous pin
-# (9fb5d23). install.sh and every script resources/install-grail.sh drives are
-# byte-identical, there are no deletions or renames, and every name in
-# bundle-grail.sh's REQUIRED list is still there. install.gs only adds: one
-# runtime input (GrailDynLoadRequest) and test classes, all under src/. The C
-# shim's SOURCE changed (numpy, cffi, C-type introspection), so every platform
-# rebuilds it; the Makefile adds shim_cffi.o to the default build, the only new
-# includes are libc's, and the GCI calls are unchanged and declared in a5's
-# headers. The gemdb Python package is unchanged. Grail #1667 (a bare `import
-# flask` dirties every fresh session on a deployed stone) is still open.
+# Grail: main as of 2026-10-20, 31 commits (8 PRs) on from the previous pin
+# (a78e8c0) -- and GRAIL IS NOW A ROWAN PROJECT (#1721, #1722). Its packages are
+# Tonel in src/Grail-*, its project is in rowan/, and install.sh loads it with
+# Rowan (scripts/install_rowan.gs) instead of filing in src/smalltalk/install.gs,
+# which is gone, as is scripts/kernel_class_extensions.gs. It needs an image
+# started from the engine's bin/extent0.rowan3.dbf, so GemDB now creates its
+# database from that (database.ts), install-grail.sh runs the Rowan load with
+# Grail's GEM_TEMPOBJ_CACHE_SIZE and probes for Rowan first, and bundle-grail.sh
+# ships rowan/ and checks every package and doit the component names instead of
+# scanning `input` lines, of which none remain. The shim and its Makefile are
+# as before; the gemdb Python package is unchanged.
 #
-# What users get: class bodies and the object model closer to CPython's
-# (#1709, #1685, #1697, #1671, #1704 and more); numpy.random's Cython modules
-# loading and nested extension loads (#1665); cffi entry points, `import
-# uvicorn`, hashlib.sha224/sha384 (#1676); FastAPI's core tests at 99.8%
-# (#1654); and abandoned generators running their `finally` blocks (#1684).
-#
-# Behaviour changes a user can meet: a class body now runs `raise`, `assert`,
-# `match` and conditional `del`/`import` it used to skip, and one that fails
-# leaves the name unbound (#1709); bad `__slots__` raise TypeError (#1697); a
-# `@property` wins over an instance value of the same name (#1671); a coroutine
-# is no longer a GeneratorType (#1672); `x *= y` where both sides decline raises
-# instead of storing NotImplemented (#1690); and patching `json.dumps`,
-# `math.sqrt` or `os.getcwd` now reaches their callers (#1654).
-PINNED_GRAIL_REF=a78e8c03c78bf957acb9119ae10c01567acdda06
+# Also in the range: #1716 moves the bundled third-party packages (flask,
+# werkzeug, jinja2, django, ...) to src/python/bundled, searched after sys.path,
+# so a user's own copy wins; #1718 binds a class's name only once the class is
+# complete; #1719 makes a shape-changing __defaults__ assignment rebind calls;
+# #1720 fixes numpy's census cases; #1723 stops a bare `import flask` dirtying
+# every fresh session on a deployed stone (#1667, filed by GemDB); and #1725
+# makes a request to a deployed Flask app write nothing (#1229).
+PINNED_GRAIL_REF=c8cbc92dfc183fd61f5fd0b7c92b56e82c0b686b
 
-# mcp_server: main as of 2026-09-25, 26 commits (8 PRs) on from the previous pin
-# (afa3790). No load.gs changed, and every selector src/mcp.ts sends --
-# toolsetNames:, toolsetOptions:, workerUserId:, serverTitle:, forkOnPort:,
-# McpServer defaultToolsetNames -- is still there, as is the "gem session N
-# (host pid P)" status line it parses. What moved:
-#
-# - Upstream CI moved to 4.0.0.a3, the engine GemDB already pins. a3's
-#   JsonParser refuses trailing whitespace after the outer value, so the server
-#   now strips it before parsing (#54) -- a pretty-printed or newline-ended
-#   request body was a -32700 under a3 before this.
-# - Breaking upstream, inert here: the worker bootstrap selector gained an
-#   `instructions:` keyword (#45), because the `initialize` instructions are
-#   now router config (McpRouter>>serverInstructions:). The router sends that
-#   selector to its own workers; GemDB never does. GemDB serves the full default
-#   surface plus Grail, so the stock instructions, which name the transaction
-#   tools, stay accurate.
-# - find_python_senders places each call and reference in an IR-compiled method
-#   with its own line (#46, #51) instead of one `line ?` per method, and
-#   eval_python runs as `__main__` (#52).
-PINNED_MCP_REF=d836520816d47bc5b8bb43386293f1b9dffbefce
+# mcp_server: 0.9.0 (main as of 2026-10-19), 20 commits (9 PRs) on from the
+# previous pin (d836520) -- and, like Grail, NOW A ROWAN PROJECT (#57). Its six
+# packages are Tonel in src/Mcp-* (components Core, Auth, Grail), its project is
+# in rowan/, and install.sh loads it with Rowan by default; the src/*/load.gs
+# loaders are gone. The Grail component -- the Python toolset GemDB serves --
+# loads ONLY through Rowan: the release's file-out (--from-gs) carries Core and
+# Auth. GemDB's flags are unchanged (--grail --no-auth), bundle-mcp.sh ships
+# rowan/ and checks every package the components name, and check-vsix.sh looks
+# for the Rowan router class. Also: every forked gem reaches the stone by
+# localhost (#63), topaz runs with -i so no .topazini is read (#62), and
+# find_python_senders takes its positions from Grail's send sites (#65).
+PINNED_MCP_REF=7ab106728285c41f573b5469b8c341dfdad988aa
 
 # GemDB Stats: a release asset, not a commit. Its web build needs the Flutter
 # SDK to compile, which GemDB Code's CI does not carry, so GemDB Stats'

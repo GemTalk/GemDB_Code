@@ -220,8 +220,8 @@ commits past holds nothing back, and a prompt then would be noise.
 asked, once per build, and only by someone who asked for the database**
 (`grailFileInAgreed` in `lifecycle.ts`). It used to be automated, behind
 `gemdb.reinstallPythonOnUpdate` (default on), on the reasoning that Grail is
-GemDB's own code. It is not inert: `install.gs` removes Grail's dictionaries and
-rebuilds every runtime class, and committed objects keep pointing at the old
+GemDB's own code. It is not inert: the install (then `install.gs`, now a Rowan
+load) removes Grail's dictionaries and rebuilds every runtime class, and committed objects keep pointing at the old
 ones. Measured 2026-10-15 on a database populated under 1.6.0's Grail
 (`beef473`), Brain Freeze included: after filing in `9fb5d23`, committed
 datetimes, dates, timedeltas, Decimals, tuples, sets, instances of user classes

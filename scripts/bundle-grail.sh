@@ -138,9 +138,10 @@ echo "Grail commit: $GRAIL_COMMIT ($GRAIL_DESCRIBE)"
 # on a new developer's first run.
 REQUIRED=(
     install_base.sh
-    src/smalltalk/install.gs
+    scripts/install_rowan.gs
+    rowan/specs/Grail.ston
+    rowan/project.ston
     scripts/check_base_installed.gs
-    scripts/kernel_class_extensions.gs
     scripts/deployGemdb.gs
     scripts/deployUnicodedata.gs
     scripts/set_base_marker.gs
@@ -193,6 +194,9 @@ mkdir -p "$DEST"
 cp -R "$SRC/src" "$DEST/src"
 rm -rf "$DEST/src/c"
 cp -R "$SRC/scripts" "$DEST/scripts"
+# Grail is a Rowan project: rowan/ holds the project, load spec and component
+# that scripts/install_rowan.gs loads, with the packages in src/ (Tonel).
+cp -R "$SRC/rowan" "$DEST/rowan"
 # install_base.sh is at Grail's top level, and GemDB's installer shells out to
 # it for the once-per-extent SystemUser steps -- so it has to travel with the
 # payload like the scripts/ directory does.
@@ -202,50 +206,46 @@ done
 find "$DEST" \( -name '*.o' -o -name '*.out' -o -name '__pycache__' \) -exec rm -rf {} + 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# Verify every file the topaz scripts read is actually in the payload.
+# Verify every package the Rowan load names is actually in the payload.
 # ---------------------------------------------------------------------------
-# `input <path>` is how a .gs script pulls in another file, and topaz resolves
-# it relative to the working directory -- so a missing target is not caught
-# until the install is already running against a live database. Scanning the
-# assembled payload for those targets turns that into a packaging error, here,
-# where someone is watching.
-#
-# The match is deliberately narrow in two ways. The `./` prefix is optional, so
-# both `input src/x.gs` and `input ./src/x.gs` are seen. And the target must end
-# in `.gs`, because prose inside comments occasionally begins a line with the
-# word "input" — without that anchor the scan reports words like "rather" as
-# missing files, and a check that cries wolf gets ignored.
-#
-# out/gen/ is skipped: resources/install-grail.sh generates it at install time.
-echo "Checking that every 'input' target is present"
+# Rowan loads the packages its components list, from src/ in Tonel form, and
+# runs each component's pre-/post-load doits -- so a package or doit missing
+# from the payload is not caught until the install is already running against
+# a live database. Checking the component files' own lists here turns that into
+# a packaging error, where someone is watching. (Before Grail became a Rowan
+# project this scanned install.gs's `input` lines instead.)
+echo "Checking that every Rowan package and doit is present"
 CHECKED=0
 MISSING=0
-while IFS= read -r target; do
-    case "$target" in
-        out/*) continue ;;
-    esac
-    CHECKED=$((CHECKED + 1))
-    if [ ! -e "$DEST/$target" ]; then
-        echo "  MISSING: $target" >&2
-        MISSING=$((MISSING + 1))
-    fi
-done < <(find "$DEST" -name '*.gs' -exec \
-    sed -nE 's|^[[:space:]]*input[[:space:]]+(\./)?([A-Za-z0-9_./-]+\.gs).*|\2|p' {} + | sort -u)
+for component in "$DEST"/rowan/components/*.ston; do
+    while IFS= read -r package; do
+        CHECKED=$((CHECKED + 1))
+        if [ ! -f "$DEST/src/$package/package.st" ]; then
+            echo "  MISSING package: src/$package" >&2
+            MISSING=$((MISSING + 1))
+        fi
+    done < <(awk '/#packageNames/,/\]/' "$component" | grep -oE "'[A-Za-z0-9-]+'" | tr -d "'")
+    while IFS= read -r doit; do
+        if [ ! -f "$DEST/rowan/components/$doit.st" ]; then
+            echo "  MISSING doit: rowan/components/$doit.st" >&2
+            MISSING=$((MISSING + 1))
+        fi
+    done < <(sed -nE "s/.*#(pre|post)loadDoitName : '([^']+)'.*/\\2/p" "$component")
+done
 
 if [ "$MISSING" -ne 0 ]; then
-    echo "ERROR: $MISSING file(s) referenced by Grail's install scripts are not in the payload." >&2
+    echo "ERROR: $MISSING package(s) or doit(s) the Rowan load names are not in the payload." >&2
     echo "  Grail's source tree has changed shape; adjust the copy step above." >&2
     exit 1
 fi
 # A scan that silently matches nothing is worse than no scan: it reports success
-# for a payload it never looked at. An earlier version of this regex did exactly
-# that, and the missing file surfaced minutes into a user's install instead.
-if [ "$CHECKED" -lt 100 ]; then
-    echo "ERROR: only $CHECKED 'input' targets found; Grail files in hundreds." >&2
+# for a payload it never looked at.
+if [ "$CHECKED" -lt 10 ]; then
+    echo "ERROR: only $CHECKED Rowan packages found; Grail loads a dozen." >&2
     echo "  The scan above is not matching -- fix it rather than trusting this build." >&2
     exit 1
 fi
-echo "  $CHECKED referenced files, all present"
+echo "  $CHECKED Rowan packages, all present"
 
 mkdir -p "$DEST/prebuilt/$PLATFORM_KEY"
 [ -n "$PRESERVED" ] && cp -R "$PRESERVED/." "$DEST/prebuilt/"

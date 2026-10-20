@@ -332,6 +332,12 @@
         "icon": "$(trash)"
       },
       {
+        "command": "gemdb.showSessions",
+        "title": "Show Database Sessions",
+        "category": "GemDB",
+        "icon": "$(plug)"
+      },
+      {
         "command": "gemdb.stopSession",
         "title": "Stop a Database Session…",
         "category": "GemDB"
@@ -571,9 +577,14 @@
           "group": "1_gemdb@4"
         },
         {
-          "command": "gemdb.stopSession",
+          "command": "gemdb.showSessions",
           "when": "view == gemdbStatus && gemdb.running",
           "group": "1_gemdb@5"
+        },
+        {
+          "command": "gemdb.stopSession",
+          "when": "view == gemdbStatus && gemdb.running",
+          "group": "1_gemdb@6"
         },
         {
           "command": "gemdb.savedObjects.refresh",
@@ -842,7 +853,7 @@
           {
             "id": "demo",
             "title": "Explore a real application",
-            "description": "Brain Freeze is a small web app, built with Flask, whose data, classes, and views are stored in the database. Installing it clones a copy into `~/GemDB/brain-freeze`, opens it, and displays its README.\n[Install Brain Freeze Demo](command:gemdb.cloneBrainFreeze)",
+            "description": "Brain Freeze is a small web app, built with Flask, whose data, classes, and views are stored in the database. Installing it clones a copy of [its GitHub repository](https://github.com/GemTalk/brain-freeze) into `~/GemDB/brain-freeze`, opens it, and displays its README.\n[Install Brain Freeze Demo](command:gemdb.cloneBrainFreeze)",
             "media": {
               "markdown": "resources/walkthrough/demo.md"
             },
@@ -915,14 +926,14 @@
     "@vscode/extension-telemetry": "^1.5.2",
     "@vscode/vsce": "^3.7.1",
     "esbuild": "^0.28.1",
-    "eslint": "^10.0.0",
-    "globals": "^17.12.0",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
     "jsdom": "^29.1.1",
-    "lefthook": "^2.1.12",
-    "ovsx": "^0.10.5",
-    "prettier": "^3.9.5",
+    "lefthook": "^2.2.2",
+    "ovsx": "^1.2.0",
+    "prettier": "^3.9.10",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
-    "typescript-eslint": "^8.20.0",
-    "vitest": "^4.0.18"
+    "typescript-eslint": "^8.71.2",
+    "vitest": "^5.0.4"
   }
 }

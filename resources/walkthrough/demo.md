@@ -14,8 +14,9 @@ in the demo's notebook.
 ### Installing it
 
 Click **Install Brain Freeze Demo**, or choose it from the **⋯** menu in the GemDB Code sidebar.
-GemDB Code clones the demo from GitHub into `~/GemDB/brain-freeze`, opens that folder, and displays
-the demo's README, which walks you through the required steps and notes important details.
+GemDB Code clones the demo from [GitHub](https://github.com/GemTalk/brain-freeze) into
+`~/GemDB/brain-freeze`, opens that folder, and displays the demo's README, which walks you through
+the required steps and notes important details.
 
 - If your window is empty, the demo opens in it. Otherwise, it opens in a new window and leaves your
   current folder as it is.

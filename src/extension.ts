@@ -56,6 +56,7 @@ import { debugFile } from './debugFile';
 import { openRepl, runFile } from './repl';
 import { closeSessionFor, logoutAll, setInputHandler } from './session';
 import { GemDbStatusBar } from './statusBar';
+import { refreshSessions, showSessions, vscodeSessionsWorld } from './sessionsView';
 import { registerStatistics } from './statistics';
 import { openTodaysStatistics, startPruningStatistics } from './statmonitor';
 import { StatusViewProvider, onRunningChange } from './statusView';
@@ -106,9 +107,13 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const statusBar = new GemDbStatusBar();
   // Persisted Objects reads gemdb.root only while the database runs, so it reads again when
-  // the status panel sees the database start or stop; it is registered below.
+  // the status panel sees the database start or stop; it is registered below. So does an open
+  // Sessions tab.
   const savedObjectsView: { refresh?: () => void } = {};
-  const runningChanged = onRunningChange(() => savedObjectsView.refresh?.());
+  const runningChanged = onRunningChange(() => {
+    savedObjectsView.refresh?.();
+    refreshSessions();
+  });
   const status = new StatusViewProvider(extensionPath, (state) => {
     statusBar.refresh();
     runningChanged(state);
@@ -344,6 +349,9 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand('gemdb.stopSession', () =>
       stopSessionCommand(maintenanceHooks),
+    ),
+    vscode.commands.registerCommand('gemdb.showSessions', () =>
+      showSessions(vscodeSessionsWorld(maintenanceHooks)),
     ),
     vscode.commands.registerCommand('gemdb.openTodaysStatistics', () => openTodaysStatistics()),
   );

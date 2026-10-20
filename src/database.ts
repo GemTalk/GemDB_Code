@@ -2,7 +2,13 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
-import { STONE_NAME, databasePasswordPath, engineVersion, rootPath } from './config';
+import {
+  STONE_NAME,
+  databasePasswordPath,
+  engineVersion,
+  isExternalDatabase,
+  rootPath,
+} from './config';
 import { log, logStep } from './log';
 import { isOnNfs } from './networkFileSystem';
 import { databaseExists, databasePath, enginePath, ensureRootPath, extentPath } from './paths';
@@ -125,7 +131,7 @@ export function createDatabase(enginePath: string): boolean {
   // the `gemdb` command among them — finds it from the beginning.
   ensurePasswordFile(path.join(staging, 'conf', 'gemdb.password'));
 
-  const stock = path.join(enginePath, 'bin', 'extent0.dbf');
+  const stock = path.join(enginePath, 'bin', INITIAL_EXTENT);
   if (!fs.existsSync(stock)) {
     throw new Error(`The engine at ${enginePath} has no initial extent at ${stock}.`);
   }
@@ -135,6 +141,9 @@ export function createDatabase(enginePath: string): boolean {
   // The extent ships read-only in the product tree; the engine must be able to
   // write to this copy.
   fs.chmodSync(extent, 0o644);
+  // Which image the database started from, since nothing in the extent says so
+  // without a login: see assertDatabaseHasRowan.
+  fs.writeFileSync(path.join(staging, 'conf', IMAGE_RECORD), `${INITIAL_EXTENT}\n`);
 
   // `clearDatabaseDirWithoutExtent` has already removed any `db/` it could, so
   // a rename that still finds one there is refused the same way.
@@ -496,6 +505,45 @@ export function repositoryVersion(enginePath: string): string | undefined {
 export class DatabaseVersionError extends Error {}
 
 /**
+ * The image every GemDB database starts from: the engine's extent with Rowan 3
+ * in it. Grail and the MCP server are Rowan projects, installed by a Rowan load,
+ * and Rowan cannot be added to an image afterwards.
+ */
+export const INITIAL_EXTENT = 'extent0.rowan3.dbf';
+
+/** The file under `conf/` that names the image the database started from. */
+export const IMAGE_RECORD = 'image';
+
+/**
+ * Refuse a database created before GemDB started from the Rowan image.
+ *
+ * Up to 1.8, GemDB created its database from the engine's plain `extent0.dbf`.
+ * Grail and the MCP server now install only through Rowan, which that image
+ * does not have and cannot be given in place, so the install would fail deep
+ * inside a Rowan load. The engine version is the same, so
+ * `assertDatabaseMatchesEngine` does not notice. Nothing in the extent says
+ * which image it came from without logging in, so `createDatabase` records it
+ * in `conf/image`, and a database without that record is one an earlier GemDB
+ * created. Checked in the same two places as the engine version, for the same
+ * reasons: before setup, and before the stone starts, since an extension update
+ * reaches a start without setup.
+ *
+ * Not for an external database, whose image is its administrator's;
+ * `install-grail.sh` probes for Rowan there and says the same thing.
+ */
+export function assertDatabaseHasRowan(): void {
+  if (isExternalDatabase() || !databaseExists()) return;
+  if (fs.existsSync(path.join(databasePath(), 'conf', IMAGE_RECORD))) return;
+  throw new DatabaseVersionError(
+    `The database at ${databasePath()} was created by an earlier GemDB, from an image ` +
+      'without Rowan. Python support and the MCP server now install through Rowan, which ' +
+      'cannot be added to an existing database, so it has to be recreated: delete ' +
+      `${databasePath()} and start GemDB again. Anything stored in it is lost, so copy out ` +
+      'whatever you still need first.',
+  );
+}
+
+/**
  * Refuse to touch a database an older engine wrote.
  *
  * This exists because the failure it replaces is so much worse than an error
@@ -585,6 +633,7 @@ export function assertSafeToStart(): void {
   assertDatabaseIsLocal();
   const engine = enginePath();
   if (engine) assertDatabaseMatchesEngine(engine, engineVersion());
+  assertDatabaseHasRowan();
   ensureSpaceLimits();
   assertRoomForExtent();
 }

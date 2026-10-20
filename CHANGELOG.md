@@ -22,9 +22,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from Variables. `%inspect expr` in the Debug Console opens any result. The tab names the
   variable and its type (`counter · function`), and the file it came from shows small in the
   header, beside its OOP. It is Jasper's Inspector, brought over for Python.
+- **See every session on the database.** Click the Sessions row in the GemDB view, or run **GemDB:
+  Show Database Sessions**, for a tab listing every session on the database, not only this window's:
+  what each one is (a notebook, a GemDB Shell, another window, topaz, the MCP server, the database's
+  own gems), its user, process, how old its view is and how many commits behind, and which one is
+  holding back garbage collection. **Stop…** on a row asks first, as **Stop a Database Session…**
+  does. The tab reads when it opens and when you press Refresh, never on a timer: each read is a
+  brief administrator login, and logins are what the database has few of. When that login is refused
+  — the database has no session left to give — it shows the names and processes any session can see,
+  and still offers to close this window's own notebooks.
+
+### Changed
+
+- **Your database now starts from GemStone's Rowan image, so start with a fresh one.** Python
+  support and the MCP server are now Rowan projects and install with Rowan, which a database created
+  by an earlier GemDB Code does not have and cannot be given. Delete `~/GemDB/db` before starting
+  this release; GemDB Code refuses an earlier database with a message saying so, rather than failing
+  partway through installing Python support. A database another administrator runs needs to have
+  been created from `extent0.rowan3.dbf` too.
+- **A newer Python runtime.** Your own copy of a package Grail ships (Flask, Werkzeug, Jinja2,
+  MarkupSafe, ItsDangerous, Blinker, Django, asgiref, sqlparse, twilio), installed in a venv or on
+  `sys.path`, is now imported in preference to the bundled one, which used to win every time. A
+  class statement binds its name only once the class is complete, so a class whose body, metaclass
+  or decorator raises leaves the name as it was. Assigning `__defaults__` or `__kwdefaults__` takes
+  effect even when it adds or removes a default. `import flask` no longer leaves each new session
+  with something to commit, and a request to a Flask app stored in the database writes nothing, so
+  `with gemdb.transaction():` works after either.
+- **A newer MCP server (0.9.0).** Every session it starts reaches the database by `localhost`, and
+  `find_python_senders` reports each call where Python sends it.
 
 ### Fixed
 
+- **Closing the terminal ends a `gemdb` run on Linux too.** 1.8.0 made closing the terminal tab of
+  `gemdb app.py`, or of **Run Python File in GemDB**, stop the program as Ctrl+C would. On Linux it
+  usually did not: the program carried on out of sight, its `finally` blocks unrun, holding its
+  database session. macOS was not affected.
 - **A line or block pasted into the Debug Console with leading spaces runs**, and so does a watch
   expression written that way. It used to fail with `IndentationError: unexpected indent`; the
   indentation every line shares is now taken off before it runs, as Python's `textwrap.dedent`
