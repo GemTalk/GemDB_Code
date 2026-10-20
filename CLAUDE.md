@@ -159,7 +159,12 @@ in that row rather than leaving it to be discovered at a `SessionLimitError`.
 
 `sessionRegistry()` is the map from a session to the UI that owns it, idlest
 first, carrying GemStone's own session serial so a row here can be matched to
-`gemdb.sessions.all()` over there. The status view shows it.
+`gemdb.sessions.all()` over there. The status view shows it, and clicking that
+row opens the Sessions tab (`sessionsView.ts`), which lists every session on
+the database. It reads as DataCurator, because `gemdb` is refused
+`descriptionOfSession:` for any session but its own (2151, measured on a5) —
+so it reads on demand and never polls, and falls back to the shared cache's
+names when that login is refused.
 
 That registry is private to one extension host, which is why every session also
 publishes itself with **`System cacheName:`** — `cacheNameFor` in `session.ts`.

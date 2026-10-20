@@ -332,6 +332,12 @@
         "icon": "$(trash)"
       },
       {
+        "command": "gemdb.showSessions",
+        "title": "Show Database Sessions",
+        "category": "GemDB",
+        "icon": "$(plug)"
+      },
+      {
         "command": "gemdb.stopSession",
         "title": "Stop a Database Session…",
         "category": "GemDB"
@@ -561,9 +567,14 @@
           "group": "1_gemdb@4"
         },
         {
-          "command": "gemdb.stopSession",
+          "command": "gemdb.showSessions",
           "when": "view == gemdbStatus && gemdb.running",
           "group": "1_gemdb@5"
+        },
+        {
+          "command": "gemdb.stopSession",
+          "when": "view == gemdbStatus && gemdb.running",
+          "group": "1_gemdb@6"
         },
         {
           "command": "gemdb.savedObjects.refresh",
@@ -807,7 +818,7 @@
           {
             "id": "demo",
             "title": "Explore a real application",
-            "description": "Brain Freeze is a small web app, built with Flask, whose data, classes, and views are stored in the database. Installing it clones a copy into `~/GemDB/brain-freeze`, opens it, and displays its README.\n[Install Brain Freeze Demo](command:gemdb.cloneBrainFreeze)",
+            "description": "Brain Freeze is a small web app, built with Flask, whose data, classes, and views are stored in the database. Installing it clones a copy of [its GitHub repository](https://github.com/GemTalk/brain-freeze) into `~/GemDB/brain-freeze`, opens it, and displays its README.\n[Install Brain Freeze Demo](command:gemdb.cloneBrainFreeze)",
             "media": {
               "markdown": "resources/walkthrough/demo.md"
             },

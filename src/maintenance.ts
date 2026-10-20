@@ -307,6 +307,10 @@ export interface DatabaseSession {
   behind: number;
   /** One of the stone's own gems (reclaim, symbol creation), never offered for stopping. */
   system: boolean;
+  /** The gem's process id: the client's own for a linked login, an RPC gem's otherwise. */
+  pid: number;
+  /** The host the gem runs on, as the stone knows it. */
+  host: string;
 }
 
 /** The rows `SESSIONS_QUERY` answers, skipping any it cannot read. */
@@ -314,8 +318,8 @@ export function parseSessions(answer: string): DatabaseSession[] {
   return answer
     .split('\n')
     .map((line) => line.split('\t'))
-    .filter((cells) => cells.length >= 7)
-    .map(([id, user, name, age, oldest, behind, system]) => ({
+    .filter((cells) => cells.length >= 9)
+    .map(([id, user, name, age, oldest, behind, system, pid, host]) => ({
       id: Number(id),
       user,
       name,
@@ -323,6 +327,8 @@ export function parseSessions(answer: string): DatabaseSession[] {
       holdsOldest: oldest === 'true',
       behind: Number(behind),
       system: system === 'true',
+      pid: Number(pid),
+      host,
     }))
     .filter((s) => Number.isInteger(s.id) && Number.isFinite(s.viewAgeSeconds));
 }
@@ -363,8 +369,9 @@ const BEHIND_QUERY = '((System descriptionOfSession: System session) at: 16) pri
 
 /**
  * One tab-separated line per session: id, user, published name, view age,
- * holds the oldest commit record, commits behind, system gem. Slot numbers
- * are `System descriptionOfSession:`'s, measured on 4.0.0.a4: 5 is the time
+ * holds the oldest commit record, commits behind, system gem, pid, host. Slot
+ * numbers are `System descriptionOfSession:`'s, measured on 4.0.0.a4: 2 is the
+ * gem's pid and 3 its host, 5 is the time
  * of the last begin/commit/abort in `System timeGmt` seconds, 8 the
  * oldest-commit-record flag, 16 commits behind, 17 a system gem's kind (nil
  * for an ordinary session). The names are cache slots whose fourth field is
@@ -384,7 +391,9 @@ System currentSessions do: [:id | | d |
     print: now - (d at: 5); tab;
     print: (d at: 8) == true; tab;
     print: ((d at: 16) ifNil: [0]); tab;
-    print: (d at: 17) notNil; lf].
+    print: (d at: 17) notNil; tab;
+    print: (d at: 2); tab;
+    nextPutAll: (d at: 3) asString; lf].
 w contents`;
 
 /**
@@ -1002,9 +1011,94 @@ export function databaseSessions(): DatabaseSession[] {
   });
 }
 
+/** One session as the shared cache publishes it: all `gemdb` can see of another. */
+export interface PublishedSession {
+  id: number;
+  /** What it published with `System cacheName:`, or the engine's stock name. */
+  name: string;
+  pid: number;
+}
+
+/**
+ * The gems in the shared cache, one tab-separated line each: session id,
+ * name, pid. Readable by any session, without `SessionAccess` — measured on
+ * 4.0.0.a5 as `gemdb`, which is refused `descriptionOfSession:` for every
+ * session but its own (2151).
+ */
+const PUBLISHED_SESSIONS_QUERY = `| w |
+w := WriteStream on: String new.
+System cacheStatisticsForAllSlots do: [:row |
+  ((row at: 4) = 8 and: [(row at: 3) > 0]) ifTrue: [
+    w print: (row at: 3); tab; nextPutAll: (row at: 1); tab; print: (row at: 2); lf]].
+w contents`;
+
+/** The rows `PUBLISHED_SESSIONS_QUERY` answers, skipping any it cannot read. */
+export function parsePublishedSessions(answer: string): PublishedSession[] {
+  return answer
+    .split('\n')
+    .map((line) => line.split('\t'))
+    .filter((cells) => cells.length >= 3)
+    .map(([id, name, pid]) => ({ id: Number(id), name, pid: Number(pid) }))
+    .filter((s) => Number.isInteger(s.id));
+}
+
+/**
+ * Every session on the stone as far as one of this window's sessions can
+ * tell, logging nothing in — for when DataCurator cannot log in, which is
+ * when the database has no session left to give, or an external database
+ * whose account does not hold `SessionAccess`. Undefined when this window
+ * holds no session that is free to ask.
+ */
+export function publishedSessions(): PublishedSession[] | undefined {
+  const answer = probe(PUBLISHED_SESSIONS_QUERY);
+  return answer === undefined ? undefined : parsePublishedSessions(answer);
+}
+
 /** Stop a session by id, as DataCurator: `stopSession:` needs `SystemControl`. */
 export function stopDatabaseSession(id: number): void {
   asAdmin((session) => session.execute(`System stopSession: ${id}. 'stopped'`));
+}
+
+/**
+ * Ask before stopping session `id`, then stop it: through its owner when this
+ * window holds it, so the window forgets it too, and as DataCurator otherwise.
+ * Answers whether it was stopped.
+ */
+export async function askToStopSession(
+  id: number,
+  label: string,
+  hooks: MaintenanceHooks,
+): Promise<boolean> {
+  const owner = windowSessions().find((s) => s.serial === id)?.owner;
+  const stop = 'Stop Session';
+  const sure = await vscode.window.showWarningMessage(
+    `Stop ${label}?`,
+    {
+      modal: true,
+      detail:
+        'Anything it has not committed is lost.' +
+        (owner?.kind === 'notebook'
+          ? ' The notebook logs in again at its next cell, with no variables.'
+          : ''),
+    },
+    stop,
+  );
+  if (sure !== stop) return false;
+
+  let stopped = false;
+  try {
+    if (owner) {
+      closeSessionFor(owner.key);
+    } else {
+      stopDatabaseSession(id);
+    }
+    log(`Stopped session ${id} (${label}).`);
+    stopped = true;
+  } catch (e) {
+    void vscode.window.showErrorMessage(`Could not stop ${label}: ${errorMessage(e)}`);
+  }
+  hooks.changed();
+  return stopped;
 }
 
 /**
@@ -1064,32 +1158,5 @@ export async function stopSessionCommand(hooks: MaintenanceHooks): Promise<void>
     },
   );
   if (!picked) return;
-
-  const owner = mine.get(picked.session.id)?.owner;
-  const stop = 'Stop Session';
-  const sure = await vscode.window.showWarningMessage(
-    `Stop ${picked.label}?`,
-    {
-      modal: true,
-      detail:
-        'Anything it has not committed is lost.' +
-        (owner?.kind === 'notebook'
-          ? ' The notebook logs in again at its next cell, with no variables.'
-          : ''),
-    },
-    stop,
-  );
-  if (sure !== stop) return;
-
-  try {
-    if (owner) {
-      closeSessionFor(owner.key);
-    } else {
-      stopDatabaseSession(picked.session.id);
-    }
-    log(`Stopped session ${picked.session.id} (${picked.label}).`);
-  } catch (e) {
-    void vscode.window.showErrorMessage(`Could not stop ${picked.label}: ${errorMessage(e)}`);
-  }
-  hooks.changed();
+  await askToStopSession(picked.session.id, picked.label, hooks);
 }

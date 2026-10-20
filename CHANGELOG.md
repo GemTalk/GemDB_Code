@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **See every session on the database.** Click the Sessions row in the GemDB view, or run **GemDB:
+  Show Database Sessions**, for a tab listing every session on the database, not only this
+  window's: what each one is (a notebook, a GemDB Shell, another window, topaz, the MCP server, the
+  database's own gems), its user, process, how old its view is and how many commits behind, and
+  which one is holding back garbage collection. **Stop…** on a row asks first, as **Stop a Database
+  Session…** does. The tab reads when it opens and when you press Refresh, never on a timer: each
+  read is a brief administrator login, and logins are what the database has few of. When that
+  login is refused — the database has no session left to give — it shows the names and processes
+  any session can see, and still offers to close this window's own notebooks.
+
 ## [1.8.0] - 2026-10-18
 
 The database engine moves to GemStone 4.0.0.a5, and the bundled Python runtime moves forward. Start

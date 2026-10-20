@@ -573,8 +573,10 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
             )
             .join('\n') +
           `\n\nIdle longest: ${idlest.owner.label}. The database allows a limited number of ` +
-          'sessions at once, shared with other windows and its own gems.',
+          'sessions at once, shared with other windows and its own gems.' +
+          '\n\nClick to see every session on the database.',
         icon: new vscode.ThemeIcon('plug'),
+        command: { command: 'gemdb.showSessions', title: 'Show Database Sessions' },
       });
     }
 

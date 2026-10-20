@@ -7,6 +7,7 @@ import {
 } from '../config';
 import {
   DatabaseSession,
+  PublishedSession,
   GC_HEADROOM_MB,
   QUIET_MS,
   SPACE_GC_SPACING_MS,
@@ -19,6 +20,7 @@ import {
   isFull,
   nextFullState,
   parseMfcReport,
+  parsePublishedSessions,
   parseSessions,
   parseSpaceReading,
   roomLeftMb,
@@ -173,11 +175,11 @@ describe('what a collection reports', () => {
 
 describe('the sessions on the stone', () => {
   const answer = [
-    '2\tGcUser\tGcReclaim\t40\ttrue\t0\ttrue',
-    '3\tSymbolUser\tSymbolGem\t40\ttrue\t0\ttrue',
-    '4\tDataCurator\tGemDB nb analysis\t7200\ttrue\t34\tfalse',
-    '5\tDataCurator\tGemDB Code\t5\tfalse\t0\tfalse',
-    '6\tDataCurator\t\t600\tfalse\t3\tfalse',
+    '2\tGcUser\tGcReclaim\t40\ttrue\t0\ttrue\t19109\tlocalhost',
+    '3\tSymbolUser\tSymbolGem\t40\ttrue\t0\ttrue\t19110\tlocalhost',
+    '4\tDataCurator\tGemDB nb analysis\t7200\ttrue\t34\tfalse\t19268\tlocalhost',
+    '5\tDataCurator\tGemDB Code\t5\tfalse\t0\tfalse\t19268\tlocalhost',
+    '6\tDataCurator\t\t600\tfalse\t3\tfalse\t26210\tbuildhost',
     '',
   ].join('\n');
 
@@ -193,11 +195,26 @@ describe('the sessions on the stone', () => {
       holdsOldest: true,
       behind: 34,
       system: false,
+      pid: 19268,
+      host: 'localhost',
     });
   });
 
   it('skips what is not a row', () => {
     expect(parseSessions('a MessageNotUnderstood occurred')).toEqual([]);
+  });
+
+  it('reads what the shared cache publishes, for when DataCurator cannot log in', () => {
+    const published = parsePublishedSessions(
+      ['3\tSymbolGem\t19110', '4\tGemDB Code\t19268', '6\tMcpRouter:50390\t19320', ''].join('\n'),
+    );
+
+    expect(published).toEqual<PublishedSession[]>([
+      { id: 3, name: 'SymbolGem', pid: 19110 },
+      { id: 4, name: 'GemDB Code', pid: 19268 },
+      { id: 6, name: 'McpRouter:50390', pid: 19320 },
+    ]);
+    expect(parsePublishedSessions('a SecurityError occurred')).toEqual([]);
   });
 
   it('never offers the stone’s own gems, or the window’s own administrative session', () => {
