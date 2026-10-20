@@ -464,6 +464,12 @@ describe('dedented', () => {
     expect(dedented('  a = 1\n\n  b = 2')).toBe('a = 1\n\nb = 2');
   });
 
+  it('takes off only indentation the lines share as text: a tab is not two spaces', () => {
+    expect(dedented('\tx = 1\n  y = 2')).toBe('\tx = 1\n  y = 2');
+    expect(dedented('  \tx\n  y')).toBe('\tx\ny');
+    expect(dedented('  x = 1\r\n  y = 2')).toBe('x = 1\r\ny = 2');
+  });
+
   it('leaves unindented text as it is', () => {
     expect(dedented('x = 1\n  y')).toBe('x = 1\n  y');
   });

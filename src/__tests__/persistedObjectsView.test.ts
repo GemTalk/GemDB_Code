@@ -752,6 +752,20 @@ describe('saved stacks', () => {
     });
   });
 
+  it('offers an entry with nothing inside to the Inspector too, by its own handle', async () => {
+    gem.committed.set('greeting', 'str');
+    const { view } = setUp();
+
+    const [root] = await topOf(view);
+    const [entry] = await view.getChildren(root);
+
+    expect(view.inspectTarget(entry)).toMatchObject({
+      readIn: { session: 'extension' },
+      handle: expect.any(Number),
+      label: 'gemdb.root["greeting"]',
+    });
+  });
+
   it('opens the stack in the debugger, rebuilt from the database, with its saved source', async () => {
     gem.committed.set('stack_bp', 'dict');
     gem.stacks.set('stack_bp', snapshot('breakpoint.ipynb'));

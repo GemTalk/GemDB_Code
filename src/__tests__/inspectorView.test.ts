@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /// <reference lib="dom" />
-import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll, beforeEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -60,6 +60,7 @@ interface Column {
 interface View {
   columns: { get(id: number): Column | undefined; columns: Column[] };
   handleHostMessage(msg: Record<string, unknown>): void;
+  destroy(): void;
 }
 
 interface Api {
@@ -103,7 +104,7 @@ let view: View;
 beforeEach(() => {
   document.body.innerHTML =
     '<div id="strip"></div>' +
-    '<div id="ctx" class="ctx-menu">' +
+    '<div id="ctx" class="ctx-menu"><div class="ctx-sep" data-edit-sep></div>' +
     ['inspect', 'dive', 'edit', 'copyValue', 'copyExpression', 'persist']
       .map((a) => `<div class="ctx-item" data-action="${a}"></div>`)
       .join('') +
@@ -121,6 +122,9 @@ beforeEach(() => {
     minColumnWidth: 280,
   });
 });
+
+// Each test starts a view in the same document; this one's listeners go with it.
+afterEach(() => view.destroy());
 
 function openRoot(h: Header = header(), label = 'p', editable = true): Column {
   view.handleHostMessage({
@@ -171,7 +175,7 @@ describe('which tabs an object gets', () => {
     expect(tabIds(col)).toEqual(['attributes', 'repr', 'class', 'eval']);
     expect(col.activeTab).toBe('attributes');
     expect(sent('fetchTab')).toEqual([
-      { command: 'fetchTab', columnId: 0, handle: 7, tab: 'attributes', start: 0 },
+      { command: 'fetchTab', columnId: 0, handle: 7, oop: '123456', tab: 'attributes', start: 0 },
     ]);
   });
 });
@@ -282,7 +286,9 @@ describe('attribute groups', () => {
     expect(heading.textContent).toContain('special variables');
     expect(heading.textContent).toContain('3');
     click(heading);
-    expect(sent('fetchGroup')).toEqual([{ command: 'fetchGroup', columnId: 0, groupRef: 60 }]);
+    expect(sent('fetchGroup')).toEqual([
+      { command: 'fetchGroup', columnId: 0, handle: 7, oop: '123456', groupRef: 60, size: 3 },
+    ]);
     view.handleHostMessage({
       command: 'groupData',
       columnId: 0,
@@ -317,6 +323,8 @@ describe('attribute groups', () => {
         containerRef: 60,
         name: 'count',
         valueHandle: 61,
+        selfHandle: 7,
+        oop: '123456',
         expression: '4',
       },
     ]);
@@ -341,6 +349,8 @@ describe('editing', () => {
         containerRef: 7,
         name: 'x',
         valueHandle: 50,
+        selfHandle: 7,
+        oop: '123456',
         expression: 'self.y + 1',
       },
     ]);
@@ -371,7 +381,14 @@ describe('editing', () => {
     sendRows(0, 'attributes', [row({ value: '4', revertible: true })]);
     click(col.el.contentPane.querySelector('[data-revert="0"]'));
     expect(sent('revertSlot')).toEqual([
-      { command: 'revertSlot', columnId: 0, containerRef: 7, name: 'x' },
+      {
+        command: 'revertSlot',
+        columnId: 0,
+        containerRef: 7,
+        selfHandle: 7,
+        oop: '123456',
+        name: 'x',
+      },
     ]);
   });
 
@@ -443,7 +460,7 @@ describe('paging Items and Entries', () => {
     posted.length = 0;
     click(col.el.contentPane.querySelector('[data-page="1"]'));
     expect(sent('fetchTab')).toEqual([
-      { command: 'fetchTab', columnId: 0, handle: 7, tab: 'items', start: 100 },
+      { command: 'fetchTab', columnId: 0, handle: 7, oop: '123456', tab: 'items', start: 100 },
     ]);
     sendRows(0, 'items', items(200, 50), 200);
     expect(col.el.contentPane.querySelector('.pager .toolbar-label')!.textContent).toBe(
@@ -466,7 +483,7 @@ describe('paging Items and Entries', () => {
     posted.length = 0;
     view.handleHostMessage({ command: 'goToResult', columnId: 0, tab: 'items', index: -1 });
     expect(sent('fetchTab')).toEqual([
-      { command: 'fetchTab', columnId: 0, handle: 7, tab: 'items', start: 200 },
+      { command: 'fetchTab', columnId: 0, handle: 7, oop: '123456', tab: 'items', start: 200 },
     ]);
     sendRows(0, 'items', items(200, 50), 200);
     expect(col.el.contentPane.querySelector('tr.found')!.textContent).toContain('[249]');
@@ -498,9 +515,8 @@ describe('Back, Forward and Refresh', () => {
     const tr = col.el.contentPane.querySelector('tr[data-row="0"]')!;
     tr.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    // Every test's init wires the document again, and jsdom keeps one document for the file, so
-    // earlier views answer the Enter too; the newest one's message is the last.
-    expect(sent('diveHere').at(-1)).toEqual({
+    expect(sent('diveHere')).toHaveLength(1);
+    expect(sent('diveHere')[0]).toEqual({
       command: 'diveHere',
       columnId: 0,
       handle: 51,
@@ -520,7 +536,7 @@ describe('Back, Forward and Refresh', () => {
     posted.length = 0;
     click(col.el.root.querySelector('.nav-back'));
     expect(sent('diveHere')).toEqual([
-      { command: 'diveHere', columnId: 0, handle: 7, label: 'p', remember: false },
+      { command: 'diveHere', columnId: 0, handle: 7, label: 'p', remember: false, historyIndex: 0 },
     ]);
   });
 
@@ -589,10 +605,10 @@ describe('the Repr and Class tabs', () => {
         isClass: false,
         mro: ['__main__.Point', 'object'],
         members: [
-          { owner: 'Point', name: '__init__', kind: 'method' },
-          { owner: 'Point', name: 'norm', kind: 'method' },
-          { owner: 'Point', name: 'origin', kind: 'classmethod' },
-          { owner: 'Point', name: 'scale', kind: 'attribute' },
+          { owner: 'Point', ownerIndex: 0, name: '__init__', kind: 'method' },
+          { owner: 'Point', ownerIndex: 0, name: 'norm', kind: 'method' },
+          { owner: 'Point', ownerIndex: 0, name: 'origin', kind: 'classmethod' },
+          { owner: 'Point', ownerIndex: 0, name: 'scale', kind: 'attribute' },
         ],
       },
     });
@@ -602,11 +618,20 @@ describe('the Repr and Class tabs', () => {
     expect(names).toEqual(['norm', 'origin', '__init__']);
     click(col.el.contentPane.querySelector('[data-member="norm"]'));
     expect(sent('fetchSource')).toEqual([
-      { command: 'fetchSource', columnId: 0, handle: 7, owner: 'Point', name: 'norm' },
+      {
+        command: 'fetchSource',
+        columnId: 0,
+        handle: 7,
+        ownerIndex: 0,
+        owner: 'Point',
+        name: 'norm',
+      },
     ]);
     view.handleHostMessage({
       command: 'source',
       columnId: 0,
+      handle: 7,
+      ownerIndex: 0,
       owner: 'Point',
       name: 'norm',
       source: 'norm\n\t^ 5',
@@ -620,7 +645,7 @@ describe('the Repr and Class tabs', () => {
 });
 
 describe('the Class tab headings', () => {
-  const info = (members: { owner: string; name: string; kind: string }[]) => ({
+  const info = (members: { owner: string; ownerIndex: number; name: string; kind: string }[]) => ({
     name: 'Order',
     qualname: 'Order',
     module: '__main__',
@@ -639,7 +664,7 @@ describe('the Class tab headings', () => {
       command: 'tabData',
       columnId: 0,
       tab: 'class',
-      info: info([{ owner: 'Order', name: 'total', kind: 'method' }]),
+      info: info([{ owner: 'Order', ownerIndex: 0, name: 'total', kind: 'method' }]),
     });
     expect(headings(col)).toEqual([]);
     col = openRoot();
@@ -649,8 +674,8 @@ describe('the Class tab headings', () => {
       columnId: 0,
       tab: 'class',
       info: info([
-        { owner: 'Order', name: 'total', kind: 'method' },
-        { owner: 'Base', name: 'save', kind: 'method' },
+        { owner: 'Order', ownerIndex: 0, name: 'total', kind: 'method' },
+        { owner: 'Base', ownerIndex: 1, name: 'save', kind: 'method' },
       ]),
     });
     expect(headings(col)).toEqual(['defined in Order', 'defined in Base']);
@@ -683,5 +708,300 @@ describe('the Evaluate tab', () => {
       (v) => (v as HTMLElement).dataset.var,
     );
     expect(names).toEqual(['self', 'self.x']);
+  });
+});
+
+describe('what the review found', () => {
+  const rightClick = (el: Element) =>
+    el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
+
+  it('drops a reply meant for the object a column showed before it moved on', () => {
+    const col = openRoot();
+    view.handleHostMessage({
+      command: 'replaceColumn',
+      columnId: 0,
+      handle: 9,
+      label: 'p.q',
+      header: header({ handle: 9 }),
+      editable: true,
+      remember: true,
+    });
+    // A Repr asked for while the column still showed handle 7.
+    view.handleHostMessage({
+      command: 'tabData',
+      columnId: 0,
+      handle: 7,
+      tab: 'repr',
+      repr: { repr: 'Point(3, 4)', str: '', cut: false },
+    });
+    click(col.el.root.querySelector('[data-tab="repr"]'));
+    expect(col.el.contentPane.querySelector('.repr-text')).toBeNull();
+    expect(sent('fetchTab').at(-1)).toMatchObject({ handle: 9, tab: 'repr' });
+  });
+
+  it('leaves the history cursor alone when Back fails', () => {
+    const col = openRoot();
+    view.handleHostMessage({
+      command: 'replaceColumn',
+      columnId: 0,
+      handle: 9,
+      label: 'p.q',
+      header: header({ handle: 9 }),
+      editable: true,
+      remember: true,
+    });
+    click(col.el.root.querySelector('.nav-back'));
+    view.handleHostMessage({
+      command: 'columnError',
+      columnId: 0,
+      message: 'busy',
+      failedDive: true,
+    });
+    expect(col.historyIndex).toBe(1);
+    posted.length = 0;
+    click(col.el.root.querySelector('.nav-refresh'));
+    expect(sent('diveHere')[0]).toMatchObject({ handle: 9, label: 'p.q' });
+  });
+
+  it('parenthesizes a base that is not a primary, and labels a set item by list()', () => {
+    const expr = api().childExpression as unknown as (
+      b: string,
+      t: string,
+      n: string,
+      k?: string,
+    ) => string;
+    expect(expr('a + b', 'attributes', 'x')).toBe('(a + b).x');
+    expect(expr('a or b', 'entries', "'k'")).toBe("(a or b)['k']");
+    expect(expr('gemdb.root["w"].orders[3]', 'attributes', 'x')).toBe(
+      'gemdb.root["w"].orders[3].x',
+    );
+    expect(expr('f(1, 2)', 'items', '[0]')).toBe('f(1, 2)[0]');
+    expect(expr('s', 'items', '[0]', 'coll')).toBe('list(s)[0]');
+  });
+
+  it('does not open a column for a double-click inside the inline editor', () => {
+    const col = openRoot();
+    sendRows(0, 'attributes', [row({ name: 'name', value: "'hello'", handle: 9 })]);
+    rightClick(col.el.contentPane.querySelector('tr[data-row="0"]')!);
+    click(document.querySelector('#ctx [data-action="edit"]'));
+    posted.length = 0;
+    col.el.contentPane
+      .querySelector('.row-editor')!
+      .dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    expect(sent('inspectRow')).toEqual([]);
+  });
+
+  it('ends an edit that a redraw threw away, so Enter dives again', () => {
+    const col = openRoot();
+    sendRows(0, 'attributes', [row({ name: 'x', handle: 50 })]);
+    rightClick(col.el.contentPane.querySelector('tr[data-row="0"]')!);
+    click(document.querySelector('#ctx [data-action="edit"]'));
+    sendRows(0, 'attributes', [row({ name: 'x', handle: 50 })]);
+    col.el.contentPane
+      .querySelector('tr[data-row="0"]')!
+      .dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    posted.length = 0;
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(sent('diveHere').at(-1)).toMatchObject({ handle: 50, label: 'p.x' });
+  });
+
+  it('takes Enter on an unchanged editor as no change, not as Python to run', () => {
+    const col = openRoot();
+    sendRows(0, 'attributes', [row({ name: 'big', value: 'list with 150 items', handle: 50 })]);
+    rightClick(col.el.contentPane.querySelector('tr[data-row="0"]')!);
+    click(document.querySelector('#ctx [data-action="edit"]'));
+    const input = col.el.contentPane.querySelector('.row-editor') as HTMLInputElement;
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(sent('setSlot')).toEqual([]);
+    expect(col.el.contentPane.querySelector('.row-editor')).toBeNull();
+  });
+
+  it('shows text a value holds as text, never as markup', () => {
+    const col = openRoot();
+    const evil = '<img src=x onerror="window.pwned=1">';
+    sendRows(0, 'attributes', [
+      row({ name: evil, value: evil, type: evil }),
+      row({ name: evil, value: '', type: '', handle: 0, ref: 60, named: 1 }),
+    ]);
+    view.handleHostMessage({ command: 'setSlotResult', columnId: 0, ok: false, error: evil });
+    expect(col.el.contentPane.querySelector('img')).toBeNull();
+    expect(col.el.contentPane.textContent).toContain(evil);
+    click(col.el.root.querySelector('[data-tab="class"]'));
+    view.handleHostMessage({
+      command: 'tabData',
+      columnId: 0,
+      handle: 7,
+      tab: 'class',
+      info: {
+        name: evil,
+        qualname: evil,
+        module: evil,
+        doc: evil,
+        isClass: false,
+        mro: [evil],
+        bases: [evil],
+        members: [{ owner: evil, ownerIndex: 0, name: evil, kind: 'method' }],
+      },
+    });
+    expect(col.el.contentPane.querySelector('img')).toBeNull();
+  });
+
+  it('reports an index past the end as it was typed, and keeps it in the box', () => {
+    const col = openRoot(header({ kind: 'seq', type: 'list', size: 150 }));
+    sendRows(0, 'items', [row({ name: '[0]' })]);
+    const box = col.el.contentPane.querySelector('.goto-input') as HTMLInputElement;
+    box.value = '-500';
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    view.handleHostMessage({
+      command: 'goToResult',
+      columnId: 0,
+      handle: 7,
+      tab: 'items',
+      index: -500,
+      typed: '-500',
+    });
+    expect(col.el.contentPane.querySelector('.goto-error')!.textContent).toBe(
+      'There is no item -500 of 150.',
+    );
+    expect((col.el.contentPane.querySelector('.goto-input') as HTMLInputElement).value).toBe(
+      '-500',
+    );
+  });
+
+  it('keeps the page and the open groups across a Refresh', () => {
+    const col = openRoot();
+    const group = row({
+      name: 'class variables',
+      value: '',
+      type: '',
+      handle: 0,
+      ref: 60,
+      named: 2,
+    });
+    sendRows(0, 'attributes', [group]);
+    click(col.el.contentPane.querySelector('tr[data-group="60"]'));
+    click(col.el.root.querySelector('.nav-refresh'));
+    view.handleHostMessage({
+      command: 'replaceColumn',
+      columnId: 0,
+      handle: 8,
+      label: 'p',
+      header: header({ handle: 8 }),
+      editable: true,
+      remember: false,
+      keepTab: true,
+    });
+    posted.length = 0;
+    // The group comes back at a new position; it is found again by its name.
+    sendRows(0, 'attributes', [{ ...group, ref: 75 }]);
+    expect(sent('fetchGroup')).toEqual([expect.objectContaining({ groupRef: 75, handle: 8 })]);
+  });
+
+  it('opens the same groups again after a write, by name', () => {
+    const col = openRoot();
+    sendRows(0, 'attributes', [
+      row({ name: 'class variables', value: '', type: '', handle: 0, ref: 60, named: 2 }),
+    ]);
+    click(col.el.contentPane.querySelector('tr[data-group="60"]'));
+    view.handleHostMessage({ command: 'setSlotResult', columnId: 0, handle: 7, ok: true });
+    posted.length = 0;
+    sendRows(0, 'attributes', [
+      row({ name: 'class variables', value: '', type: '', handle: 0, ref: 88, named: 2 }),
+    ]);
+    expect(sent('fetchGroup')).toEqual([expect.objectContaining({ groupRef: 88 })]);
+  });
+
+  it('offers no Copy as Expression on a Grail runtime object, and no doubled rule without Edit', () => {
+    const col = openRoot(header({ kind: 'ivars', type: 'generator' }), 'g', false);
+    sendRows(0, 'attributes', [row({ name: 'proc' })]);
+    rightClick(col.el.contentPane.querySelector('tr[data-row="0"]')!);
+    const shown = (action: string) =>
+      (document.querySelector(`#ctx [data-action="${action}"]`) as HTMLElement).style.display;
+    expect(shown('copyExpression')).toBe('none');
+    expect(shown('edit')).toBe('none');
+    expect(
+      (document.querySelector('#ctx [data-edit-sep]') as HTMLElement | null)?.style.display ??
+        'none',
+    ).toBe('none');
+  });
+
+  it('keeps two classes of one name in the MRO apart', () => {
+    const col = openRoot();
+    click(col.el.root.querySelector('[data-tab="class"]'));
+    view.handleHostMessage({
+      command: 'tabData',
+      columnId: 0,
+      handle: 7,
+      tab: 'class',
+      info: {
+        name: 'Config',
+        qualname: 'Config',
+        module: 'app',
+        doc: '',
+        isClass: false,
+        mro: ['app.Config', 'base.Config', 'object'],
+        bases: ['Config'],
+        members: [
+          { owner: 'Config', ownerIndex: 0, name: '__init__', kind: 'method' },
+          { owner: 'Config', ownerIndex: 1, name: '__init__', kind: 'method' },
+        ],
+      },
+    });
+    expect(col.el.contentPane.querySelectorAll('.class-owner')).toHaveLength(2);
+    click(col.el.contentPane.querySelector('[data-owner-index="1"]'));
+    expect(sent('fetchSource').at(-1)).toMatchObject({ ownerIndex: 1, name: '__init__' });
+    expect(col.el.contentPane.querySelectorAll('.method-item.open')).toHaveLength(1);
+    expect(col.el.contentPane.querySelector('.meta-info-bar')!.textContent).toContain(
+      'Bases: Config',
+    );
+  });
+});
+
+describe('the row menu and the page’s own errors', () => {
+  const rightClick = (el: Element) =>
+    el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
+  const choose = (action: string) =>
+    click(document.querySelector(`#ctx [data-action="${action}"]`));
+
+  it('copies the value or the expression, and inspects or dives, all by the row’s expression', () => {
+    const col = openRoot();
+    sendRows(0, 'attributes', [row({ name: 'tags', value: "{'a': 1}", handle: 51 })]);
+    const tr = col.el.contentPane.querySelector('tr[data-row="0"]')!;
+    rightClick(tr);
+    choose('copyValue');
+    rightClick(tr);
+    choose('copyExpression');
+    rightClick(tr);
+    choose('inspect');
+    rightClick(tr);
+    choose('dive');
+    expect(sent('copyText')).toEqual([
+      { command: 'copyText', text: "{'a': 1}", what: 'Value' },
+      { command: 'copyText', text: 'p.tags', what: 'Expression' },
+    ]);
+    expect(sent('inspectRow')).toEqual([
+      { command: 'inspectRow', sourceColumnId: 0, handle: 51, label: 'p.tags' },
+    ]);
+    expect(sent('diveHere').at(-1)).toMatchObject({ handle: 51, label: 'p.tags', remember: true });
+  });
+
+  it('says when a repr was cut short', () => {
+    const col = openRoot();
+    click(col.el.root.querySelector('[data-tab="repr"]'));
+    view.handleHostMessage({
+      command: 'tabData',
+      columnId: 0,
+      handle: 7,
+      tab: 'repr',
+      repr: { repr: 'x'.repeat(10), str: '', cut: true },
+    });
+    expect(col.el.contentPane.querySelector('.repr-note')!.textContent).toMatch(/Cut short/);
+  });
+
+  it('says why the object could not be opened at all', () => {
+    view.handleHostMessage({ command: 'rootError', message: 'that value is no longer available' });
+    expect(document.getElementById('strip')!.textContent).toBe(
+      'Could not open it: that value is no longer available',
+    );
   });
 });

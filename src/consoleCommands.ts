@@ -79,12 +79,22 @@ const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
  */
 export function dedented(source: string): string {
   const lines = source.split('\n');
-  const indents = lines
-    .filter((line) => line.trim() !== '')
-    .map((line) => /^[ \t]*/.exec(line)?.[0].length ?? 0);
-  const common = indents.length ? Math.min(...indents) : 0;
-  if (common === 0) return source;
-  return lines.map((line) => (line.trim() === '' ? line.trim() : line.slice(common))).join('\n');
+  // The longest leading whitespace every non-blank line starts with, compared as text, as
+  // textwrap does: a tab and spaces are not the same indent.
+  let common: string | undefined;
+  for (const line of lines) {
+    if (line.trim() === '') continue;
+    const lead = /^[ \t]*/.exec(line)?.[0] ?? '';
+    if (common === undefined) common = lead;
+    else {
+      let n = 0;
+      while (n < common.length && n < lead.length && common[n] === lead[n]) n++;
+      common = common.slice(0, n);
+    }
+  }
+  if (!common) return source;
+  const cut = common.length;
+  return lines.map((line) => (line.trim() === '' ? line.trim() : line.slice(cut))).join('\n');
 }
 
 /** Whether a console line is a GemDB command rather than Python. */

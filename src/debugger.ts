@@ -180,8 +180,8 @@ export interface Pause {
    * last listed — how a command on a row reaches its object in the gem.
    */
   handleFor?(containerRef: number, name: string): number | undefined;
-  /** Run a query in the paused session (see `HaltRequest.query`). */
-  query?(code: string): Promise<string>;
+  /** Run a query in the paused session (see `HaltRequest.query` for the options). */
+  query?(code: string, options?: PausedQueryOptions): Promise<string>;
   /** The registry handle of watch `expression`'s result, as last evaluated at this pause. */
   watchHandle?(expression: string): number | undefined;
   /**
@@ -1769,7 +1769,8 @@ export function debugConsole(
   'evaluate' | 'showRow' | 'consoleName' | 'consoleNames' | 'persistedKeys' | 'watchHandle'
 > {
   const consoleRefs = new Map<number, number>();
-  // Each watch's result as last evaluated, by its expression: Inspect on a Watch row finds it here.
+  // Each watch's result as last evaluated, by its expression as run (dedented, then trimmed):
+  // Inspect on a Watch row looks it up the same way (`inspectVariable`).
   const watches = new Map<string, number>();
   return {
     evaluate: async (source, frameId, context, signal, selfHandle) => {
@@ -2007,7 +2008,7 @@ export function registerBreakpointDebugger(): vscode.Disposable {
               writeVariable(request, listed, globals, ref, name, value),
             answer,
             handleFor: (containerRef, name) => listed.handles.get(handleKey(containerRef, name)),
-            query: (code) => request.query(code),
+            query: (code, options) => request.query(code, options),
             ...debugConsole({
               query: (code, options) => request.query(code, options),
               ownerKey: request.session.owner.key,

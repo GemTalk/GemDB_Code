@@ -86,16 +86,41 @@
   var IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
   /**
+   * Whether `text` is a primary — a name followed by `.name`, `[…]` or `(…)`
+   * steps — so that a step can follow it without changing what it means. `a +
+   * b` is not one: `a + b.x` reads `b.x`.
+   */
+  function isPrimary(text) {
+    if (!/^[A-Za-z_]/.test(text)) return false;
+    var depth = 0;
+    var quote = '';
+    for (var i = 0; i < text.length; i++) {
+      var c = text.charAt(i);
+      if (quote) {
+        if (c === '\\') i++;
+        else if (c === quote) quote = '';
+      } else if (c === '"' || c === "'") quote = c;
+      else if (c === '[' || c === '(') depth++;
+      else if (c === ']' || c === ')') depth--;
+      else if (depth === 0 && !/[A-Za-z0-9_.]/.test(c)) return false;
+    }
+    return depth === 0 && !quote;
+  }
+
+  /**
    * The expression that reaches a row's object from the column's own: `.name`
    * for an attribute, `[2]` for an item, `['key']` for an entry, so a child
    * column's label reads as Python (`gemdb.root["orders"][2].customer`) and
    * Copy as Expression copies it. An attribute that is not a Python name goes
-   * through getattr.
+   * through getattr. A base that is not a primary (`a + b`, from `%inspect` or
+   * Inspect It) is put in parentheses first. A set's items have no position to
+   * index (`kind` is the column's, `coll`), so they read `list(s)[0]`.
    */
-  function childExpression(base, tab, name) {
-    if (tab === 'items') return base + name;
-    if (tab === 'entries') return base + '[' + name + ']';
-    if (IDENTIFIER.test(name)) return base + '.' + name;
+  function childExpression(base, tab, name, kind) {
+    var b = isPrimary(base) ? base : '(' + base + ')';
+    if (tab === 'items') return kind === 'coll' ? 'list(' + base + ')' + name : b + name;
+    if (tab === 'entries') return b + '[' + name + ']';
+    if (IDENTIFIER.test(name)) return b + '.' + name;
     return 'getattr(' + base + ', ' + JSON.stringify(name) + ')';
   }
 
@@ -152,6 +177,8 @@
       groups: Object.create(null),
       found: null,
       gotoError: null,
+      gotoNote: null,
+      gotoText: '',
       evalText: '',
       evalOut: null,
       classSubTab: 'methods',
@@ -161,14 +188,19 @@
       evalVarsRequested: false,
       editing: null,
       editError: null,
+      reopenGroups: null,
+      classRendered: null,
     };
   }
 
   /**
    * Point a column at an object and place it in the column's history: a dive
    * cuts off anything ahead of the cursor and appends, as a browser's history
-   * does; a Back or Forward step arrives with `remember` false because
-   * `navigate` has already moved the cursor.
+   * does. A Back or Forward step arrives with the history position it was
+   * asked for (`navigate` leaves the cursor alone until the object has been
+   * read, so a step that fails leaves it where the column still is). A Refresh
+   * keeps what the reader was looking at: the tab, its page, the Class
+   * sub-tab and the groups that were open.
    */
   function populateColumn(col, msg) {
     if (msg.remember) {
@@ -178,13 +210,29 @@
     } else if (col.history.length === 0) {
       col.history = [{ handle: msg.handle, label: msg.label || '' }];
       col.historyIndex = 0;
-    } else if (col.history[col.historyIndex]) {
+    } else {
+      if (typeof msg.historyIndex === 'number' && col.history[msg.historyIndex]) {
+        col.historyIndex = msg.historyIndex;
+      }
       // A refresh, or a step back: the object was registered again, at a new handle.
-      col.history[col.historyIndex].handle = msg.handle;
+      if (col.history[col.historyIndex]) col.history[col.historyIndex].handle = msg.handle;
     }
-    var keepTab = msg.keepTab ? col.activeTab : null;
+    var kept = msg.keepTab
+      ? {
+          tab: col.activeTab,
+          pageStart: col.pageStart,
+          classSubTab: col.classSubTab,
+          groups: openGroupNames(col),
+        }
+      : null;
+    var keepTab = kept ? kept.tab : null;
     var state = freshState();
     for (var k in state) col[k] = state[k];
+    if (kept) {
+      col.pageStart = kept.pageStart;
+      col.classSubTab = kept.classSubTab;
+      col.reopenGroups = kept.groups;
+    }
     col.handle = msg.handle;
     col.header = msg.header || null;
     col.editable = !!msg.editable;
@@ -273,7 +321,6 @@
   function navigate(col, delta) {
     var target = col.historyIndex + delta;
     if (target < 0 || target >= col.history.length) return;
-    col.historyIndex = target;
     var entry = col.history[target];
     post({
       command: 'diveHere',
@@ -281,6 +328,7 @@
       handle: entry.handle,
       label: entry.label,
       remember: false,
+      historyIndex: target,
     });
   }
 
@@ -315,10 +363,24 @@
 
   function fetchTab(col, tab, start) {
     col.el.contentPane.innerHTML = '<div class="placeholder">Loading&#8230;</div>';
-    post({ command: 'fetchTab', columnId: col.id, handle: col.handle, tab: tab, start: start });
+    post({
+      command: 'fetchTab',
+      columnId: col.id,
+      handle: col.handle,
+      oop: oopOf(col),
+      tab: tab,
+      start: start,
+    });
+  }
+
+  /** The column object's OOP, what the host remembers an edited row's earlier value by. */
+  function oopOf(col) {
+    return col.header ? String(col.header.oop) : '';
   }
 
   function renderTab(col) {
+    // Whatever was being edited is redrawn away, so the edit is over: Enter must dive again.
+    col.editing = null;
     var tab = col.activeTab;
     var pane = col.el.contentPane;
     var data = col.tabData[tab];
@@ -478,7 +540,9 @@
       (start + shown >= total ? ' disabled' : '') +
       '>&#8250;</button>' +
       '<span class="toolbar-gap"></span>' +
-      '<input class="goto-input" type="text" spellcheck="false" placeholder="' +
+      '<input class="goto-input" type="text" spellcheck="false" value="' +
+      esc(col.gotoText) +
+      '" placeholder="' +
       (tab === 'entries' ? 'Go to key' : 'Go to index') +
       '" title="' +
       (tab === 'entries'
@@ -486,19 +550,25 @@
         : 'A position from 0, or from the end: -1') +
       '">' +
       (col.gotoError ? '<span class="goto-error">' + esc(col.gotoError) + '</span>' : '') +
+      (col.gotoNote ? '<span class="goto-note">' + esc(col.gotoNote) + '</span>' : '') +
       '</div>'
     );
   }
 
-  /** Show the page holding item `index` (from 0; negative counts from the end), marked. */
-  function goToIndex(col, tab, index) {
+  /**
+   * Show the page holding item `index` (from 0; negative counts from the end),
+   * marked. An index past either end is reported as it was typed.
+   */
+  function goToIndex(col, tab, index, typed) {
     var total = totalFor(col);
-    if (index < 0) index = total + index;
-    if (index < 0 || index >= total) {
-      col.gotoError = 'There is no item ' + index + ' of ' + count(total) + '.';
+    var at = index < 0 ? total + index : index;
+    if (at < 0 || at >= total) {
+      col.gotoError =
+        'There is no item ' + (typed !== undefined ? typed : index) + ' of ' + count(total) + '.';
       renderTab(col);
       return;
     }
+    index = at;
     col.gotoError = null;
     col.found = index;
     var start = Math.floor(index / PAGE_SIZE) * PAGE_SIZE;
@@ -529,7 +599,8 @@
 
   /**
    * Open the inline editor on a row. What is typed is a Python expression, run
-   * as Set Value in the Variables view runs one, and stored where the row is:
+   * as the Evaluate tab runs one (`self` is the column's object, the notebook's
+   * names are in scope), and stored where the row is, as Set Value stores one:
    * an attribute by setattr, an item or entry by assignment.
    */
   function beginEdit(col, key) {
@@ -542,10 +613,13 @@
       containerRef: at.containerRef,
       name: at.row.name,
       handle: at.row.handle,
+      shown: at.row.value,
     };
     cell.innerHTML = '<input class="row-editor" type="text" spellcheck="false">';
     var input = cell.querySelector('.row-editor');
     input.value = at.row.value;
+    // select() alone need not focus the box, and typing would then go nowhere.
+    input.focus();
     input.select();
     input.addEventListener('keydown', function (ev) {
       if (ev.key === 'Enter') {
@@ -564,9 +638,19 @@
     });
   }
 
+  /**
+   * Send what was typed. The box starts with the row's value as shown, which
+   * is a repr — perhaps cut short, perhaps `list with 150 items` — not Python
+   * that rebuilds the object; Enter on it unchanged is taken as "no change"
+   * rather than run, which would store a look-alike, or fail.
+   */
   function commitEdit(col, expression) {
     var edit = col.editing;
     if (!edit) return;
+    if (expression === edit.shown) {
+      cancelEdit(col);
+      return;
+    }
     col.editing = null;
     col.editError = null;
     post({
@@ -575,6 +659,8 @@
       containerRef: edit.containerRef,
       name: edit.name,
       valueHandle: edit.handle,
+      selfHandle: col.handle,
+      oop: oopOf(col),
       expression: expression,
     });
   }
@@ -584,12 +670,21 @@
     renderTab(col);
   }
 
+  /**
+   * The names of the open groups (`class variables`, …). By name, because a
+   * re-read registers each group again at a new position, so a position from
+   * before it would match nothing.
+   */
+  function openGroupNames(col) {
+    var names = [];
+    for (var ref in col.groups) if (col.groups[ref].open) names.push(col.groups[ref].name);
+    return names;
+  }
+
   /** A write landed: every value on the tab may be stale, so read the page and open groups again. */
   function refetchActiveTab(col) {
     var tab = col.activeTab;
-    var openGroups = [];
-    for (var ref in col.groups) if (col.groups[ref].open) openGroups.push(ref);
-    col.reopenGroups = openGroups;
+    col.reopenGroups = openGroupNames(col);
     col.groups = Object.create(null);
     col.tabData[tab] = undefined;
     fetchTab(col, tab, col.pageStart[tab] || 0);
@@ -626,7 +721,7 @@
       '</div></div>' +
       '<div class="meta-info-bar">' +
       fact('Module', info.module) +
-      fact('Bases', info.mro.slice(1, 2).join('') || '—') +
+      fact('Bases', (info.bases || []).join(', ') || '—') +
       fact('OOP', col.header ? col.header.oop : '') +
       '</div><div class="meta-sub-bar">';
     var subs = [
@@ -668,17 +763,21 @@
     return '<span>' + esc(label) + ': <strong>' + esc(value || '—') + '</strong></span>';
   }
 
-  /** The members of one sub-tab, in MRO order, each class's dunders after its other names. */
+  /**
+   * The members of one sub-tab, in MRO order, each class's dunders after its
+   * other names. Classes are told apart by their position in the MRO, not by
+   * name: `class Config(base.Config)` has two classes called Config.
+   */
   function membersOf(info, which) {
     var kinds = MEMBER_GROUPS[which];
     var out = [];
     var owners = [];
     info.members.forEach(function (m) {
-      if (owners.indexOf(m.owner) < 0) owners.push(m.owner);
+      if (owners.indexOf(m.ownerIndex) < 0) owners.push(m.ownerIndex);
     });
     owners.forEach(function (owner) {
       var mine = info.members.filter(function (m) {
-        return m.owner === owner && kinds.indexOf(m.kind) >= 0;
+        return m.ownerIndex === owner && kinds.indexOf(m.kind) >= 0;
       });
       var plain = mine.filter(function (m) {
         return !isDunder(m.name);
@@ -700,21 +799,23 @@
     var html = '<div class="method-list">';
     var owner = null;
     var headed = members.some(function (m) {
-      return m.owner !== members[0].owner;
+      return m.ownerIndex !== members[0].ownerIndex;
     });
     for (var i = 0; i < members.length; i++) {
       var m = members[i];
-      if (headed && m.owner !== owner) {
-        owner = m.owner;
-        html += '<div class="class-owner">defined in ' + esc(owner) + '</div>';
+      if (headed && m.ownerIndex !== owner) {
+        owner = m.ownerIndex;
+        html += '<div class="class-owner">defined in ' + esc(m.owner) + '</div>';
       }
-      var key = m.owner + '.' + m.name;
+      var key = memberKey(m.ownerIndex, m.name);
       var open = col.openMember === key;
       html +=
         '<div class="method-item' +
         (open ? ' open' : '') +
         '" data-owner="' +
         esc(m.owner) +
+        '" data-owner-index="' +
+        m.ownerIndex +
         '" data-member="' +
         esc(m.name) +
         '">' +
@@ -735,8 +836,13 @@
     return html + '</div>';
   }
 
-  function toggleMember(col, owner, name) {
-    var key = owner + '.' + name;
+  /** One member, by its class's MRO position and its name. */
+  function memberKey(ownerIndex, name) {
+    return ownerIndex + '.' + name;
+  }
+
+  function toggleMember(col, ownerIndex, owner, name) {
+    var key = memberKey(ownerIndex, name);
     if (col.openMember === key) {
       col.openMember = null;
       renderTab(col);
@@ -749,6 +855,7 @@
         command: 'fetchSource',
         columnId: col.id,
         handle: col.handle,
+        ownerIndex: ownerIndex,
         owner: owner,
         name: name,
       });
@@ -837,6 +944,7 @@
       command: 'fetchTab',
       columnId: col.id,
       handle: col.handle,
+      oop: oopOf(col),
       tab: 'attributes',
       start: 0,
     });
@@ -958,6 +1066,8 @@
       tab: at.inGroup ? 'attributes' : col.activeTab,
       editable: col.editable && !at.row.readOnly,
       persistable: col.editable,
+      // A Grail runtime object's rows are Smalltalk instance variables, which no Python reaches.
+      expressible: !(col.header && col.header.row && col.header.row.kind === 'ivars'),
     };
   }
 
@@ -981,8 +1091,14 @@
 
   function showCtxMenu(x, y, target) {
     ctxTarget = target;
-    var edit = ctxMenu.querySelector('[data-action="edit"]');
-    if (edit) edit.style.display = target.editable ? '' : 'none';
+    var shown = { edit: target.editable, copyExpression: target.expressible };
+    ['edit', 'copyExpression'].forEach(function (action) {
+      var item = ctxMenu.querySelector('[data-action="' + action + '"]');
+      if (item) item.style.display = shown[action] ? '' : 'none';
+    });
+    // The rule above Edit Value… goes with it, or the menu shows two rules in a row.
+    var editSep = ctxMenu.querySelector('[data-edit-sep]');
+    if (editSep) editSep.style.display = target.editable ? '' : 'none';
     showPersist(ctxMenu, target.persistable);
     placeMenu(ctxMenu, x, y);
   }
@@ -1024,7 +1140,8 @@
   }
 
   function labelFor(col, t) {
-    return childExpression(col.label, t.tab, t.row.name);
+    var kind = col.header && col.header.row ? col.header.row.kind : '';
+    return childExpression(col.label, t.tab, t.row.name, kind);
   }
 
   function runCtxAction(action) {
@@ -1054,6 +1171,14 @@
   }
 
   // ── Events ────────────────────────────────
+
+  /** The document's listeners this view added, so `destroy` can take them away. */
+  var documentListeners = [];
+
+  function onDocument(type, fn) {
+    document.addEventListener(type, fn);
+    documentListeners.push({ type: type, fn: fn });
+  }
 
   function wireEvents() {
     strip.addEventListener('click', function (ev) {
@@ -1093,6 +1218,8 @@
             command: 'revertSlot',
             columnId: col.id,
             containerRef: at.containerRef,
+            selfHandle: col.handle,
+            oop: oopOf(col),
             name: at.row.name,
           });
         }
@@ -1119,7 +1246,14 @@
         return renderTab(col);
       }
       var member = t.closest('.method-item');
-      if (member) return toggleMember(col, member.dataset.owner, member.dataset.member);
+      if (member) {
+        return toggleMember(
+          col,
+          Number(member.dataset.ownerIndex),
+          member.dataset.owner,
+          member.dataset.member,
+        );
+      }
       var useVar = t.closest('[data-var]');
       if (useVar) return insertName(col, useVar.dataset.var);
       if (t.closest('[data-eval-clear]')) return evalPaneFor(col).clear();
@@ -1140,6 +1274,7 @@
       var text = ev.target.value.trim();
       if (!col || !text) return;
       ev.preventDefault();
+      col.gotoText = text;
       post({
         command: 'goTo',
         columnId: col.id,
@@ -1154,6 +1289,9 @@
       var col = Columns.columnOf(ev.target);
       var tr = ev.target.closest ? ev.target.closest('tr[data-row]') : null;
       if (!col || !tr) return;
+      // A double-click in the inline editor selects a word, and one on ↺ is two reverts' worth of
+      // clicking: neither opens the row.
+      if (ev.target.closest('input, textarea, button')) return;
       var target = rowContext(col, tr.dataset.row);
       if (target) {
         post({
@@ -1202,13 +1340,13 @@
       });
     }
 
-    document.addEventListener('click', function (ev) {
+    onDocument('click', function (ev) {
       if (!ctxMenu.contains(ev.target)) hideCtxMenu();
       if (headerCtxMenu && !headerCtxMenu.contains(ev.target)) hideHeaderCtxMenu();
     });
 
     // Enter dives in place (Jadeite's idiom), apart from the double-click that opens a new column.
-    document.addEventListener('keydown', function (ev) {
+    onDocument('keydown', function (ev) {
       if (ev.key === 'Escape') {
         hideCtxMenu();
         hideHeaderCtxMenu();
@@ -1235,10 +1373,35 @@
   }
 
   function toggleGroup(col, ref) {
-    var g = col.groups[ref] || (col.groups[ref] = { open: false, rows: null });
+    var heading = (col.tabData.attributes || []).filter(function (r) {
+      return r.ref === ref;
+    })[0];
+    var g =
+      col.groups[ref] ||
+      (col.groups[ref] = { open: false, rows: null, name: heading ? heading.name : '' });
     g.open = !g.open;
     renderTab(col);
-    if (g.open && !g.rows) post({ command: 'fetchGroup', columnId: col.id, groupRef: ref });
+    if (g.open && !g.rows) fetchGroup(col, ref, heading);
+  }
+
+  function fetchGroup(col, ref, heading) {
+    post({
+      command: 'fetchGroup',
+      columnId: col.id,
+      handle: col.handle,
+      oop: oopOf(col),
+      groupRef: ref,
+      size: heading ? heading.named + heading.indexed : 0,
+    });
+  }
+
+  /**
+   * Whether a reply is for the object the column shows now. Replies name the
+   * object they were asked about; one that arrives after the column moved on
+   * (a dive, Back, a Refresh) is for an object no longer here, and is dropped.
+   */
+  function current(col, msg) {
+    return col && (msg.handle === undefined || msg.handle === col.handle);
   }
 
   // ── Host messages ─────────────────────────
@@ -1272,43 +1435,47 @@
         return;
       case 'tabData':
         col = Columns.get(msg.columnId);
-        if (!col) return;
+        if (!current(col, msg)) return;
         applyTabData(col, msg);
         return;
       case 'groupData':
         col = Columns.get(msg.columnId);
-        if (!col) return;
+        if (!current(col, msg)) return;
         if (col.groups[msg.groupRef]) col.groups[msg.groupRef].rows = msg.rows;
         if (col.activeTab === 'attributes') renderTab(col);
         return;
       case 'goToResult':
         col = Columns.get(msg.columnId);
-        if (!col || col.activeTab !== msg.tab) return;
+        if (!current(col, msg) || col.activeTab !== msg.tab) return;
+        col.gotoNote = msg.note || null;
         if (msg.error) {
           col.gotoError = msg.error;
           renderTab(col);
         } else {
-          goToIndex(col, msg.tab, msg.index);
+          goToIndex(col, msg.tab, msg.index, msg.typed);
         }
         return;
       case 'evalResult':
         col = Columns.get(msg.columnId);
-        if (!col) return;
+        if (!current(col, msg)) return;
         col.evalOut = { ok: msg.ok, text: msg.text };
         if (col.activeTab === 'eval') renderEvalOut(col);
         return;
       case 'setSlotResult':
         col = Columns.get(msg.columnId);
-        if (!col) return;
+        if (!current(col, msg)) return;
         col.editError = msg.ok ? null : msg.error;
         if (msg.ok) refetchActiveTab(col);
         else renderTab(col);
         return;
       case 'source':
         col = Columns.get(msg.columnId);
-        if (!col) return;
+        if (!current(col, msg)) return;
         // The caption (which Smalltalk class implements a built-in) is drawn apart from the code.
-        col.memberSource[msg.owner + '.' + msg.name] = { source: msg.source, caption: msg.caption };
+        col.memberSource[memberKey(msg.ownerIndex, msg.name)] = {
+          source: msg.source,
+          caption: msg.caption,
+        };
         if (col.activeTab === 'class') renderTab(col);
         return;
     }
@@ -1321,14 +1488,14 @@
     else {
       col.tabData[msg.tab] = msg.rows;
       if (msg.tab !== 'attributes') col.pageStart[msg.tab] = msg.start || 0;
-      // Groups that were open before a write are opened again, with their rows read afresh.
+      // Groups that were open before a write or a Refresh are opened again, found by name.
       if (col.reopenGroups && msg.tab === 'attributes') {
         var reopen = col.reopenGroups;
         col.reopenGroups = null;
         msg.rows.forEach(function (r) {
-          if (isGroup(r) && reopen.indexOf(String(r.ref)) >= 0) {
-            col.groups[r.ref] = { open: true, rows: null };
-            post({ command: 'fetchGroup', columnId: col.id, groupRef: r.ref });
+          if (isGroup(r) && reopen.indexOf(r.name) >= 0) {
+            col.groups[r.ref] = { open: true, rows: null, name: r.name };
+            fetchGroup(col, r.ref, r);
           }
         });
       }
@@ -1363,15 +1530,24 @@
     });
 
     wireEvents();
-    window.addEventListener('message', function (ev) {
+    var onMessage = function (ev) {
       handleHostMessage(ev.data);
-    });
+    };
+    window.addEventListener('message', onMessage);
     post({ command: 'ready' });
     return {
       columns: Columns,
       tabsFor: tabsFor,
       childExpression: childExpression,
       handleHostMessage: handleHostMessage,
+      // For tests, which start a view per test in one document: take this one's listeners away.
+      destroy: function () {
+        window.removeEventListener('message', onMessage);
+        documentListeners.forEach(function (l) {
+          document.removeEventListener(l.type, l.fn);
+        });
+        documentListeners = [];
+      },
     };
   }
 

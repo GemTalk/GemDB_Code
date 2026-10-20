@@ -2,14 +2,15 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { dedented } from './consoleCommands';
 import { jupyterTraceback } from './consoleTraceback';
 import { DEBUG_TYPE, DapFrame, pauseForDebugSession, placeFrame } from './debugger';
 import {
-  INSPECTOR_REGISTRY,
   InspectorHeader,
   classQuery,
   dropInspectorRegistryQuery,
   inspectorEvaluateQuery,
+  inspectorRegistry,
   openQuery,
   parseClassInfo,
   parseHeader,
@@ -22,6 +23,8 @@ import {
 } from './inspectorQueries';
 import { errorMessage, log } from './log';
 import {
+  MAIN_MODULE,
+  MainModule,
   PERSISTED_REGISTRY,
   PauseVariable,
   REGISTRY,
@@ -63,21 +66,26 @@ import { VariableContext } from './variableCommands';
  * debugged file's) for anything else — through the pause while it is paused,
  * directly while it is idle. While that session runs a cell, a read fails
  * and the column says so; Refresh tries again. The object stays readable after
- * the pause it was found at resumes, because the Inspector's own registry
- * holds it, until its session ends.
+ * the pause it was found at resumes, because the panel's own registry holds
+ * it, until the panel closes or its session ends.
  *
- * Edits (Edit Value…) are offered only in a notebook's or a debugged file's
- * session, where they join that session's transaction exactly as Set Value in
- * the Variables view does; a committed object opened from Persisted Objects is
- * read-only here, since a change in the extension's own session would be a
- * transaction nobody commits.
+ * Edits (Edit Value…) and Add to Persisted Objects… are offered only in a
+ * notebook's or a debugged file's session. An edit runs its text as an
+ * Evaluate line does, and stores the value as Set Value in the Variables view
+ * does, in that session's transaction. A committed object
+ * opened from Persisted Objects is read in the extension's own session, whose
+ * transaction nobody commits: nothing is offered that changes it, and what an
+ * Evaluate line there changes is thrown away when it finishes.
  */
 
 /** Rows per page of Items or Entries. */
 export const INSPECTOR_PAGE = 100;
 
-/** Attributes are listed whole, grouped; a group cannot be paged into. */
+/** The most rows the Attributes tab lists, grouped; past it, a last row says how many more. */
 const ATTRIBUTE_ROWS = 500;
+
+/** The most rows a group (`class variables`, …) opens to; past it, a row says how many more. */
+const GROUP_ROWS = 2000;
 
 /** Preferred starting width of a column; it grows to fill spare space. */
 const DEFAULT_COLUMN_WIDTH = 360;
@@ -87,7 +95,7 @@ const MIN_COLUMN_WIDTH = 280;
 /** What an Inspector opens on: an object in a registry of the session it lives in. */
 export interface InspectTarget {
   readIn: ReadIn;
-  /** The registry it was found in: the pause's, Persisted Objects', or the Inspector's own. */
+  /** The registry it was found in: the pause's or Persisted Objects'. */
   from: string;
   handle: number;
   /** What the column header calls it: the row's name, which a child column extends. */
@@ -110,11 +118,21 @@ type InspectorMessage =
       command: 'fetchTab';
       columnId: number;
       handle: number;
+      /** The column object's OOP: what an edited row's ↺ is remembered by. */
+      oop?: string;
       tab: TabName;
       /** First row wanted, from 0. */
       start?: number;
     }
-  | { command: 'fetchGroup'; columnId: number; groupRef: number }
+  | {
+      command: 'fetchGroup';
+      columnId: number;
+      handle: number;
+      oop?: string;
+      groupRef: number;
+      /** How many rows the group holds, from its heading. */
+      size?: number;
+    }
   | { command: 'goTo'; columnId: number; handle: number; tab: TabName; text: string }
   | { command: 'inspectRow'; sourceColumnId: number; handle: number; label: string }
   | {
@@ -125,6 +143,8 @@ type InspectorMessage =
       remember: boolean;
       /** A refresh: stay on the tab the column shows. */
       keepTab?: boolean;
+      /** For Back and Forward: the history position this dive lands on, echoed back. */
+      historyIndex?: number;
     }
   | { command: 'evaluate'; columnId: number; handle: number; expression: string; mode: Mode }
   | {
@@ -135,14 +155,59 @@ type InspectorMessage =
       name: string;
       /** The row's own handle before the edit: what a revert puts back. */
       valueHandle: number;
+      /** The column's object, which the expression sees as `self`. */
+      selfHandle: number;
+      oop?: string;
       expression: string;
     }
-  | { command: 'revertSlot'; columnId: number; containerRef: number; name: string }
-  | { command: 'fetchSource'; columnId: number; handle: number; owner: string; name: string }
+  | {
+      command: 'revertSlot';
+      columnId: number;
+      containerRef: number;
+      selfHandle: number;
+      oop?: string;
+      name: string;
+    }
+  | {
+      command: 'fetchSource';
+      columnId: number;
+      handle: number;
+      ownerIndex: number;
+      owner: string;
+      name: string;
+    }
   | { command: 'addToPersisted'; handle: number; name: string }
   | { command: 'copyText'; text: string; what: string }
   | { command: 'setTitle'; title: string }
   | { command: 'closePanel' };
+
+/** The message fields that become numbers in Smalltalk, and so must be whole numbers. */
+const NUMERIC_FIELDS = [
+  'columnId',
+  'sourceColumnId',
+  'handle',
+  'containerRef',
+  'groupRef',
+  'valueHandle',
+  'selfHandle',
+  'start',
+  'size',
+  'ownerIndex',
+  'historyIndex',
+] as const;
+
+/**
+ * Whether every number a page message carries is a whole number. They are
+ * written into Smalltalk as they come (`${handle} between: 1 and: …`), so one
+ * that is not — from a page that something injected script into — would be
+ * Smalltalk of its sender's choosing. The page is ours; this keeps it so.
+ */
+export function wellFormed(msg: Record<string, unknown>): boolean {
+  return NUMERIC_FIELDS.every((field) => {
+    const value = msg[field];
+    return value === undefined || (Number.isSafeInteger(value) && (value as number) >= -1);
+  });
+}
 
 let extensionRoot: string | undefined;
 
@@ -152,41 +217,83 @@ function scriptText(name: string): string {
   return fs.readFileSync(path.join(extensionRoot, 'resources', 'inspector', name), 'utf8');
 }
 
-/** The session a `ReadIn` names, as a key: one Inspector registry per session. */
-function sessionKey(readIn: ReadIn): string {
-  return readIn.session === 'extension' ? 'extension' : readIn.ownerKey;
+/** How a query runs: the repr budget, and whether it runs past a breakpoint() it reaches. */
+interface QueryOptions {
+  budget: boolean;
+  passHalts?: boolean;
 }
 
+/** Reads, which run the user's `__repr__`: soft-broken past the budget, as Variables reads are. */
+const READ: QueryOptions = { budget: true };
+
 export class InspectorPanel {
-  /** Open panels per session, so the session's registry is dropped when the last one closes. */
-  private static readonly panels = new Map<string, Set<InspectorPanel>>();
+  /** Every open panel, so a notebook's rename reaches the ones on it. */
+  private static readonly panels = new Set<InspectorPanel>();
 
   private readonly panel: vscode.WebviewPanel;
   private disposables: vscode.Disposable[] = [];
   private nextColumnId = 1;
-  /** What each edited row held before its FIRST edit, by `rowKey`: a revert puts it back. */
+  /**
+   * What each edited row held before its FIRST edit, by `rowKey`: a revert puts it back. Keyed by
+   * the column object's OOP and the row's name, which a Refresh does not change, where the
+   * registry positions a listing hands out do.
+   */
   private readonly originals = new Map<string, number>();
 
-  static open(target: InspectTarget): InspectorPanel {
+  /**
+   * Open an Inspector on `target`'s object. The object is copied into the
+   * panel's own registry first, here, before the page exists: a pause's
+   * registry is refilled at every stop and Persisted Objects' at every
+   * re-read, so copying it once the page reported ready could copy whatever
+   * a step or a refresh put at that position meanwhile. A failure says why,
+   * and no panel opens.
+   */
+  static async open(target: InspectTarget): Promise<InspectorPanel | undefined> {
+    const registry = inspectorRegistry();
+    let header: InspectorHeader;
+    try {
+      header = parseHeader(
+        await runIn(target.readIn, openQuery(target.from, target.handle, registry), READ),
+      );
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Could not inspect ${target.label}: ${errorMessage(e)}`);
+      return undefined;
+    }
     const panel = vscode.window.createWebviewPanel(
       'gemdbInspector',
       'Inspector',
       { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
       { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] },
     );
-    const inspector = new InspectorPanel(panel, target);
-    const key = sessionKey(target.readIn);
-    let set = InspectorPanel.panels.get(key);
-    if (!set) InspectorPanel.panels.set(key, (set = new Set()));
-    set.add(inspector);
+    const inspector = new InspectorPanel(panel, target, registry, header);
+    InspectorPanel.panels.add(inspector);
     return inspector;
   }
+
+  /**
+   * A notebook renamed (`renameOwner`): its session and names moved to the new
+   * address, so the panels on it follow.
+   */
+  static retarget(oldKey: string, newKey: string): void {
+    for (const inspector of InspectorPanel.panels) {
+      const readIn = inspector.target.readIn;
+      if (readIn.session === 'notebook' && readIn.ownerKey === oldKey) {
+        inspector.target.readIn = { session: 'notebook', ownerKey: newKey };
+      }
+    }
+  }
+
+  /** The root column's object, in the panel's registry: what a reloaded page opens again. */
+  private rootHandle: number;
 
   private constructor(
     panel: vscode.WebviewPanel,
     private readonly target: InspectTarget,
+    private readonly registry: string,
+    private rootHeader: InspectorHeader | undefined,
   ) {
     this.panel = panel;
+    this.rootHandle = rootHeader?.row.handle ?? 0;
     this.panel.webview.html = this.html();
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
     this.panel.webview.onDidReceiveMessage(
@@ -197,14 +304,9 @@ export class InspectorPanel {
   }
 
   private dispose(): void {
-    const key = sessionKey(this.target.readIn);
-    const set = InspectorPanel.panels.get(key);
-    set?.delete(this);
-    if (set && set.size === 0) {
-      InspectorPanel.panels.delete(key);
-      // Best effort: a session that is running a cell, or gone, keeps it or has lost it already.
-      this.query(dropInspectorRegistryQuery(), false).catch(() => undefined);
-    }
+    InspectorPanel.panels.delete(this);
+    // Best effort: a session that is running a cell, or gone, keeps it or has lost it already.
+    this.query(dropInspectorRegistryQuery(this.registry), READ).catch(() => undefined);
     for (const d of this.disposables) d.dispose();
     this.disposables = [];
   }
@@ -215,11 +317,8 @@ export class InspectorPanel {
   }
 
   /** Run Smalltalk in the session the object lives in. */
-  private query(code: string, budget = true): Promise<string> {
-    const readIn = this.target.readIn;
-    return readIn.session === 'extension'
-      ? extensionQuery(code, { budget })
-      : inNotebook(readIn.ownerKey, code, { budget });
+  private query(code: string, options: QueryOptions): Promise<string> {
+    return runIn(this.target.readIn, code, options);
   }
 
   /** The session the object is read in, by name: its notebook's or debugged file's, or `committed`. */
@@ -235,7 +334,7 @@ export class InspectorPanel {
   }
 
   /** Why a read failed, and whether trying again later could help. */
-  private failure(columnId: number, e: unknown): void {
+  private failure(columnId: number, e: unknown, extra: Record<string, unknown> = {}): void {
     const message = errorMessage(e);
     const busy = /busy/i.test(message);
     this.post({
@@ -244,30 +343,30 @@ export class InspectorPanel {
       message: busy
         ? 'Its session is running something (a notebook cell, say). Refresh once it finishes.'
         : message,
+      ...extra,
     });
   }
 
-  private async header(from: string, handle: number): Promise<InspectorHeader> {
-    return parseHeader(await this.query(openQuery(from, handle)));
-  }
-
-  /** Read a column's header and post it as `kind`. */
+  /** Read a column's header, from a handle in the panel's registry, and post it as `kind`. */
   private async postColumn(
     kind: 'addRoot' | 'addChild' | 'replaceColumn',
     columnId: number,
-    from: string,
     handle: number,
     label: string,
     extra: Record<string, unknown> = {},
+    header?: InspectorHeader,
   ): Promise<void> {
     try {
-      const header = await this.header(from, handle);
+      const read =
+        header ??
+        parseHeader(await this.query(openQuery(this.registry, handle, this.registry), READ));
+      if (kind === 'addRoot') this.rootHandle = read.row.handle;
       this.post({
         command: kind,
         columnId,
-        handle: header.row.handle,
+        handle: read.row.handle,
         label,
-        header,
+        header: read,
         editable: this.editable,
         ...(this.target.origin ? { origin: this.target.origin } : {}),
         ...extra,
@@ -275,85 +374,70 @@ export class InspectorPanel {
     } catch (e) {
       if (kind === 'addRoot') {
         this.post({ command: 'rootError', message: errorMessage(e) });
+      } else if (kind === 'replaceColumn') {
+        // Said with the history position the dive was for, so the page leaves its cursor alone.
+        this.failure(columnId, e, { failedDive: true });
       } else {
-        this.failure(kind === 'replaceColumn' ? columnId : Number(extra.sourceColumnId), e);
+        this.failure(Number(extra.sourceColumnId), e);
       }
     }
   }
 
   private async handle(msg: InspectorMessage): Promise<void> {
+    if (!wellFormed(msg as Record<string, unknown>)) {
+      log(`Inspector: refused a malformed ${String(msg.command)} message from its page`);
+      return;
+    }
     try {
       switch (msg.command) {
-        case 'ready':
-          await this.postColumn(
-            'addRoot',
-            0,
-            this.target.from,
-            this.target.handle,
-            this.target.label,
-          );
+        case 'ready': {
+          // The first time, the header read at open; after a page reload, the root read again
+          // from the panel's own registry, never from the pause's, which a later stop refilled.
+          const header = this.rootHeader;
+          this.rootHeader = undefined;
+          await this.postColumn('addRoot', 0, this.rootHandle, this.target.label, {}, header);
           return;
+        }
         case 'fetchTab':
-          await this.fetchTab(msg.columnId, msg.handle, msg.tab, msg.start ?? 0);
+          await this.fetchTab(msg.columnId, msg.handle, msg.oop, msg.tab, msg.start ?? 0);
           return;
         case 'fetchGroup':
-          try {
-            const rows = parseChildren(
-              await this.query(childrenQuery(msg.groupRef, 0, ATTRIBUTE_ROWS, INSPECTOR_REGISTRY)),
-            );
-            this.post({
-              command: 'groupData',
-              columnId: msg.columnId,
-              groupRef: msg.groupRef,
-              rows: this.stamp(msg.groupRef, rows),
-            });
-          } catch (e) {
-            this.failure(msg.columnId, e);
-          }
+          await this.fetchGroup(msg.columnId, msg.handle, msg.oop, msg.groupRef, msg.size);
           return;
         case 'goTo':
           await this.goTo(msg.columnId, msg.handle, msg.tab, msg.text);
           return;
         case 'inspectRow':
-          await this.postColumn(
-            'addChild',
-            this.nextColumnId++,
-            INSPECTOR_REGISTRY,
-            msg.handle,
-            msg.label,
-            { sourceColumnId: msg.sourceColumnId },
-          );
+          await this.postColumn('addChild', this.nextColumnId++, msg.handle, msg.label, {
+            sourceColumnId: msg.sourceColumnId,
+          });
           return;
         case 'diveHere':
-          await this.postColumn(
-            'replaceColumn',
-            msg.columnId,
-            INSPECTOR_REGISTRY,
-            msg.handle,
-            msg.label,
-            { remember: msg.remember, keepTab: msg.keepTab === true },
-          );
+          await this.postColumn('replaceColumn', msg.columnId, msg.handle, msg.label, {
+            remember: msg.remember,
+            keepTab: msg.keepTab === true,
+            ...(msg.historyIndex === undefined ? {} : { historyIndex: msg.historyIndex }),
+          });
           return;
         case 'evaluate':
           await this.evaluate(msg.columnId, msg.handle, msg.expression, msg.mode);
           return;
         case 'setSlot':
-          await this.setSlot(
-            msg.columnId,
-            msg.containerRef,
-            msg.name,
-            msg.expression,
-            msg.valueHandle,
-          );
+          await this.setSlot(msg);
           return;
         case 'revertSlot':
-          await this.revertSlot(msg.columnId, msg.containerRef, msg.name);
+          await this.revertSlot(msg);
           return;
         case 'fetchSource': {
           let placed: { source: string; caption?: string };
           try {
             placed = this.placeSource(
-              parseSource(await this.query(sourceQuery(msg.handle, msg.owner, msg.name))),
+              parseSource(
+                await this.query(
+                  sourceQuery(msg.handle, msg.ownerIndex, msg.owner, msg.name, this.registry),
+                  READ,
+                ),
+              ),
               msg.owner,
               msg.name,
             );
@@ -363,6 +447,8 @@ export class InspectorPanel {
           this.post({
             command: 'source',
             columnId: msg.columnId,
+            handle: msg.handle,
+            ownerIndex: msg.ownerIndex,
             owner: msg.owner,
             name: msg.name,
             ...placed,
@@ -392,23 +478,62 @@ export class InspectorPanel {
   private async fetchTab(
     columnId: number,
     handle: number,
+    oop: string | undefined,
     tab: TabName,
     start: number,
   ): Promise<void> {
     try {
-      const payload: Record<string, unknown> = { command: 'tabData', columnId, tab, start };
+      // Every reply names the object it is for, so a column that has moved on can drop it.
+      const payload: Record<string, unknown> = { command: 'tabData', columnId, handle, tab, start };
       if (tab === 'repr') {
-        payload.repr = parseRepr(await this.query(reprQuery(handle)));
+        payload.repr = parseRepr(await this.query(reprQuery(handle, this.registry), READ));
       } else if (tab === 'class') {
-        payload.info = parseClassInfo(await this.query(classQuery(handle)));
+        payload.info = parseClassInfo(await this.query(classQuery(handle, this.registry), READ));
       } else {
         const count = tab === 'attributes' ? ATTRIBUTE_ROWS : INSPECTOR_PAGE;
         const rows = parseChildren(
-          await this.query(childrenQuery(handle, start, count, INSPECTOR_REGISTRY)),
+          await this.query(childrenQuery(handle, start, count, this.registry), READ),
         );
-        payload.rows = this.stamp(handle, rows);
+        payload.rows = this.stamp(oop, rows);
       }
       this.post(payload);
+    } catch (e) {
+      this.failure(columnId, e);
+    }
+  }
+
+  /**
+   * A group's rows (`class variables`, …), all of them up to `GROUP_ROWS`;
+   * past that, a last row says how many more there are, as a long listing's
+   * does, rather than the group ending as if it were complete.
+   */
+  private async fetchGroup(
+    columnId: number,
+    handle: number,
+    oop: string | undefined,
+    groupRef: number,
+    size: number | undefined,
+  ): Promise<void> {
+    try {
+      const count = Math.min(size && size > 0 ? size : ATTRIBUTE_ROWS, GROUP_ROWS);
+      const rows: (PauseVariable & { revertible?: boolean })[] = this.stamp(
+        oop,
+        parseChildren(await this.query(childrenQuery(groupRef, 0, count, this.registry), READ)),
+      );
+      if (size !== undefined && size > count) {
+        rows.push({
+          name: '...',
+          value: `${size - count} more not shown`,
+          type: '',
+          ref: 0,
+          indexed: 0,
+          named: 0,
+          handle: 0,
+          size: -1,
+          readOnly: true,
+        });
+      }
+      this.post({ command: 'groupData', columnId, handle, groupRef, rows });
     } catch (e) {
       this.failure(columnId, e);
     }
@@ -418,30 +543,42 @@ export class InspectorPanel {
    * Find an item by what the user typed and answer the page it is on: a
    * position for a list or a set (`-1` from the end), a key for a dict, as
    * Persisted Objects' Go to Item… finds one (`keyNames`, `keyPositionQuery`).
+   * A number that is no key of a dict is taken as a position, and the answer
+   * says so, as Go to Item… does.
    */
   private async goTo(columnId: number, handle: number, tab: TabName, text: string): Promise<void> {
     const typed = text.trim();
     let index: number | undefined;
+    let note: string | undefined;
     const asNumber = /^\[?-?\d+\]?$/.test(typed) ? Number(typed.replace(/[[\]]/g, '')) : undefined;
     try {
       if (tab === 'entries') {
-        const pos = Number(
-          await this.query(keyPositionQuery(handle, keyNames(typed), INSPECTOR_REGISTRY)),
+        const raw = await this.query(
+          keyPositionQuery(handle, keyNames(typed), this.registry),
+          READ,
         );
+        // A lookup that failed is not a key that is missing: say why, as every other read does.
+        if (raw.startsWith('Error: ')) throw new Error(raw.slice('Error: '.length));
+        const pos = Number(raw);
         index = pos >= 0 ? pos : undefined;
       }
     } catch (e) {
       this.failure(columnId, e);
       return;
     }
-    if (index === undefined && asNumber !== undefined) index = asNumber;
+    if (index === undefined && asNumber !== undefined) {
+      index = asNumber;
+      if (tab === 'entries') note = `No key reads as ${typed}: showing entry ${typed} by position.`;
+    }
     this.post({
       command: 'goToResult',
       columnId,
+      handle,
       tab,
+      typed,
       ...(index === undefined
         ? { error: tab === 'entries' ? `No key reads as ${typed}.` : `${typed} is not a position.` }
-        : { index }),
+        : { index, ...(note ? { note } : {}) }),
     });
   }
 
@@ -450,11 +587,12 @@ export class InspectorPanel {
    * naming the Smalltalk class that implements them (it differs from method to
    * method: `list.append` is OrderedCollection's, `list.__add__`
    * SequenceableCollection's), drawn apart from the code so it is not read as
-   * part of it; a Python function's lines are read from where its code says it was
-   * defined: a file from disk, and `<grail>`, a notebook cell,
+   * part of it. A Python function's or class's lines are read from where its
+   * code says it was defined: a file from disk, and `<grail>`, a notebook cell,
    * found among the cells of the notebook the object lives in by its first
-   * line and its name, as the debugger finds a frame's cell. A notebook that is
-   * not open, or a cell edited since it ran, leaves only where it was.
+   * line, its name and the class it is in — the latest cell first, since a
+   * notebook that defines a class again does so in a later cell. A notebook
+   * that is not open, or a cell edited since it ran, leaves only where it was.
    */
   private placeSource(
     answer: SourceAnswer,
@@ -478,14 +616,16 @@ export class InspectorPanel {
           : undefined;
       for (const cell of notebook?.getCells() ?? []) {
         if (cell.kind === vscode.NotebookCellKind.Code) {
-          candidates.push(cell.document.getText().split(/\r?\n/));
+          candidates.unshift(cell.document.getText().split(/\r?\n/));
         }
       }
     } else if (file && fs.existsSync(file)) {
       candidates.push(fs.readFileSync(file, 'utf8').split(/\r?\n/));
     }
+    // A class's own source names no class around it; a member's does.
+    const within = answer.isClass ? undefined : owner;
     for (const lines of candidates) {
-      const found = sourceAt(lines, line, name);
+      const found = sourceAt(lines, line, name, within);
       if (found !== undefined) return { source: found };
     }
     const place =
@@ -511,69 +651,135 @@ export class InspectorPanel {
       return;
     }
     const target: AddTarget = {
-      query: (code) => this.query(code, false),
+      query: (code) => this.query(code, { budget: false }),
       ownerKey: readIn.ownerKey,
       notebook: this.where(),
       handle,
       name,
-      registry: INSPECTOR_REGISTRY,
+      registry: this.registry,
     };
     void vscode.commands.executeCommand('gemdb.savedObjects.addFromInspector', target);
   }
 
-  /** Identifies one row that can be edited: the registry entry it was listed under, and its name. */
-  private rowKey(containerRef: number, name: string): string {
-    return `${containerRef}\u0000${name}`;
+  /**
+   * The program whose names an expression typed here sees: a notebook's
+   * globals, or a debugged file's `__main__`; none in the extension's session.
+   */
+  private programScope(): string | MainModule | undefined {
+    const readIn = this.target.readIn;
+    if (readIn.session !== 'notebook') return undefined;
+    const kind = sessionForIfOpen(readIn.ownerKey)?.owner.kind;
+    return kind === 'notebook' ? readIn.ownerKey : kind === 'file' ? MAIN_MODULE : undefined;
+  }
+
+  /**
+   * How the user's own code runs here. In a notebook's session, as a Debug
+   * Console line does: no time limit, and straight past a breakpoint() it
+   * reaches. In the extension's, with the repr budget, so a runaway line cannot
+   * hold the session Persisted Objects reads with.
+   */
+  private userCode(): QueryOptions {
+    return this.editable ? { budget: false, passHalts: true } : READ;
+  }
+
+  /** Identifies one edited row: the column object's OOP, and the row's name. */
+  private rowKey(oop: string | undefined, name: string): string {
+    return `${oop ?? ''}\u0000${name}`;
   }
 
   /** Mark the rows the user has edited, so the webview offers to put them back. */
   private stamp(
-    containerRef: number,
+    oop: string | undefined,
     rows: PauseVariable[],
   ): (PauseVariable & { revertible?: boolean })[] {
-    if (this.originals.size === 0) return rows;
+    if (this.originals.size === 0 || !oop) return rows;
     return rows.map((row) =>
-      this.originals.has(this.rowKey(containerRef, row.name)) ? { ...row, revertible: true } : row,
+      this.originals.has(this.rowKey(oop, row.name)) ? { ...row, revertible: true } : row,
     );
   }
 
-  private async setSlot(
-    columnId: number,
-    containerRef: number,
-    name: string,
-    expression: string,
-    valueHandle: number,
-  ): Promise<void> {
+  private async setSlot(msg: {
+    columnId: number;
+    containerRef: number;
+    name: string;
+    expression: string;
+    valueHandle: number;
+    selfHandle: number;
+    oop?: string;
+  }): Promise<void> {
+    const { columnId, containerRef, name, expression, valueHandle, selfHandle } = msg;
     if (!this.editable) {
       this.post({
         command: 'setSlotResult',
         columnId,
+        handle: selfHandle,
         ok: false,
         error: 'This object is read-only here.',
       });
       return;
     }
     try {
+      // The value first, as the Evaluate tab runs a line: with `self` bound to the column's object
+      // and the program's names in scope, so `self.qty + 1` and `limit` both work. In
+      // parentheses, each on a line of its own, so a statement (`n = 5`) fails as a SyntaxError
+      // rather than storing None — Set Value's own rule (`setVariableQuery`).
+      const reply = parseConsoleReply(
+        await this.query(
+          inspectorEvaluateQuery(
+            selfHandle,
+            `(\n${dedented(expression)}\n)`,
+            this.programScope(),
+            this.registry,
+          ),
+          this.userCode(),
+        ),
+      );
+      if (reply.kind === 'error') {
+        throw new Error(
+          reply.error.message ? `${reply.error.type}: ${reply.error.message}` : reply.error.type,
+        );
+      }
+      if (reply.kind === 'failed') throw new Error(reply.message);
+      if (reply.kind === 'interrupted') throw new Error('Interrupted.');
+      if (reply.kind !== 'value') throw new Error('That is not a value.');
+      // Then stored as Set Value stores one (setattr, or assignment), by the object's handle.
       const raw = await this.query(
-        setVariableQuery(0n, containerRef, name, expression, 0, INSPECTOR_REGISTRY),
+        setVariableQuery(0n, containerRef, name, '', 0, this.registry, reply.row.handle),
+        READ,
       );
       if (raw.startsWith('Error: ')) throw new Error(raw.slice('Error: '.length));
-      const key = this.rowKey(containerRef, name);
+      const key = this.rowKey(msg.oop, name);
       // The FIRST original, so a revert after two edits restores what was there to begin with.
-      if (!this.originals.has(key) && valueHandle > 0) this.originals.set(key, valueHandle);
-      this.post({ command: 'setSlotResult', columnId, ok: true });
+      if (msg.oop && !this.originals.has(key) && valueHandle > 0) {
+        this.originals.set(key, valueHandle);
+      }
+      this.post({ command: 'setSlotResult', columnId, handle: selfHandle, ok: true });
     } catch (e) {
-      this.post({ command: 'setSlotResult', columnId, ok: false, error: errorMessage(e) });
+      this.post({
+        command: 'setSlotResult',
+        columnId,
+        handle: selfHandle,
+        ok: false,
+        error: errorMessage(e),
+      });
     }
   }
 
-  private async revertSlot(columnId: number, containerRef: number, name: string): Promise<void> {
-    const key = this.rowKey(containerRef, name);
+  private async revertSlot(msg: {
+    columnId: number;
+    containerRef: number;
+    selfHandle: number;
+    oop?: string;
+    name: string;
+  }): Promise<void> {
+    const { columnId, containerRef, selfHandle, name } = msg;
+    const key = this.rowKey(msg.oop, name);
     const original = this.originals.get(key);
     if (original === undefined) {
       this.post({
         command: 'setSlotResult',
         columnId,
+        handle: selfHandle,
         ok: false,
         error: 'No earlier value is kept for this row.',
       });
@@ -581,48 +787,58 @@ export class InspectorPanel {
     }
     try {
       const raw = await this.query(
-        setVariableQuery(0n, containerRef, name, '', 0, INSPECTOR_REGISTRY, original),
+        setVariableQuery(0n, containerRef, name, '', 0, this.registry, original),
+        READ,
       );
       if (raw.startsWith('Error: ')) throw new Error(raw.slice('Error: '.length));
       this.originals.delete(key);
-      this.post({ command: 'setSlotResult', columnId, ok: true });
+      this.post({ command: 'setSlotResult', columnId, handle: selfHandle, ok: true });
     } catch (e) {
-      this.post({ command: 'setSlotResult', columnId, ok: false, error: errorMessage(e) });
+      this.post({
+        command: 'setSlotResult',
+        columnId,
+        handle: selfHandle,
+        ok: false,
+        error: errorMessage(e),
+      });
     }
   }
 
   /**
    * Run the Evaluate tab's Python with `self` bound to the column's object.
-   * Display shows the result's whole repr, Execute only that it ran, Inspect
-   * opens the result in a new column. What the code prints comes first.
+   * Display shows the result's whole repr, Execute only what was printed,
+   * Inspect opens the result in a new column. What the code prints comes first. Text
+   * pasted with indentation every line shares runs without it, as in the Debug
+   * Console (`dedented`).
    */
   private async evaluate(
     columnId: number,
     handle: number,
-    source: string,
+    typed: string,
     mode: Mode,
   ): Promise<void> {
     const readIn = this.target.readIn;
-    const scopeKey =
-      readIn.session === 'notebook' && sessionForIfOpen(readIn.ownerKey)?.owner.kind === 'notebook'
-        ? readIn.ownerKey
-        : undefined;
+    const source = dedented(typed);
+    const say = (ok: boolean, text: string): void =>
+      this.post({ command: 'evalResult', columnId, handle, ok, text });
     let raw: string;
     try {
-      // No time limit: this is the user's own code, as a Debug Console line is.
-      raw = await this.query(inspectorEvaluateQuery(handle, source, scopeKey), false);
+      raw = await this.query(
+        inspectorEvaluateQuery(handle, source, this.programScope(), this.registry, !this.editable),
+        this.userCode(),
+      );
     } catch (e) {
-      this.post({ command: 'evalResult', columnId, ok: false, text: errorMessage(e) });
+      say(false, errorMessage(e));
       return;
     }
     const reply = parseConsoleReply(raw);
     const printed = reply.output;
     switch (reply.kind) {
       case 'failed':
-        this.post({ command: 'evalResult', columnId, ok: false, text: printed + reply.message });
+        say(false, printed + reply.message);
         return;
       case 'interrupted':
-        this.post({ command: 'evalResult', columnId, ok: false, text: printed + 'Interrupted.' });
+        say(false, printed + 'Interrupted.');
         return;
       case 'error': {
         const place = placeFrame(
@@ -630,26 +846,20 @@ export class InspectorPanel {
           source,
           'Inspector',
         );
-        this.post({
-          command: 'evalResult',
-          columnId,
-          ok: false,
-          text: printed + jupyterTraceback(reply.error, place),
-        });
+        say(false, printed + jupyterTraceback(reply.error, place));
         return;
       }
       case 'none':
-        this.post({ command: 'evalResult', columnId, ok: true, text: printed });
+        say(true, printed);
         return;
       case 'value': {
         if (mode === 'inspect') {
-          this.post({ command: 'evalResult', columnId, ok: true, text: printed });
+          say(true, printed);
           await this.postColumn(
             'addChild',
             this.nextColumnId++,
-            INSPECTOR_REGISTRY,
             reply.row.handle,
-            source.trim(),
+            labelOf(source),
             {
               sourceColumnId: columnId,
             },
@@ -657,16 +867,16 @@ export class InspectorPanel {
           return;
         }
         if (mode === 'execute') {
-          this.post({ command: 'evalResult', columnId, ok: true, text: printed });
+          say(true, printed);
           return;
         }
         let text = reply.row.value;
         try {
-          text = parseRepr(await this.query(reprQuery(reply.row.handle))).repr;
+          text = parseRepr(await this.query(reprQuery(reply.row.handle, this.registry), READ)).repr;
         } catch {
           // The short repr the row already carries will do.
         }
-        this.post({ command: 'evalResult', columnId, ok: true, text: printed + text });
+        say(true, printed + text);
         return;
       }
     }
@@ -695,7 +905,7 @@ export class InspectorPanel {
   <div id="rowCtxMenu" class="ctx-menu">
     <div class="ctx-item" data-action="inspect">Inspect</div>
     <div class="ctx-item" data-action="dive">Dive Here</div>
-    <div class="ctx-sep"></div>
+    <div class="ctx-sep" data-edit-sep></div>
     <div class="ctx-item" data-action="edit">Edit Value…</div>
     <div class="ctx-sep"></div>
     <div class="ctx-item" data-action="copyValue">Copy Value</div>
@@ -725,8 +935,25 @@ export class InspectorPanel {
   }
 }
 
+/**
+ * What an Inspect It result's column is called: the expression, when it is
+ * one line, which a child column can extend (`(a or b).x`); a block of several
+ * lines would put newlines in the header and the tab, so it is `(evaluated)`.
+ */
+function labelOf(source: string): string {
+  const text = source.trim();
+  return text.includes('\n') ? '(evaluated)' : text;
+}
+
+/** Run Smalltalk in the session a `ReadIn` names. */
+function runIn(readIn: ReadIn, code: string, options: QueryOptions): Promise<string> {
+  return readIn.session === 'extension'
+    ? extensionQuery(code, { budget: options.budget })
+    : inNotebook(readIn.ownerKey, code, options);
+}
+
 // ---------------------------------------------------------------------------
-// Opening one: from a Variables row, or from a Persisted Objects row.
+// Opening one: from a Variables or Watch row, the Debug Console, or Persisted Objects.
 // ---------------------------------------------------------------------------
 
 export const INSPECT_VARIABLE = 'gemdb.inspectVariable';
@@ -750,7 +977,7 @@ type RowContext = VariableContext & {
  * the handle its listing recorded, else, for a watch, the handle its last
  * evaluation answered (`Pause.watchHandle`), so a plain value inspects too.
  */
-export function inspectVariable(context: RowContext): void {
+export async function inspectVariable(context: RowContext): Promise<void> {
   const session = vscode.debug.activeDebugSession;
   const pause = pauseForDebugSession(context.sessionId ?? session?.id);
   const variable = context.variable;
@@ -765,12 +992,12 @@ export function inspectVariable(context: RowContext): void {
     reference > 0
       ? reference
       : (pause.handleFor?.(context.container?.variablesReference ?? 0, name) ??
-        pause.watchHandle?.(name));
+        pause.watchHandle?.(dedented(name)));
   if (!handle) {
     void vscode.window.showErrorMessage(`"${name}" is not an object of its own.`);
     return;
   }
-  InspectorPanel.open({
+  await InspectorPanel.open({
     readIn: { session: 'notebook', ownerKey: pause.ownerKey },
     from: REGISTRY,
     handle,
@@ -780,15 +1007,15 @@ export function inspectVariable(context: RowContext): void {
 }
 
 /** `%inspect` in the Debug Console (`debugger.ts`): open a console result. */
-export function inspectPaused(args: {
+export async function inspectPaused(args: {
   ownerKey: string;
   handle: number;
   label: string;
   frame?: DapFrame;
   run: string;
-}): void {
+}): Promise<void> {
   const file = args.frame?.source?.name ?? args.run;
-  InspectorPanel.open({
+  await InspectorPanel.open({
     readIn: { session: 'notebook', ownerKey: args.ownerKey },
     from: REGISTRY,
     handle: args.handle,
@@ -826,15 +1053,19 @@ function frameOrigin(
 }
 
 /** Inspect a Persisted Objects row's object, if the row still belongs to what the view shows. */
-export function inspectPersisted(view: SavedObjectsProvider, row: SavedRow | undefined): void {
+export async function inspectPersisted(
+  view: SavedObjectsProvider,
+  row: SavedRow | undefined,
+): Promise<void> {
   const target = row ? view.inspectTarget(row) : undefined;
   if (!target) {
     void vscode.window.showErrorMessage(
-      'That row has nothing to inspect, or Persisted Objects has been read again since. Try it once more.',
+      'That row is not an object of its own (a group heading is not), or Persisted Objects ' +
+        'has been read again since it was shown: open it again and try once more.',
     );
     return;
   }
-  InspectorPanel.open({
+  await InspectorPanel.open({
     ...target,
     from: PERSISTED_REGISTRY,
     origin: {

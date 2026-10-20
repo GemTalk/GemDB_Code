@@ -36,7 +36,7 @@ import { isMcpRunning, startMcpServer, stopMcpServer } from './mcp';
 import { registerBreakpointDebugger } from './debugger';
 import { registerVariableCommands } from './variableCommands';
 import { registerSavedObjects } from './savedObjects';
-import { registerInspector } from './inspector';
+import { InspectorPanel, registerInspector } from './inspector';
 import { onSavedStacksChanged } from './savedStacks';
 import { cloneBrainFreeze, initPendingReadme, showPromisedReadme } from './demo';
 import { confirmMcpEnabled, registerMcpProvider, registerWithClient } from './mcpRegistration';
@@ -174,6 +174,8 @@ export function activate(context: vscode.ExtensionContext): void {
       for (const { oldUri, newUri } of event.files) {
         if (!newUri.path.endsWith('.ipynb')) continue;
         renameOwner(oldUri.toString(), notebookOwnerForUri(newUri));
+        // The Inspectors open on it read in its session, which now answers to the new address.
+        InspectorPanel.retarget(oldUri.toString(), notebookOwnerForUri(newUri).key);
       }
     }),
   );

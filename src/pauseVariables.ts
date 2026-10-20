@@ -718,10 +718,13 @@ export function parseChildren(raw: string): PauseVariable[] {
  * A row inside a group (`class variables` and the rest) changes in the scope
  * or object the group was made from.
  *
- * `registry` is the pause's by default; the Inspector passes its own
- * (`INSPECTOR_REGISTRY`). With `valueHandle`, the new value is that registry
- * entry rather than `source` evaluated — how the Inspector puts back the value
- * a row held before it was edited, which it keeps registered for exactly that.
+ * `registry` is the pause's by default; an Inspector passes its panel's
+ * (`inspectorRegistry()`). All three handles — `ref`, `globalsRef` and
+ * `valueHandle` — are positions in that one registry, so a pause's `globalsRef`
+ * means nothing with the Inspector's. With `valueHandle`, the new value is that
+ * registry entry rather than `source` evaluated: how the Inspector stores the
+ * value its Evaluate-style run of an edit produced, and puts back the value a
+ * row held before its first edit.
  */
 export function setVariableQuery(
   processOop: bigint,
@@ -2090,6 +2093,11 @@ out contents encodeAsUTF8`;
  * message, where a SyntaxError could not read, and then the traceback's frames,
  * as `parseConsoleReply` reads them. The Inspector's Evaluate tab answers in
  * the same format (`inspectorEvaluateQuery`).
+ *
+ * A caller must have `kind`, `exc`, `out`, `field`, `record` and `clean` (from
+ * `PREAMBLE` and `HELPERS`) in scope. Only the error branch reads `clean` and
+ * the separators, and a missing temp is a compile error of the whole query, so
+ * a caller missing one fails on its first line, not only when one raises.
  */
 export const REPLY_ERROR = `kind == #stack ifTrue: [
   out nextPutAll: 'RecursionError'; nextPut: field; nextPutAll: 'maximum recursion depth exceeded'; nextPut: record].

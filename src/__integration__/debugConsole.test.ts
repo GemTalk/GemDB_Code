@@ -12,6 +12,7 @@ import {
   workspace,
 } from '../__mocks__/vscode';
 import { PauseDebugAdapter, pauseForOwner, registerBreakpointDebugger } from '../debugger';
+import { dedented } from '../consoleCommands';
 import { fileOwner } from '../fileOwner';
 import { stageGrail } from '../grail';
 import {
@@ -961,6 +962,7 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
         return Promise.resolve(undefined);
       });
     let watched: number | undefined;
+    let twoLines: number | undefined;
     let none = '';
     let pasted = '';
     try {
@@ -969,6 +971,10 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
         none = (await dap.evaluate('%inspect None')).message ?? '';
         await dap.evaluate('n + 1', { context: 'watch' });
         watched = pauseForOwner(nb.key)?.watchHandle?.('n + 1');
+        // A watch typed indented over two lines is found again from the text as typed,
+        // dedented the same way it was run (`inspectVariable`).
+        await dap.evaluate('  (n +\n   2)', { context: 'watch' });
+        twoLines = pauseForOwner(nb.key)?.watchHandle?.(dedented('  (n +\n   2)'));
         // A line pasted with a leading space runs, rather than raising IndentationError.
         pasted = await dap.value(' n * 2');
       });
@@ -984,6 +990,7 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
     expect(none).toMatch(/nothing to inspect/);
     // The watch's value is a plain int, with nothing to open, and still has a handle to inspect.
     expect(watched).toBeGreaterThan(0);
+    expect(twoLines).toBeGreaterThan(0);
     expect(pasted).toBe('82');
   });
 
