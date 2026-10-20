@@ -1142,7 +1142,7 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
     if (kept) return kept;
     const { key, label } = row.notebook;
     let rows: SavedRow[];
-    let found: number[] = [];
+    let found: number[];
     try {
       const listed = parsePending(orThrow(await inNotebook(key, pendingQuery(), { budget: true })));
       const oops = listed.changes.filter((c) => !c.internal).map((c) => c.oop);
