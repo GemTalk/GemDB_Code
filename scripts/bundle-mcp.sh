@@ -107,15 +107,15 @@ ENTRYPOINTS=(
     # would never have staged it.
     setup-read-only-user.sh
 )
-# Loaders inside the wholesale src/ copy that src/mcp.ts's install path drives.
-# Not entry points in the shell sense, so no closure applies -- what THEY read
-# is checked by the `input` scan further down.
-REQUIRED_GS=(
-    src/core/load.gs
-    src/tests/load.gs
-    src/grail/load.gs
+# What install.sh's Rowan load reads: mcp_server is a Rowan project (0.9.0 on),
+# and install.sh loads it from this directory through rowan/specs/Mcp.ston,
+# with the packages in src/ (Tonel). Not entry points in the shell sense, so no
+# closure applies -- the packages the components name are checked further down.
+REQUIRED_ROWAN=(
+    rowan/specs/Mcp.ston
+    rowan/project.ston
 )
-for item in "${ENTRYPOINTS[@]}" "${REQUIRED_GS[@]}"; do
+for item in "${ENTRYPOINTS[@]}" "${REQUIRED_ROWAN[@]}"; do
     if [ ! -e "$SRC/$item" ]; then
         echo "ERROR: mcp_server no longer provides $item -- GemDB's installer needs it." >&2
         exit 1
@@ -133,11 +133,11 @@ mkdir -p "$DEST"
 # wholesale: the loaders decide what the source tree contains, and a hand-picked
 # list of subdirectories silently omits whatever is added next.
 cp -R "$SRC/src" "$DEST/src"
+cp -R "$SRC/rowan" "$DEST/rowan"
 
-# Documents and the top-level loader. Carried for the reader, not driven, so
-# there is nothing to derive from them; load.gs's own `input` targets are
-# covered by the scan below.
-for item in load.gs LICENSE README.md; do
+# Documents, carried for the reader and not driven, so there is nothing to
+# derive from them.
+for item in LICENSE README.md; do
     if [ -e "$SRC/$item" ]; then cp "$SRC/$item" "$DEST/$item"; fi
 done
 
@@ -231,35 +231,38 @@ fi
 echo "  $SH_CHECKED referenced scripts, all present"
 
 # ---------------------------------------------------------------------------
-# Verify every file the loaders read is present.
+# Verify every package the Rowan load can name is present.
 # ---------------------------------------------------------------------------
-# Same check bundle-grail.sh makes, and for the same reason: `input <path>` is
-# resolved by topaz against the working directory, so a missing target is not
-# caught until the file-in is already running against a live database.
-echo "Checking that every 'input' target is present"
+# Same check bundle-grail.sh makes, and for the same reason: Rowan reads the
+# packages its components list from src/, so a missing one is not caught until
+# the load is already running against a live database. Every component is
+# checked, not only the ones src/mcp.ts selects, since install.sh's flags
+# choose among them.
+echo "Checking that every Rowan package is present"
 CHECKED=0
 MISSING=0
-while IFS= read -r target; do
-    CHECKED=$((CHECKED + 1))
-    if [ ! -e "$DEST/$target" ]; then
-        echo "  MISSING: $target" >&2
-        MISSING=$((MISSING + 1))
-    fi
-done < <(find "$DEST" -name '*.gs' -exec \
-    sed -nE 's|^[[:space:]]*input[[:space:]]+(\./)?([A-Za-z0-9_./-]+\.gs).*|\2|p' {} + | sort -u)
+for component in "$DEST"/rowan/components/*.ston; do
+    while IFS= read -r package; do
+        CHECKED=$((CHECKED + 1))
+        if [ ! -f "$DEST/src/$package/package.st" ]; then
+            echo "  MISSING package: src/$package" >&2
+            MISSING=$((MISSING + 1))
+        fi
+    done < <(awk '/#packageNames/,/\]/' "$component" | grep -oE "'[A-Za-z0-9-]+'" | tr -d "'")
+done
 
 if [ "$MISSING" -ne 0 ]; then
-    echo "ERROR: $MISSING file(s) referenced by the MCP loaders are not in the payload." >&2
+    echo "ERROR: $MISSING package(s) the Rowan components name are not in the payload." >&2
     exit 1
 fi
 # A scan that matches nothing reports success for a payload it never looked at.
-# The four loaders together `input` one file per class, so this is dozens.
-if [ "$CHECKED" -lt 20 ]; then
-    echo "ERROR: only $CHECKED 'input' targets found; the MCP loaders file in dozens." >&2
+# Core, Auth and Grail name two packages each.
+if [ "$CHECKED" -lt 6 ]; then
+    echo "ERROR: only $CHECKED Rowan packages found; the components name six." >&2
     echo "  The scan above is not matching -- fix it rather than trusting this build." >&2
     exit 1
 fi
-echo "  $CHECKED referenced files, all present"
+echo "  $CHECKED Rowan packages, all present"
 
 # The stamp is what GemDB compares to decide whether the payload filed into the
 # database is the one this build ships. No engine in it, unlike Grail's: there
@@ -270,4 +273,4 @@ commit=$MCP_COMMIT
 VERSION
 
 echo
-echo "Bundled the MCP server $MCP_DESCRIBE ($(find "$DEST/src" -name '*.gs' | wc -l | tr -d ' ') class files)."
+echo "Bundled the MCP server $MCP_DESCRIBE ($CHECKED Rowan packages)."

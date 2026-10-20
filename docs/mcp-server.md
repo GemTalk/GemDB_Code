@@ -10,14 +10,18 @@ MCP-specific ones, which are here.
 
 ## What the payload is
 
-Thirty-eight Smalltalk class file-outs (`.gs`) plus the loaders that `input`
-them. That single fact settles most of the design, and it is worth stating
-plainly because the obvious analogue — Grail — is the opposite in every
-respect:
+A Rowan project: six Tonel packages in `src/Mcp-*` (Core, Auth and Grail
+components, each with its tests) and the project in `rowan/`, which
+`install.sh` loads with Rowan. Up to mcp_server 0.9.0 (2026-10-19) it was
+thirty-eight `.gs` file-outs and the loaders that `input` them. Its Grail
+component, the Python toolset GemDB serves, loads only through Rowan; the
+release's file-out carries Core and Auth only. So, like Grail, it needs a
+database started from `extent0.rowan3.dbf` (see `docs/grail.md`). Even so,
+Grail remains the opposite in most respects:
 
 |                        | Grail                              | MCP server                        |
 | ---------------------- | ---------------------------------- | --------------------------------- |
-| What ships             | Python sources + a compiled shim   | Smalltalk file-outs               |
+| What ships             | Python sources + a compiled shim   | Smalltalk packages (Tonel)        |
 | Platform-specific      | yes — one shim per target          | no — identical on all three       |
 | Tied to an engine      | yes — links `gciualib.o`           | no                                |
 | Size                   | ~25 MB                             | ~480 KB                           |

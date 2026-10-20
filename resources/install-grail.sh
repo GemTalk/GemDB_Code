@@ -68,6 +68,35 @@ run_topaz() {
 }
 
 # ---------------------------------------------------------------------------
+# Step 0: the database has Rowan.
+# ---------------------------------------------------------------------------
+# Grail is a Rowan project, loaded into an image started from the engine's
+# bin/extent0.rowan3.dbf. A database GemDB created before 1.9 started from the
+# plain extent0.dbf and has no Rowan, and nothing can add it in place, so say
+# that in a sentence rather than let the load fail deep inside with "Rowan does
+# not understand". GemDB's own database is refused before it starts
+# (assertDatabaseHasRowan); this catches an external one too. Only a positive
+# "absent" stops here: an inconclusive probe leaves the install to report.
+# The script is read into a variable rather than written as a heredoc inside
+# $( ): macOS's bash 3.2 mis-parses a quoted heredoc in a command substitution.
+read -r -d '' ROWAN_PROBE_GS <<'EOF' || true
+login
+run
+'GEMDB_ROWAN=' , ((System myUserProfile symbolList objectNamed: #Rowan) isNil
+  ifTrue: ['absent'] ifFalse: ['present'])
+%
+logout
+exit
+EOF
+ROWAN_PROBE=$(printf '%s\n' "$ROWAN_PROBE_GS" | LC_ALL=C topaz -lq 2>/dev/null || true)
+if printf '%s\n' "$ROWAN_PROBE" | grep -q 'GEMDB_ROWAN=absent'; then
+    echo "ERROR: this database has no Rowan, and Grail installs through Rowan." >&2
+    echo "       It was created from the engine's extent0.dbf; Grail needs one created from" >&2
+    echo "       bin/extent0.rowan3.dbf. Recreate the database to install Python support." >&2
+    exit 3
+fi
+
+# ---------------------------------------------------------------------------
 # Step 1: the shared base, installed once per extent, as SystemUser.
 # ---------------------------------------------------------------------------
 # The base is what an ordinary (non-SystemUser) session may not create for
@@ -92,7 +121,7 @@ if printf '%s\n' "$BASE_PROBE" | grep -q 'GRAIL_BASE=absent'; then
 
     # Re-probe rather than assume: install_base.sh writes its marker last, so a
     # base still absent here means a step failed without a non-zero exit --
-    # better caught now than as a SecurityError minutes into install.gs.
+    # better caught now than as a SecurityError minutes into the Rowan load.
     BASE_PROBE=$(LC_ALL=C topaz -lq -S "$GRAIL_DIR/scripts/check_base_installed.gs" < /dev/null 2>/dev/null || true)
     if printf '%s\n' "$BASE_PROBE" | grep -q 'GRAIL_BASE=absent'; then
         echo "ERROR: install_base.sh reported success but the base marker is still absent." >&2
@@ -103,14 +132,14 @@ fi
 # ---------------------------------------------------------------------------
 # Step 2: the per-user install.
 # ---------------------------------------------------------------------------
-# install.gs reads SHIM_LIB_PATH from the session environment and records it in
-# the database, so every later session finds the shim without the variable
+# The Rowan load's post-load doits read SHIM_LIB_PATH from the session
+# environment and record it in the database, so every later session finds the shim without the variable
 # being set again. That recorded path is why GemDB stages Grail to a stable
 # directory instead of running it from inside the extension.
 #
 # PYTHON_LIB_PATH is deliberately not set. It points Grail at a CPython shared
 # library on the host for its embedded-FFI backend, and GemDB's whole promise
-# is a Python that needs nothing installed on the machine; install.gs treats it
+# is a Python that needs nothing installed on the machine; the install treats it
 # as optional, so leaving it unset simply leaves that backend unconfigured.
 export SHIM_LIB_PATH="${SHIM_LIB_PATH:-}"
 export PYTHON_PACKAGE_PATH="${PYTHON_PACKAGE_PATH:-$GRAIL_DIR/src/python}"
@@ -124,7 +153,13 @@ fi
 
 echo "== Installing Grail as $GEMDB_USER"
 rm -f "$GRAIL_DIR"/*.out
-run_topaz src/smalltalk/install.gs
+# Rowan loads the Grail project (rowan/specs/Grail.ston, the Tonel packages in
+# src/Grail-*), as Grail's install.sh does. It compiles the whole project as one
+# patch set, far past gem.conf's temporary object space, so this one gem gets
+# Grail's figure; GEM_TEMPOBJ_CACHE_SIZE is a ceiling it grows into, not a
+# reservation.
+echo "--- topaz scripts/install_rowan.gs"
+LC_ALL=C topaz -lq -C "GEM_TEMPOBJ_CACHE_SIZE=1000000;" -S scripts/install_rowan.gs < /dev/null
 
 # ---------------------------------------------------------------------------
 # Step 3: deploy gemdb, so a fresh session starts clean.
@@ -136,7 +171,7 @@ run_topaz src/smalltalk/install.gs
 # `gemdb.transaction()` then refuses to start, describing pending changes the
 # user did not make. Deploying here turns that import into a warm bind.
 #
-# After install.gs, never before: install.gs recreates the Python runtime
+# After the Rowan load, never before: the load recreates the Python runtime
 # classes and bumps Grail's runtime generation, which discards any deployment
 # made under the previous one.
 echo "== Deploying gemdb"
