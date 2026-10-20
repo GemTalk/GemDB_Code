@@ -39,6 +39,7 @@ vi.mock('../database', async (importOriginal) => {
     assertRoomForExtent: () => {},
     ensureSpaceLimits: () => {},
     assertDatabaseMatchesEngine: () => {},
+    assertDatabaseHasRowan: () => {},
     createDatabase: (enginePath: string, extensionPath?: string) =>
       createDatabase(enginePath, extensionPath),
   };

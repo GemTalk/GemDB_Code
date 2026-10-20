@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { __setSetting } from '../__mocks__/vscode';
 import {
   DatabaseVersionError,
+  IMAGE_RECORD,
+  INITIAL_EXTENT,
+  assertDatabaseHasRowan,
   assertDatabaseMatchesEngine,
   parseRepositoryVersion,
   repositoryVersion,
@@ -142,5 +145,48 @@ describe('the guard in front of a database', () => {
     expect(() => assertDatabaseMatchesEngine(engine, '4.0.0.a5')).not.toThrow();
     fs.rmSync(engine, { recursive: true, force: true });
     engine = '';
+  });
+});
+
+// Up to 1.8 GemDB created its database from the engine's plain extent0.dbf,
+// which has no Rowan; Grail and the MCP server now install only through Rowan,
+// and the engine version is the same, so only the image record tells them apart.
+describe('a database created without Rowan', () => {
+  const recordImage = () => {
+    fs.mkdirSync(path.join(databasePath(), 'conf'), { recursive: true });
+    fs.writeFileSync(path.join(databasePath(), 'conf', IMAGE_RECORD), `${INITIAL_EXTENT}\n`);
+  };
+
+  it('is refused, with the folder to delete and a warning', () => {
+    makeExtent();
+
+    expect(() => assertDatabaseHasRowan()).toThrow(DatabaseVersionError);
+    try {
+      assertDatabaseHasRowan();
+    } catch (e) {
+      const message = (e as Error).message;
+      expect(message).toMatch(/Rowan/);
+      expect(message).toContain(databasePath());
+      expect(message).toMatch(/delete/i);
+    }
+  });
+
+  it('is not what a database created from the Rowan image is taken for', () => {
+    makeExtent();
+    recordImage();
+
+    expect(() => assertDatabaseHasRowan()).not.toThrow();
+  });
+
+  it('says nothing before there is a database', () => {
+    expect(() => assertDatabaseHasRowan()).not.toThrow();
+  });
+
+  it('leaves an external database, whose image is its administrator’s, alone', () => {
+    makeExtent();
+    __setSetting('gemdb.externalDatabase.gemstone', '/opt/gemstone/product');
+
+    expect(() => assertDatabaseHasRowan()).not.toThrow();
+    __setSetting('gemdb.externalDatabase.gemstone', '');
   });
 });

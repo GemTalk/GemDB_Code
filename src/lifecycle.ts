@@ -12,6 +12,7 @@ import { ensureDatabaseAccount } from './account';
 import { writeCliScripts } from './cli';
 import {
   assertDatabaseIsLocal,
+  assertDatabaseHasRowan,
   assertDatabaseMatchesEngine,
   createDatabase,
   DatabaseOnNfsError,
@@ -170,6 +171,7 @@ async function prepareFiles(
   // cannot be used by this one, and the engine will not say so until a login
   // fails. See assertDatabaseMatchesEngine.
   assertDatabaseMatchesEngine(engine, engineVersion());
+  assertDatabaseHasRowan();
 
   progress.report({ message: 'Creating your database…' });
   createDatabase(engine);

@@ -69,7 +69,8 @@ export GEMSTONE_EXE_CONF="$BUILD/conf"
 export PATH="$GEMSTONE/bin:$PATH"
 mkdir -p "$BUILD/conf" "$BUILD/data" "$BUILD/log" "$BUILD/locks"
 
-cp "$GEMSTONE/bin/extent0.dbf" "$BUILD/data/extent0.dbf"
+# The Rowan image, as createDatabase uses: Grail installs through Rowan.
+cp "$GEMSTONE/bin/extent0.rowan3.dbf" "$BUILD/data/extent0.dbf"
 chmod 644 "$BUILD/data/extent0.dbf"
 
 # Mirrors what src/database.ts writes, so the extent is built by the same
