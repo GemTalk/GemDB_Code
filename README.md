@@ -88,11 +88,14 @@ on GemDB". Then follow these rules:
 - Keep the application's data in Python objects under `gemdb.root`, and call
   `gemdb.commit()` when a change is complete. There is no ORM or serialization step.
 - Run the program with `gemdb`, for example `gemdb main.py`, not with `python3`.
-- Give the application its own namespace: import `gemdb`, call
-  `gemdb.use_namespace("<short app name>")`, and only then import the application's modules.
+- Give the application its own namespace. At the top level of the entry file, right after
+  `import gemdb`, call `gemdb.use_namespace("<short app name>")`, and only then import the
+  application's modules. Do not call it inside a function.
 - Run the application from one entry file, such as `main.py`. A namespace accepts only one, so a
   second script, such as a test or admin file, fails. If the program has several tasks, choose the
   task with a command-line argument, in the form `gemdb main.py <task> [arguments]`.
+- To look at the application's data through the MCP server or the GemDB Shell, call
+  `gemdb.use_namespace("<short app name>")` first.
 
 My application: <describe what you want it to do>
 ```
@@ -498,6 +501,9 @@ class TaskList:
 ```python
 import sys
 import gemdb
+
+gemdb.use_namespace("todo")
+
 from tasks import TaskList
 
 if "todo" not in gemdb.root:
@@ -564,6 +570,8 @@ gemdb.use_namespace("my-app")
 from tasks import TaskList
 ```
 
+Call it at the top level of the entry file, not inside a function, where it raises an error.
+
 The name can be any text that is not empty, and capitals matter: `my-app` and `My-App` are different
 namespaces.
 
@@ -587,7 +595,8 @@ gemdb main.py add "buy milk"
 gemdb main.py list
 ```
 
-To look at the namespace's data from the GemDB Shell, call `gemdb.use_namespace("my-app")` first.
+To look at the namespace's data from the GemDB Shell or through the MCP server, call
+`gemdb.use_namespace("my-app")` first.
 
 ### Notebooks
 
