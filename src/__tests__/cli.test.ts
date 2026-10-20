@@ -139,6 +139,9 @@ describe('writeCliScripts', () => {
     expect(script).toMatch(/TOPAZ_RUNNING=yes\ntopaz -L /);
     expect(script).toMatch(/\nRC=\$\?\nTOPAZ_RUNNING=""\n/);
     expect(script).toContain('kill -INT "$pid"');
+    // A terminal tab hangs the wrapper up twice, and bash 5 dies of the
+    // second unless the trap ignores it first.
+    expect(script).toMatch(/\nend_run\(\) \{\n {2}trap '' HUP\n/);
   });
 
   it('never leaves topaz reading commands from stdin', () => {

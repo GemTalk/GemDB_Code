@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   login is refused — the database has no session left to give — it shows the names and processes
   any session can see, and still offers to close this window's own notebooks.
 
+### Fixed
+
+- **Closing the terminal ends a `gemdb` run on Linux too.** 1.8.0 made closing the terminal tab of
+  `gemdb app.py`, or of **Run Python File in GemDB**, stop the program as Ctrl+C would. On Linux it
+  usually did not: the program carried on out of sight, its `finally` blocks unrun, holding its
+  database session. macOS was not affected.
+
 ## [1.8.0] - 2026-10-18
 
 The database engine moves to GemStone 4.0.0.a5, and the bundled Python runtime moves forward. Start
