@@ -64,14 +64,18 @@ vi.mock('../osConfig', async (importOriginal) => ({
 }));
 
 // Only what the real `runSetup` touches, for the first run marker tests that
-// complete an explicit setup through it: no download, no database, no copy.
+// complete an explicit setup through it: no download, no database, no copy,
+// and no free-space or NFS check, so the unit suite does not depend on the
+// host's disk.
 vi.mock('../engine', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../engine')>()),
   installEngine: async () => '/engine',
 }));
 vi.mock('../database', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../database')>()),
+  assertDatabaseIsLocal: () => {},
   assertDatabaseMatchesEngine: () => {},
+  assertRoomForSetup: () => {},
   createDatabase: () => true,
 }));
 vi.mock('../grail', async (importOriginal) => ({
