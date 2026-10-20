@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-10-20
+
+The database now starts from GemStone's Rowan image, because Python support and the MCP server now
+install with Rowan. Start with a fresh database: delete `~/GemDB/db` before starting this release.
+The engine is unchanged at 4.0.0.a5, but a database an earlier GemDB Code created has no Rowan and
+cannot be given it, and GemDB Code says so rather than starting it.
+
 ### Added
 
 - **See every session on the database.** Click the Sessions row in the GemDB view, or run **GemDB:
@@ -32,8 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sys.path`, is now imported in preference to the bundled one, which used to win every time. A
   class statement binds its name only once the class is complete, so a class whose body, metaclass
   or decorator raises leaves the name as it was. Assigning `__defaults__` or `__kwdefaults__` takes
-  effect even when it adds or removes a default. `import flask` no longer leaves each new session
-  with something to commit, and a request to a Flask app stored in the database writes nothing, so
+  effect even when it adds or removes a default. numpy's `loadtxt`, `np.save`/`np.load` and
+  `np.char` now match CPython. `import flask` no longer leaves each new session with something to
+  commit, and a request to a Flask app stored in the database writes nothing, so
   `with gemdb.transaction():` works after either.
 - **A newer MCP server (0.9.0).** Every session it starts reaches the database by `localhost`, and
   `find_python_senders` reports each call where Python sends it.
@@ -1156,7 +1164,8 @@ gets out of the way.
 - **`sys.exit(n)` exits 1 rather than `n`**, and **`input()` is not yet
   supported**. Both are upstream in Grail.
 
-[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.4...v1.6.0
