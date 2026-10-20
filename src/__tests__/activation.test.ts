@@ -389,9 +389,14 @@ describe('activate()', () => {
         await new Promise((resolve) => setImmediate(resolve));
 
         // Meanwhile the user presses Resume and that setup completes.
-        expect(await runSetup('/ext', TRIGGER.installCommand)).toBe('completed');
-
-        releaseOs('declined');
+        try {
+          expect(await runSetup('/ext', TRIGGER.installCommand)).toBe('completed');
+        } finally {
+          // Even when the assertion fails: the first-run work holds the setup
+          // lock until the OS step answers, and `heldHere` is module-level, so
+          // leaving it waiting would fail the next tests instead of this one.
+          releaseOs('declined');
+        }
         await expect.poll(() => existsSync(lock)).toBe(false);
         await new Promise((resolve) => setImmediate(resolve));
 
