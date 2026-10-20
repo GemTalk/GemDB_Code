@@ -879,7 +879,7 @@
     "publish:ovsx": "scripts/publish-to-registry.sh openvsx dist/gemdb-darwin-arm64-*.vsix dist/gemdb-linux-x64-*.vsix dist/gemdb-linux-arm64-*.vsix"
   },
   "dependencies": {
-    "koffi": "^2.15.1"
+    "koffi": "^3.3.3"
   },
   "devDependencies": {
     "@eslint-community/eslint-plugin-eslint-comments": "^4.8.1",
