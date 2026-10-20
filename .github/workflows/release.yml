@@ -226,12 +226,12 @@ jobs:
           # vendor-pins.sh (grail-ref, mcp-ref), so its packages are not what
           # this commit says it ships.
           candidates=$(gh api \
-            "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${GITHUB_SHA}&status=success&per_page=50" \
-            --jq '.workflow_runs[] | select(.name == "CI" and .event == "push") | [.created_at, .id] | @tsv' |
+            "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${GITHUB_SHA}&event=push&status=success&per_page=50" \
+            --jq '.workflow_runs[] | select(.name == "CI") | [.created_at, .id] | @tsv' |
             sort -r | cut -f2)
 
           if [ -z "$candidates" ]; then
-            echo "error: no successful CI run found for $GITHUB_SHA." >&2
+            echo "error: no successful push-triggered CI run found for $GITHUB_SHA (dispatch runs don't count)." >&2
             exit 1
           fi
 
