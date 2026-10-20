@@ -276,10 +276,10 @@ jobs:
             echo >&2
             echo "error: no CI run for $GITHUB_SHA still holds all three packages." >&2
             echo >&2
-            echo "CI keeps a release's packages for 90 days (7 for a branch or a dispatch)." >&2
-            echo "Re-run CI on this commit — Actions -> CI -> the run for this SHA -> Re-run" >&2
-            echo "all jobs — and dispatch this workflow again once it is green. Building the" >&2
-            echo "packages here instead is not an option: the CPython shim only compiles on" >&2
+            echo "CI keeps the packages from a push to main for 90 days. Re-run this commit's" >&2
+            echo "push run — Actions -> CI -> the push run for this SHA (not a dispatch) ->" >&2
+            echo "Re-run all jobs — and dispatch this workflow again once it is green. Building" >&2
+            echo "the packages here instead is not an option: the CPython shim only compiles on" >&2
             echo "the architecture it targets, and bundle:grail would pick up whatever Grail" >&2
             echo "is today rather than what this commit was tested against." >&2
             exit 1
