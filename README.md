@@ -373,6 +373,10 @@ mapping layer, or serialization step between your code and the database. Every c
 transaction, and each shell, notebook, and agent works in its own consistent view of the data.
 
 Python runs inside the database on Grail, GemTalk Systems' implementation of Python for GemDB.
+Python in the database matches CPython 3.14. Most of the standard library works, and `sqlite3` is
+not available. Grail's documentation lists what is supported:
+[standard library coverage](https://github.com/GemTalk/Grail/blob/main/docs/Stdlib_Gaps.md) and
+[popular packages](https://github.com/GemTalk/Grail/blob/main/docs/Package_Census.md).
 
 For example, a short session in the GemDB Shell looks like this:
 
