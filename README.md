@@ -90,8 +90,9 @@ on GemDB". Then follow these rules:
 - Run the program with `gemdb`, for example `gemdb main.py`, not with `python3`.
 - Give the application its own namespace: import `gemdb`, call
   `gemdb.use_namespace("<short app name>")`, and only then import the application's modules.
-- Use one entry file, such as `main.py`, and choose the task with a command-line argument, for
-  example `gemdb main.py add "buy milk"`.
+- Run the application from one entry file, such as `main.py`. A namespace accepts only one, so a
+  second script, such as a test or admin file, fails. If the program has several tasks, choose the
+  task with a command-line argument, in the form `gemdb main.py <task> [arguments]`.
 
 My application: <describe what you want it to do>
 ```
@@ -576,9 +577,10 @@ because it runs your code as a separate file. Editing `main.py` and running it a
 expected. Setting the namespace with the `GEMDB_NAMESPACE` environment variable does not let a
 different file run in the same namespace.
 
-Put all of your application's tasks in one entry file, and choose the task with a command-line
-argument. For example, a `main.py` that reads `sys.argv[1]` as the task name could take these two
-commands:
+Run your application from one entry file, such as `main.py`, and put everything it does behind that
+file. A program that serves requests, such as a web server, already works this way. For a program
+with several tasks, choose the task with a command-line argument. For example, a `main.py` that
+reads `sys.argv[1]` as the task name could take these two commands:
 
 ```sh
 gemdb main.py add "buy milk"
