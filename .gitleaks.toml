@@ -76,15 +76,21 @@ tags = ["password", "open-vsx"]
 # `KEY_PASSWORD = "somepass"`, `load_cert_chain(..., password="badpass")` —
 # identical in every CPython and Django distribution and not GemDB's to change.
 #
-# Scoped to this one custom rule and to that one directory, so a real key
+# Scoped to this one custom rule and to those directories, so a real key
 # planted in the stdlib tree is still caught by `private-key` and everything
 # else the defaults bring. Deliberately NOT allowlisted by secret text: the
 # literals are ordinary words, and matching on them would suppress the same
 # words anywhere in the package.
+#
+# Two directories since Grail #1716 (pinned for 1.9.0), which moved the
+# third-party packages Grail ships -- Django among them -- out of stdlib/ into
+# src/python/bundled/. The same Django lines then failed the 1.9.0 release
+# scan from the new path, 7 hits per package (`password1_field_name=
+# "password1"`, `PASSWORD_FIELD = "password"`), with nothing new in them.
 [[allowlists]]
-description = "Password field names and test fixtures in the bundled CPython/Django standard library"
+description = "Password field names and test fixtures in the bundled CPython standard library and third-party packages"
 targetRules = ["gemstone-password-literal"]
-paths = ['''grail/src/python/stdlib/''']
+paths = ['''grail/src/python/stdlib/''', '''grail/src/python/bundled/''']
 
 # The MCP server's own auth tests, which create a throwaway user:
 # `AllUsers addNewUserWithId: aUserId password: 'swordfishXYZ'`. Upstream test
@@ -100,10 +106,16 @@ paths = ['''grail/src/python/stdlib/''']
 # different change with a different argument, and it would put `--auth` out of
 # reach of anyone who later makes it startable. Scoped to that one directory and
 # this one rule, so the defaults still apply there in full.
+#
+# The directory moved with mcp_server 0.9.0 (#57, pinned for 1.9.0), which
+# became a Rowan project: the auth tests are now the Tonel package
+# src/Mcp-Auth-Tests/, and the same fixture failed the 1.9.0 release scan
+# there, twice per package. With `--no-auth` the Rowan load leaves the Auth
+# component, and its tests, out of the database just as the file-in did.
 [[allowlists]]
-description = "Test-fixture credentials in the MCP server's auth tests, which GemDB files in with --no-auth"
+description = "Test-fixture credentials in the MCP server's auth tests, which GemDB loads with --no-auth"
 targetRules = ["gemstone-password-literal"]
-paths = ['''mcp/src/auth/''']
+paths = ['''mcp/src/Mcp-Auth-Tests/''']
 
 # ---------------------------------------------------------------------------
 # GemDB's own telemetry endpoint
