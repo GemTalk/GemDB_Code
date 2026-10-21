@@ -22,6 +22,7 @@ import {
   PendingChange,
   PathStep,
   PERSISTED_REGISTRY,
+  REGISTRY,
   PauseVariable,
   ROOT_LISTING_LIMIT,
   abortQuery,
@@ -93,7 +94,7 @@ import {
  * row being opened cuts that row short rather than holding the session.
  */
 let extensionChain: Promise<unknown> = Promise.resolve();
-function extensionQuery(code: string, { budget = false } = {}): Promise<string> {
+export function extensionQuery(code: string, { budget = false } = {}): Promise<string> {
   const run = extensionChain.then(async () => {
     const timer = budget
       ? setInterval(() => interruptSessionFor(EXTENSION_OWNER.key), PAUSED_QUERY_BUDGET_MS)
@@ -230,6 +231,8 @@ export interface RootEntry {
   stack?: boolean;
   /** Its position in the extension session's `PERSISTED_REGISTRY` when it has children; else 0. */
   ref?: number;
+  /** Its position there whether or not it has children: what the Inspector opens it by. */
+  handle?: number;
   /** How many children it has, when it has a `ref`. */
   children?: number;
   /** How many of those are items read by position, for a container — what its ranges divide. */
@@ -257,6 +260,8 @@ export type SavedRow =
       kind: 'pending';
       save: PendingSave;
       ref?: number;
+      /** Its position in the notebook's `PERSISTED_REGISTRY`, children or not (`RootEntry.handle`). */
+      handle?: number;
       children?: number;
       indexed?: number;
       kids?: ChildKind;
@@ -579,26 +584,53 @@ export function chooseNotebook(
 /**
  * Run Smalltalk in a notebook's session: through its pause if it is paused,
  * else directly. With `budget`, a direct run is soft-broken every
- * `PAUSED_QUERY_BUDGET_MS`, as a paused query always is, for a read that runs
- * the user's `__repr__`.
+ * `PAUSED_QUERY_BUDGET_MS`, as a paused query always is by default, for a read
+ * that runs the user's `__repr__`. A caller that says `budget: false` gets no
+ * budget at a pause either, and `passHalts` runs past a breakpoint() the query
+ * reaches, as a Debug Console line does, paused or not; with neither said, a
+ * paused query runs as a Variables read does (`PausedQueryOptions`).
+ *
+ * Direct runs on one notebook are chained, one at a time, as the extension
+ * session's are (`extensionQuery`) and a pause's are: a session runs one call
+ * at a time, and a second one sent while the first runs fails as busy. Two
+ * reads close together — an Inspector redrawing two groups after an edit —
+ * would otherwise make the second fail with nothing else running.
  */
-async function inNotebook(
+const notebookChains = new Map<string, Promise<unknown>>();
+export async function inNotebook(
   ownerKey: string,
   code: string,
-  { budget = false } = {},
+  options: { budget?: boolean; passHalts?: boolean } = {},
 ): Promise<string> {
   const pause = pauseForOwner(ownerKey);
-  if (pause?.query) return pause.query(code);
-  const session = sessionForIfOpen(ownerKey);
-  if (!session) throw new Error('That notebook has no database session.');
-  const timer = budget
-    ? setInterval(() => interruptSessionFor(ownerKey), PAUSED_QUERY_BUDGET_MS)
-    : undefined;
-  try {
-    return await session.executeAsync(code);
-  } finally {
-    clearInterval(timer);
+  if (pause?.query) {
+    const said = options.budget !== undefined || options.passHalts !== undefined;
+    return said
+      ? pause.query(code, { budget: options.budget ?? true, passHalts: options.passHalts === true })
+      : pause.query(code);
   }
+  const run = (notebookChains.get(ownerKey) ?? Promise.resolve()).then(async () => {
+    const session = sessionForIfOpen(ownerKey);
+    if (!session) throw new Error('That notebook has no database session.');
+    const timer = options.budget
+      ? setInterval(() => interruptSessionFor(ownerKey), PAUSED_QUERY_BUDGET_MS)
+      : undefined;
+    try {
+      return await session.executeAsync(
+        code,
+        undefined,
+        options.passHalts ? { passHalts: true } : {},
+      );
+    } finally {
+      clearInterval(timer);
+    }
+  });
+  const chained = run.catch(() => undefined);
+  notebookChains.set(ownerKey, chained);
+  void chained.then(() => {
+    if (notebookChains.get(ownerKey) === chained) notebookChains.delete(ownerKey);
+  });
+  return run;
 }
 
 /** A Python-side answer that is an `Error: …` line, as an exception. */
@@ -613,6 +645,7 @@ function toEntry(row: PauseVariable): RootEntry {
     type: row.type,
     value: row.value,
     ref: row.ref,
+    ...(row.handle ? { handle: row.handle } : {}),
     children: row.indexed + row.named,
     indexed: row.indexed,
     kind: row.kind,
@@ -1022,6 +1055,42 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
     }
   }
 
+  /**
+   * The Python that reaches `row`'s object from `gemdb.root`, as the
+   * Inspector labels a column and Copy as Expression copies it:
+   * `gemdb.root["warehouse"].orders[3]`. A range is not a step, and nor is a
+   * group (`class variables`): its rows are the object's own attributes. An
+   * item of a set has no position Python can index, so it reads `list(s)[i]`.
+   */
+  expressionOf(row: SavedRow): string | undefined {
+    switch (row.kind) {
+      case 'entry':
+        return accessCode(row.entry.key);
+      case 'pending':
+        return accessCode(row.save.key);
+      case 'range':
+        return this.expressionOf(row.parent);
+      case 'field': {
+        if (!row.field.handle && row.field.ref) return this.expressionOf(row.parent);
+        let parent: SavedRow = row.parent;
+        while (parent.kind === 'range') parent = parent.parent;
+        const base = this.expressionOf(parent);
+        if (base === undefined) return undefined;
+        const isGroup = parent.kind === 'field' && !parent.field.handle && parent.field.ref > 0;
+        const kind = isGroup ? 'obj' : openable(parent)?.kind;
+        const name = row.field.name;
+        if (kind === 'seq') return `${base}${name}`;
+        if (kind === 'coll') return `list(${base})${name}`;
+        if (kind === 'dict') return `${base}[${name}]`;
+        return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)
+          ? `${base}.${name}`
+          : `getattr(${base}, ${JSON.stringify(name)})`;
+      }
+      default:
+        return undefined;
+    }
+  }
+
   /** The names of the rows down to `row` (`rowKey`), for a row a path can name; else undefined. */
   private rowNames(row: SavedRow): string[] | undefined {
     switch (row.kind) {
@@ -1288,16 +1357,18 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
           ? [
               ...row.saves.map((save): SavedRow => {
                 const read = row.read?.get(save.key);
+                const handle = read?.handle ? { handle: read.handle } : {};
                 return read?.ref
                   ? {
                       kind: 'pending',
                       save,
+                      ...handle,
                       ref: read.ref,
                       children: read.indexed + read.named,
                       indexed: read.indexed,
                       kids: read.kind,
                     }
-                  : { kind: 'pending', save };
+                  : { kind: 'pending', save, ...handle };
               }),
               ...(row.notebook.dirty
                 ? [{ kind: 'changes', notebook: row.notebook } as SavedRow]
@@ -1521,6 +1592,46 @@ export class SavedObjectsProvider implements vscode.TreeDataProvider<SavedRow> {
       : undefined;
   }
 
+  /**
+   * Where the Inspector finds a row's object: the session to read it in and its
+   * position in this view's registry. A saved stack is one too: it is a dict
+   * under `gemdb.root` (`savedStacks.ts`). Undefined for a row with no object of
+   * its own (a group, a message) and for a row from before the view was last
+   * read, whose position may now hold something else.
+   */
+  inspectTarget(row: SavedRow): { readIn: ReadIn; handle: number; label: string } | undefined {
+    if (!this.isCurrent(row)) return undefined;
+    switch (row.kind) {
+      case 'entry': {
+        // By its handle, so an entry with nothing inside (a str, an int, []) inspects too.
+        const handle = row.entry.handle || row.entry.ref;
+        return handle
+          ? { readIn: { session: 'extension' }, handle, label: accessCode(row.entry.key) }
+          : undefined;
+      }
+      case 'pending': {
+        const handle = row.handle || row.ref;
+        return handle
+          ? {
+              readIn: { session: 'notebook', ownerKey: row.save.ownerKey },
+              handle,
+              label: accessCode(row.save.key),
+            }
+          : undefined;
+      }
+      case 'field':
+        return row.field.handle
+          ? {
+              readIn: row.readIn,
+              handle: row.field.handle,
+              label: this.expressionOf(row) ?? row.field.name,
+            }
+          : undefined;
+      default:
+        return undefined;
+    }
+  }
+
   /** Whether a row belongs to the rows shown now, so its registry position still holds. */
   private isCurrent(row: SavedRow): boolean {
     let at: SavedRow = row;
@@ -1689,7 +1800,6 @@ async function saveVariable(
     );
     return;
   }
-  const query = pause.query;
   const handle =
     variable.variablesReference > 0
       ? variable.variablesReference
@@ -1698,12 +1808,48 @@ async function saveVariable(
     void vscode.window.showErrorMessage(`"${variable.name}" is not an object that can be added.`);
     return;
   }
+  await addToPersistedObjects(view, treeViews, {
+    query: pause.query,
+    ownerKey: pause.ownerKey,
+    notebook: pause.label,
+    handle,
+    name: variable.name,
+    registry: REGISTRY,
+  });
+}
+
+/** An object to add under `gemdb.root`: where it is, and what to call it while asking. */
+export interface AddTarget {
+  /** Runs a query in the session that holds the object. */
+  query: (code: string) => Promise<string>;
+  ownerKey: string;
+  /** The notebook's (or debugged file's) name, for the toast and the view. */
+  notebook: string;
+  /** Its position in `registry`. */
+  handle: number;
+  /** What the user knows it as: a Variables row's name, an Inspector row's expression. */
+  name: string;
+  /** The pause's registry, or the Inspector's. */
+  registry: string;
+}
+
+/**
+ * Add an object under `gemdb.root`, asking for the key: what **Add to
+ * Persisted Objects…** does, from a Variables row and from the Inspector
+ * alike, so the two read and behave the same. It does not commit.
+ */
+export async function addToPersistedObjects(
+  view: SavedObjectsProvider,
+  treeViews: Map<string, vscode.TreeView<SavedRow>>,
+  target: AddTarget,
+): Promise<void> {
+  const { query, handle, name, registry } = target;
   try {
-    const { type, label } = parseSaveSuggestion(await query(saveSuggestionQuery(handle)));
-    const base = suggestKey({ name: variable.name, type, label });
+    const { type, label } = parseSaveSuggestion(await query(saveSuggestionQuery(handle, registry)));
+    const base = suggestKey({ name, type, label });
     const suggested = unquote(orThrow(await query(freeKeyQuery(base))));
     const key = await vscode.window.showInputBox({
-      title: `Add ${variable.name} to Persisted Objects`,
+      title: `Add ${name} to Persisted Objects`,
       prompt:
         'Its key under gemdb.root. It persists at the notebook’s next commit; Python reads it ' +
         'back with gemdb.root[key].',
@@ -1721,15 +1867,15 @@ async function saveVariable(
       },
     });
     if (key === undefined) return;
-    orThrow(await query(saveToRootQuery(handle, key)));
+    orThrow(await query(saveToRootQuery(handle, key, registry)));
     view.notePending({
       key,
       type,
-      ownerKey: pause.ownerKey,
-      notebook: pause.label,
+      ownerKey: target.ownerKey,
+      notebook: target.notebook,
       at: new Date().toISOString(),
     });
-    log(`Saved ${variable.name} as ${accessCode(key)} (${pause.label}), not yet committed`);
+    log(`Saved ${name} as ${accessCode(key)} (${target.notebook}), not yet committed`);
     // Show it land: the Persisted Objects beside the Variables, opened if closed.
     const shown = treeViews.get(DEBUG_VIEW_ID);
     if (shown) {
@@ -1738,12 +1884,15 @@ async function saveVariable(
         .catch((e: unknown) => log(`Could not show ${key}: ${errorMessage(e)}`));
     }
     const copy = 'Copy Code';
-    const choice = await vscode.window.showInformationMessage(savedNotice(key, pause.label), copy);
+    const choice = await vscode.window.showInformationMessage(
+      savedNotice(key, target.notebook),
+      copy,
+    );
     if (choice === copy) {
       await vscode.env.clipboard.writeText(`import gemdb\n\nsaved = ${accessCode(key)}\n`);
     }
   } catch (e) {
-    void vscode.window.showErrorMessage(`Could not add ${variable.name}: ${errorMessage(e)}`);
+    void vscode.window.showErrorMessage(`Could not add ${name}: ${errorMessage(e)}`);
   }
 }
 
@@ -2421,6 +2570,10 @@ export function registerSavedObjects(context: vscode.ExtensionContext): SavedObj
   context.subscriptions.push(
     vscode.commands.registerCommand('gemdb.saveVariable', (ctx: VariableContext) =>
       saveVariable(view, treeViews, ctx),
+    ),
+    // Internal, for the Inspector (`inspector.ts`): its Add to Persisted Objects….
+    vscode.commands.registerCommand('gemdb.savedObjects.addFromInspector', (target: AddTarget) =>
+      addToPersistedObjects(view, treeViews, target),
     ),
     vscode.commands.registerCommand('gemdb.savedObjects.refresh', () => view.refresh()),
     vscode.commands.registerCommand('gemdb.savedObjects.goToItem', (row: SavedRow) =>

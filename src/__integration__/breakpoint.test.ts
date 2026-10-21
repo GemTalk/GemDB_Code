@@ -1278,6 +1278,26 @@ describe.skipIf(!haveExtent || !canMakeFixture())('breakpoint()', () => {
     expect((await runPython('6 * 7', NB)).value).toBe('42');
   });
 
+  it('runs past a breakpoint() without asking the debugger when a direct run says passHalts', async () => {
+    await runPython('6 * 7', NB);
+    const session = sessionForIfOpen(NB.key)!;
+    const python = `(System myUserProfile symbolList objectNamed: #'ModuleAst')
+  evaluateSource: 'breakpoint()
+6 * 7' usingModuleScope: SymbolDictionary new`;
+    let asked = 0;
+    setHaltHandler(async () => {
+      asked++;
+      return 'continue';
+    });
+    expect(
+      await session.executeAsync(`(${python}) printString`, undefined, { passHalts: true }),
+    ).toBe('42');
+    expect(asked).toBe(0);
+    // Without it, the same line opens the debugger, as a cell's would.
+    expect(await session.executeAsync(`(${python}) printString`)).toBe('42');
+    expect(asked).toBe(1);
+  });
+
   it('names frames from an imported file by path, and qualifies methods by class', async () => {
     const dir = fixture!.root;
     fs.writeFileSync(

@@ -334,7 +334,10 @@ exit [lindex $result 3]
     // in a tab, and not as the pty's own process: then the shell passes the
     // hangup on and the kernel sends one too, and on Linux the second ended
     // the wrapper before its trap could stop topaz. Spawned directly, it was
-    // hung up once, and this passed against that wrapper.
+    // hung up once, and this passed against that wrapper. With the trap
+    // ignoring the second hangup, this still failed about one run in six on
+    // CI's Linux runners, since the second can land as the trap is entered
+    // (#170); a watcher started before topaz now answers the hangup instead.
     const scriptPath = path.join(workDir, 'hangup.exp');
     fs.writeFileSync(
       scriptPath,

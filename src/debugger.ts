@@ -10,9 +10,11 @@ import {
   helpText,
   isConsoleCommand,
   objectLink,
+  dedented,
   parseConsoleCommand,
   pendingText,
   persistedCompletions,
+  withoutComment,
 } from './consoleCommands';
 import { PlacedFrame, jupyterTraceback } from './consoleTraceback';
 import {
@@ -141,6 +143,11 @@ export type ConsoleAnswer =
       type?: string;
       /** Opens the result like a Variables row; 0 for a leaf. */
       variablesReference: number;
+      /**
+       * The result's position in the pause's registry, leaf or not; 0 for None
+       * or a statement. What Inspect opens a console or watch result by.
+       */
+      handle?: number;
       indexedVariables?: number;
       namedVariables?: number;
       /** How its children are read: a container's items, or an object's attributes. */
@@ -174,8 +181,10 @@ export interface Pause {
    * last listed — how a command on a row reaches its object in the gem.
    */
   handleFor?(containerRef: number, name: string): number | undefined;
-  /** Run a query in the paused session (see `HaltRequest.query`). */
-  query?(code: string): Promise<string>;
+  /** Run a query in the paused session (see `HaltRequest.query` for the options). */
+  query?(code: string, options?: PausedQueryOptions): Promise<string>;
+  /** The registry handle of watch `expression`'s result, as last evaluated at this pause. */
+  watchHandle?(expression: string): number | undefined;
   /**
    * Run Debug Console or watch input in frame `frameId`, with that frame's
    * names in scope, until it finishes or `signal` aborts it. On a saved stack
@@ -974,7 +983,9 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
    */
   private evaluate(request: DapRequest): void {
     const context = String(request.arguments?.context ?? 'repl');
-    const source = String(request.arguments?.expression ?? '');
+    const typed = String(request.arguments?.expression ?? '');
+    // Run what was typed without its shared indentation, so a line pasted with a leading space runs.
+    const source = context === 'repl' || context === 'watch' ? dedented(typed) : typed;
     const pause = this.pause;
     if (context === 'clipboard') {
       // Copy Value on a Variables row: the expression is the row's value
@@ -1263,6 +1274,40 @@ export class PauseDebugAdapter implements vscode.DebugAdapter {
           if (answer.startsWith('Error: ')) throw new Error(answer.slice('Error: '.length));
           tellView('gemdb.savedObjects.refresh');
           say(`Committed ${pause.label}: its changes are saved in the database.`);
+          done();
+          return;
+        }
+        case 'inspect': {
+          if (!pause.evaluate || !pause.ownerKey)
+            throw new Error('Nothing can be inspected from here.');
+          // Run once, in the console's own names, so the expression means what it means here.
+          const answer = await pause.evaluate(
+            command.expression,
+            frameId,
+            'repl',
+            new AbortController().signal,
+          );
+          if (answer.output) this.event('output', { category: 'stdout', output: answer.output });
+          if (answer.kind !== 'value') {
+            this.fail(request, answer.kind === 'error' ? answer.traceback : INTERRUPTED, false);
+            return;
+          }
+          if (!answer.handle) {
+            this.fail(
+              request,
+              `${command.expression} is None, or not a value: nothing to inspect.`,
+              false,
+            );
+            return;
+          }
+          const frame = pause.frames.find((f) => f.id === frameId) ?? pause.frames[0];
+          tellView('gemdb.inspector.openPaused', {
+            ownerKey: pause.ownerKey,
+            handle: answer.handle,
+            label: withoutComment(command.expression),
+            frame,
+            run: pause.label,
+          });
           done();
           return;
         }
@@ -1621,19 +1666,21 @@ function handleKey(containerRef: number, name: string): string {
 
 /**
  * Where a console traceback's frame is, for `jupyterTraceback`: the first
- * frame is the console's own input; a `<grail>` frame is in the notebook cell
- * holding its line (`locateCell`, the call stack's own match); anything else
- * is a file, read from disk.
+ * frame is the console's own input, called `input` (the Inspector's Evaluate
+ * tab passes `Inspector`); a `<grail>` frame is in the notebook cell holding
+ * its line (`locateCell`, the call stack's own match); anything else is a
+ * file, read from disk.
  */
-function placeFrame(
+export function placeFrame(
   ownerKey: string,
   source: string,
+  input = 'Debug Console',
 ): (frame: TracebackFrame, index: number) => PlacedFrame {
   const { running, cells } = notebookCells(ownerKey);
   return (frame, index) => {
     if (frame.file === '<grail>') {
       if (index === 0 && frame.name === '<module>') {
-        return { label: 'Debug Console', isFile: false, lines: source.split(/\r?\n/) };
+        return { label: input, isFile: false, lines: source.split(/\r?\n/) };
       }
       const uri = locateCell(
         { ...frame, column: 0, endLine: frame.line, endColumn: 0, lineText: frame.text },
@@ -1646,7 +1693,7 @@ function placeFrame(
         : { label: 'Cell', isFile: false };
     }
     if (frame.file === '<string>' || frame.file === '') {
-      return { label: 'Debug Console', isFile: false, lines: source.split(/\r?\n/) };
+      return { label: input, isFile: false, lines: source.split(/\r?\n/) };
     }
     return { label: `File ${frame.file}`, isFile: true, lines: readFileLines(frame.file) };
   };
@@ -1718,11 +1765,32 @@ export interface ConsoleHost {
 /** A pause's Debug Console, run through `host`. */
 export function debugConsole(
   host: ConsoleHost,
-): Pick<Pause, 'evaluate' | 'showRow' | 'consoleName' | 'consoleNames' | 'persistedKeys'> {
+): Pick<
+  Pause,
+  'evaluate' | 'showRow' | 'consoleName' | 'consoleNames' | 'persistedKeys' | 'watchHandle'
+> {
   const consoleRefs = new Map<number, number>();
+  // Each watch's result as last evaluated, by its expression as run (dedented, then trimmed):
+  // Inspect on a Watch row looks it up the same way (`inspectVariable`).
+  const watches = new Map<string, number>();
   return {
-    evaluate: (source, frameId, context, signal, selfHandle) =>
-      evaluateAt(host, consoleRefs, source, frameId, context, signal, selfHandle),
+    evaluate: async (source, frameId, context, signal, selfHandle) => {
+      const answer = await evaluateAt(
+        host,
+        consoleRefs,
+        source,
+        frameId,
+        context,
+        signal,
+        selfHandle,
+      );
+      if (context === 'watch') {
+        if (answer.kind === 'value' && answer.handle) watches.set(source.trim(), answer.handle);
+        else watches.delete(source.trim());
+      }
+      return answer;
+    },
+    watchHandle: (expression) => watches.get(expression.trim()),
     showRow: (handle, name) => showRowAt(host, handle, name),
     consoleName: (frameId, name, handle) => consoleNameAt(host, consoleRefs, frameId, name, handle),
     consoleNames: (frameId) => consoleNamesAt(host, consoleRefs, frameId),
@@ -1831,6 +1899,7 @@ async function evaluateAt(
         value: context === 'watch' ? row.value : reply.row.value,
         ...(row.type ? { type: row.type } : {}),
         variablesReference: row.variablesReference,
+        ...(reply.row.handle ? { handle: reply.row.handle } : {}),
         ...(row.indexedVariables ? { indexedVariables: row.indexedVariables } : {}),
         ...(row.namedVariables ? { namedVariables: row.namedVariables } : {}),
         ...(reply.row.kind ? { children: reply.row.kind } : {}),
@@ -1940,7 +2009,7 @@ export function registerBreakpointDebugger(): vscode.Disposable {
               writeVariable(request, listed, globals, ref, name, value),
             answer,
             handleFor: (containerRef, name) => listed.handles.get(handleKey(containerRef, name)),
-            query: (code) => request.query(code),
+            query: (code, options) => request.query(code, options),
             ...debugConsole({
               query: (code, options) => request.query(code, options),
               ownerKey: request.session.owner.key,

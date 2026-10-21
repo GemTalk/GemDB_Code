@@ -260,6 +260,15 @@ first-install path, and `assertSafeToStart` before the stone starts (the
 an extension update reaches that line without preparing anything — engine
 downloaded, database present, Grail staged, so `isInstalled()` is true.
 
+**The database starts from the Rowan image, and one that did not is refused
+the same way.** Grail and the MCP server became Rowan projects on 2026-10-19,
+and Rowan cannot be added to an image afterwards, so `createDatabase` copies
+`bin/extent0.rowan3.dbf` and records it in `conf/image`.
+`assertDatabaseHasRowan`, beside `assertDatabaseMatchesEngine` in both places,
+refuses a database without that record — one GemDB 1.8 or earlier made from
+the plain `extent0.dbf` — because the engine version is the same, so the
+version guard cannot tell them apart. See `docs/grail.md`.
+
 **Below its free-space threshold the stone stops collecting garbage.** GemDB
 caps the extent at the license's 10240 MB, reserves it on disk, and sets a
 500 MB threshold (`withSpaceLimits` in `database.ts`). The threshold is not a

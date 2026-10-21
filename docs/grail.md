@@ -18,7 +18,23 @@ prepared extent made the first install fast and made every upgrade afterwards
 take a different, less-exercised path, which is precisely backwards: the path
 that has to keep working for the life of the database is the one that should
 run every time. So `createDatabase` always copies the engine's own
-`bin/extent0.dbf`, and `ensureRunning` files Grail in.
+`bin/extent0.rowan3.dbf`, and `ensureRunning` installs Grail into it.
+
+**Grail is a Rowan project, so the database starts from the Rowan image.**
+From Grail #1721 (2026-10-19) Grail is Tonel packages in `src/Grail-*` with a
+Rowan project in `rowan/`, and its installer loads them with Rowan
+(`scripts/install_rowan.gs`) instead of filing in `src/smalltalk/install.gs`.
+Rowan cannot be added to an image afterwards, so GemDB creates its database
+from `extent0.rowan3.dbf` (`INITIAL_EXTENT` in `database.ts`) and records that
+in `conf/image`. A database without the record was made by GemDB 1.8 or earlier
+from the plain `extent0.dbf`, and `assertDatabaseHasRowan` refuses it before
+setup and before the stone starts, as `assertDatabaseMatchesEngine` does for an
+engine change. Moving such a database across is manual: recreate it.
+`install-grail.sh` also probes for Rowan before loading, which is what catches
+an external database. The Rowan load runs in one gem with
+`GEM_TEMPOBJ_CACHE_SIZE=1000000`, Grail's own figure, because it compiles the
+whole project as one patch set. It needs no privilege beyond the two `gemdb`
+holds: measured on 4.0.0.a5, `grail.test.ts` loads it as `gemdb`.
 
 What that costs is minutes of topaz on a first run, worth paying once per user
 and not worth paying once per integration test file — so
@@ -105,9 +121,23 @@ shell passing the hangup on and once from the kernel, and on Ubuntu 26.04
 first line: topaz was left running under init, no `finally` ran, and the
 temporary files stayed. 1.8.0 shipped like that, and closing a tab on Linux
 stopped the run in two tries out of seven. On macOS no second hangup reached
-the trap. So the trap now ignores SIGHUP, and the integration test closes a
-pty with an interactive shell in front of the wrapper, which fails against
-the 1.8.0 wrapper on Linux.
+the trap. So the trap was made to ignore SIGHUP, and the integration test
+closes a pty with an interactive shell in front of the wrapper, which fails
+against the 1.8.0 wrapper on Linux.
+
+Ignoring it inside the trap was not enough, because the second hangup can land
+as the trap is entered, before its first line runs: bash, already handling the
+first, ends the script on the second (#170). The test failed in 8 of 47 Linux
+CI jobs, and repeated 20 times with the wrapper traced, closing the tab left
+topaz running in 3 closes on x64 and 9 on arm64, each trace ending at the call
+to `end_run`. So the wrapper now ignores SIGHUP itself for as long as topaz
+runs, and a watcher subshell started just before topaz answers the hangup: its
+trap is set before any hangup can arrive, so a second finds a trap rather than
+bash's default. It stops topaz as Ctrl-C would and exits; the wrapper then
+finishes as it does after any interrupted run, and kills the watcher on the way
+out. The watcher waits on a background `sleep` because bash defers a trap until
+a foreground command ends, and it never sees Ctrl-C, which bash ignores in a
+script's background jobs.
 
 Errors in the driver are caught as
 `AbstractException`, not `Error`: Grail's Python exceptions live outside the

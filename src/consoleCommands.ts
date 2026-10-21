@@ -30,6 +30,11 @@ export const CONSOLE_COMMANDS: ConsoleCommandInfo[] = [
     summary: 'Add p to Persisted Objects (gemdb.root); it is saved when the notebook commits.',
   },
   {
+    name: '%inspect',
+    usage: '%inspect p',
+    summary: 'Open p, or any expression, in an Inspector beside the editor.',
+  },
+  {
     name: '%pending',
     usage: '%pending',
     summary:
@@ -55,6 +60,7 @@ export const CONSOLE_COMMANDS: ConsoleCommandInfo[] = [
 /** A `%` line, read. */
 export type ConsoleCommand =
   | { kind: 'persist'; expression: string; key: string }
+  | { kind: 'inspect'; expression: string }
   | { kind: 'pending' }
   | { kind: 'commit' }
   | { kind: 'names' }
@@ -63,6 +69,55 @@ export type ConsoleCommand =
 
 /** A Python identifier: a name a console line can bind. */
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * `source` without a trailing `# comment` on its last line, for a label made
+ * from it: `x  # note` labels its children `x.y`, not `(x  # note).y`, which
+ * would comment out its own `).y`. A `#` inside a string literal stays.
+ */
+export function withoutComment(source: string): string {
+  let quote: string | undefined;
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i];
+    if (quote) {
+      if (c === '\\') i++;
+      else if (c === quote) quote = undefined;
+    } else if (c === '"' || c === "'") quote = c;
+    else if (c === '#') {
+      const end = source.indexOf('\n', i);
+      if (end < 0) return source.slice(0, i).trimEnd();
+      i = end;
+    }
+  }
+  return source;
+}
+
+/**
+ * What was typed in the Debug Console or a watch, without the indentation
+ * every line of it shares, as Python's `textwrap.dedent` takes it off: a line
+ * pasted from a document or a chat often starts with a space, which Python
+ * reads as an unexpected indent. A block keeps its own shape, since only the
+ * common part goes; blank lines don't count towards it.
+ */
+export function dedented(source: string): string {
+  const lines = source.split('\n');
+  // The longest leading whitespace every non-blank line starts with, compared as text, as
+  // textwrap does: a tab and spaces are not the same indent.
+  let common: string | undefined;
+  for (const line of lines) {
+    if (line.trim() === '') continue;
+    const lead = /^[ \t]*/.exec(line)?.[0] ?? '';
+    if (common === undefined) common = lead;
+    else {
+      let n = 0;
+      while (n < common.length && n < lead.length && common[n] === lead[n]) n++;
+      common = common.slice(0, n);
+    }
+  }
+  if (!common) return source;
+  const cut = common.length;
+  return lines.map((line) => (line.trim() === '' ? line.trim() : line.slice(cut))).join('\n');
+}
 
 /** Whether a console line is a GemDB command rather than Python. */
 export function isConsoleCommand(line: string): boolean {
@@ -89,6 +144,10 @@ export function parseConsoleCommand(line: string): ConsoleCommand | undefined {
       if (!key) return { kind: 'invalid', message: `Give it a key. ${usageOf('%persist')}` };
       return { kind: 'persist', expression, key };
     }
+    case 'inspect':
+      return rest
+        ? { kind: 'inspect', expression: rest.trim() }
+        : { kind: 'invalid', message: `Inspect what? ${usageOf('%inspect')}` };
     case 'pending':
     case 'commit':
     case 'names':
