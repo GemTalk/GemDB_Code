@@ -50,3 +50,5 @@ Code prompts you again the next time the database starts.
 
 You can cancel the download. Canceling keeps what has already been downloaded, and **Set Up GemDB**
 in the GemDB Code sidebar picks up from there.
+
+<img referrerpolicy="no-referrer-when-downgrade" src="https://static.scarf.sh/a.png?x-pxid=66a85084-141a-4772-80ed-69d29c88f7ad" />
