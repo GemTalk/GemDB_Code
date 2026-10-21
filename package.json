@@ -924,7 +924,7 @@
     "@types/vscode": "^1.101.0",
     "@typescript/native": "npm:typescript@^7.0.2",
     "@vscode/extension-telemetry": "^1.5.2",
-    "@vscode/vsce": "^3.7.1",
+    "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.28.1",
     "eslint": "^10.12.0",
     "globals": "^17.13.0",
