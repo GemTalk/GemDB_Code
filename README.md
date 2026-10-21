@@ -74,6 +74,35 @@ GemDB Code includes an MCP (Model Context Protocol) server, so AI agents such as
 Cursor can explore your data, run Python in your database, and commit changes. For more information,
 see [Connect an AI agent](#connect-an-ai-agent).
 
+### Give an AI agent context about GemDB
+
+An AI agent does not know how GemDB stores data unless you tell it. Paste this into your agent's
+chat before you ask it to build or change an application, and replace the last line with what you
+want:
+
+```text
+Read https://raw.githubusercontent.com/GemTalk/GemDB_Code/main/README.md before you write any code,
+starting with the sections "Python in the database", "The `gemdb` command" and "Build an application
+on GemDB". Then follow these rules:
+
+- Keep the application's data in Python objects under `gemdb.root`, and call
+  `gemdb.commit()` when a change is complete. There is no ORM or serialization step.
+- Run the program with `gemdb`, for example `gemdb main.py`, not with `python3`.
+- Give the application its own namespace. At the top level of the entry file, right after
+  `import gemdb`, call `gemdb.use_namespace("<short app name>")`, and only then import the
+  application's modules. Do not call it inside a function.
+- Run the application from one entry file, such as `main.py`. A namespace accepts only one, so a
+  second script, such as a test or admin file, fails. If the program has several tasks, choose the
+  task with a command-line argument, in the form `gemdb main.py <task> [arguments]`.
+- To look at the application's data through the MCP server or the GemDB Shell, call
+  `gemdb.use_namespace("<short app name>")` first.
+
+My application: <describe what you want it to do>
+```
+
+The link opens the README as plain Markdown, which agents read more efficiently than the page GitHub
+renders.
+
 ---
 
 ## Reference
@@ -90,6 +119,7 @@ The rest of this page covers the details behind each feature.
 - [Database space and garbage collection](#database-space-and-garbage-collection)
 - [Python in the database](#python-in-the-database)
 - [The `gemdb` command](#the-gemdb-command)
+- [Build an application on GemDB](#build-an-application-on-gemdb)
 - [Notebooks](#notebooks)
 - [Connect an AI agent](#connect-an-ai-agent)
 - [The Brain Freeze demo](#the-brain-freeze-demo)
@@ -146,8 +176,9 @@ for VSCodium and other compatible editors, from
   to install Microsoft's Python extension when you open a notebook or Python file; GemDB Code does
   not need it.
 - Node.js. The `gemdb` command runs on VS Code's own runtime.
-- `pip` or a virtual environment. There is no package installation step; your own `.py` files can be
-  imported once their directory is on `sys.path`.
+- `pip` or a virtual environment. There is no package installation step. When you run
+  `gemdb main.py`, `main.py` can import any other `.py` file in its folder, such as
+  `from tasks import TaskList`, without changing `sys.path`.
 
 ### Platform support
 
@@ -183,7 +214,7 @@ start yet, this happens the first time you open a shell or run a notebook cell i
 
 When a GemDB Code update ships newer Python support, GemDB Code prompts you before installing it into
 a database that already has Python support. Data committed with the old version stops working as its
-type afterward (dates and times, decimals, tuples and sets, and instances of your own classes), so
+type afterward (dates and times, decimals, tuples and sets, and instances of your classes), so
 install it into a database that holds nothing you need. If you keep the current version, GemDB Code
 does not prompt you again for that update; **GemDB: Reinstall the Python Execution Engine** installs
 it later.
@@ -327,7 +358,11 @@ reserves all 10 GB on disk when it first starts. The **Space** row in the GemDB 
 how much of that space your data uses. When your code stops using an object, the database keeps the
 object until a collection removes it; this unused data is _garbage_. GemDB Code collects garbage on
 a schedule, and again whenever less than 2 GB is left. To collect now, click the **Space** row, or
-choose **Collect Garbage Now** from the sidebar's **⋯** menu.
+choose **Collect Garbage Now** from the sidebar's **⋯** menu. You cannot start a collection from
+Python. In a script, a notebook cell or the GemDB Shell, `gemdb.admin.garbage_collect()` raises a
+security error, because Python runs as a database account that does not have that privilege. Use
+**Collect Garbage Now** instead. A collection can take from about a minute to several minutes, and
+objects you just removed may need more than one collection before they are gone.
 
 If the database runs out of the space it keeps free, GemDB Code warns you at once. After about three
 minutes, the database starts stopping sessions that hold back its space, and what they have not
@@ -336,12 +371,16 @@ committed is lost. Commit your work when you see the warning.
 ### Python in the database
 
 Your code does not talk to the database over a connection: its objects _are_ the database's objects.
-Put dicts, lists, or instances of your own classes under `gemdb.root` and commit. They are stored as
+Put dicts, lists, or instances of your classes under `gemdb.root` and commit. They are stored as
 they are, and they persist across sessions and restarts. There is no object-relational mapper (ORM),
 mapping layer, or serialization step between your code and the database. Every commit is an ACID
 transaction, and each shell, notebook, and agent works in its own consistent view of the data.
 
 Python runs inside the database on Grail, GemTalk Systems' implementation of Python for GemDB.
+Python in the database matches CPython 3.14. Most of the standard library works, and `sqlite3` is
+not available. Grail's documentation lists what is supported:
+[standard library coverage](https://github.com/GemTalk/Grail/blob/main/docs/Stdlib_Gaps.md) and
+[popular packages](https://github.com/GemTalk/Grail/blob/main/docs/Package_Census.md).
 
 For example, a short session in the GemDB Shell looks like this:
 
@@ -432,6 +471,132 @@ in a class defined inside a function. A line that only returns a name, like `ret
 code to stop at, so its dot stays hollow. A dot on the first line of a `for` loop's body also stops
 once just before the loop's first pass. Run Python File in GemDB has no debugger, so it runs straight
 past them.
+
+### Build an application on GemDB
+
+A GemDB application is a Python program that you run with `gemdb`. Keep your objects under
+`gemdb.root` and commit when a change is complete. This example has two files in one folder.
+`tasks.py`:
+
+```python
+from dataclasses import dataclass, field
+from datetime import datetime
+
+@dataclass
+class Task:
+    title: str
+    created: datetime = field(default_factory=datetime.now)
+    done: bool = False
+
+class TaskList:
+    def __init__(self):
+        self.tasks = []
+
+    def add(self, title):
+        self.tasks.append(Task(title))
+```
+
+`main.py`:
+
+```python
+import sys
+import gemdb
+
+gemdb.use_namespace("todo")
+
+from tasks import TaskList
+
+if "todo" not in gemdb.root:
+    gemdb.root["todo"] = TaskList()
+todo = gemdb.root["todo"]
+if len(sys.argv) > 1:
+    todo.add(sys.argv[1])
+    gemdb.commit()
+for task in todo.tasks:
+    print(task.title, task.created.strftime("%Y-%m-%d"))
+```
+
+Run `gemdb main.py "buy milk"`, then `gemdb main.py "call James"`. The second run lists both tasks.
+
+- Arguments arrive in `sys.argv`, as they do with `python3`.
+- Imports work for any `.py` file in the same folder as the file you run. That folder is
+  already on the import path, so `from tasks import TaskList` needs no setup. If two programs in one
+  database each have a different `tasks.py`, see [Modules and namespaces](#modules-and-namespaces).
+- Changes to stored objects are picked up by the next `gemdb.commit()`. Appending to a stored
+  list needs no assignment back into `gemdb.root`. `gemdb.needs_commit()` says whether a commit has
+  anything to write.
+- Uncommitted changes are lost. A program that ends without calling `gemdb.commit()` or
+  `gemdb.abort()` discards what it changed.
+- A stored object keeps its class in the database. When you edit a class and run your program,
+  the edited file updates the class stored under the same module name, and objects you stored
+  earlier use the new methods. The update lasts only if the program commits. Without a commit, the
+  new code applies only while the program runs.
+- An object keeps the attribute values it was saved with. `__init__` runs once, when you create
+  the object. An attribute you add to `__init__` later is missing from objects you stored before.
+  Give it a default on the class (`done = False`) instead. An object without the attribute reads the
+  class value, as in Python, and assigning to it gives that object its own value.
+- Two sessions that change the same object conflict. The second `gemdb.commit()` raises
+  `gemdb.ConflictError`, and its message says that `gemdb.abort()` discards your changes. To retry,
+  put the change in a `with gemdb.transaction():` block, which discards a failed attempt:
+
+```python
+for attempt in range(5):
+    try:
+        with gemdb.transaction():
+            gemdb.root["todo"].add("buy milk")
+        break
+    except gemdb.ConflictError:
+        pass
+```
+
+#### Modules and namespaces
+
+Give each application its own namespace. Without a namespace, GemDB treats a module name as
+belonging to the whole database. If you have two programs, each with a file named `tasks.py`, the
+second program's `import tasks` raises `ImportError`, because the database already holds a different
+module named `tasks`. A namespace gives each application its own modules and its own `gemdb.root`,
+so two files named `tasks.py` do not conflict with each other, and an application in one namespace
+does not see the data of another. This includes data your application stored before you added a
+namespace: it stays in the default root, and the namespace starts empty.
+
+Import `gemdb`, call `gemdb.use_namespace("my-app")`, and only then import your modules,
+including `tasks`:
+
+```python
+import gemdb
+
+gemdb.use_namespace("my-app")
+
+from tasks import TaskList
+```
+
+Call it at the top level of the entry file, not inside a function, where it raises an error.
+
+The name can be any text that is not empty, and capitals matter: `my-app` and `My-App` are different
+namespaces.
+
+In Python you can run any file at any time. GemDB saves your modules in the database and keeps track
+of them by name. It also associates each namespace with the entry file you run. In `gemdb main.py`,
+`main.py` is the entry file, and the files it imports, such as `tasks.py`, are its modules. If you
+run a different entry file in the same namespace, the second command raises an `ImportError` that
+names `__main__`. This happens with a second program such as `gemdb admin.py`, and with a test
+script such as `gemdb check.py`, even if it only reads data. Invoking `gemdb -c` also causes it,
+because it runs your code as a separate file. Editing `main.py` and running it again works as
+expected. Setting the namespace with the `GEMDB_NAMESPACE` environment variable does not let a
+different file run in the same namespace.
+
+Run your application from one entry file, such as `main.py`, and put everything it does behind that
+file. A program that serves requests, such as a web server, already works this way. For a program
+with several tasks, choose the task with a command-line argument. For example, a `main.py` that
+reads `sys.argv[1]` as the task name could take these two commands:
+
+```sh
+gemdb main.py add "buy milk"
+gemdb main.py list
+```
+
+To look at the namespace's data from the GemDB Shell or through the MCP server, call
+`gemdb.use_namespace("my-app")` first.
 
 ### Notebooks
 
@@ -534,7 +699,7 @@ GemDB Code includes an MCP server, which lets an AI agent such as Claude Code wo
 on your behalf. Because your data is made of Python objects, the agent works with it by running
 Python in the database: for example, to answer a question about your data or to add an attribute to
 a class. It can also list what is stored, search for classes and methods, define classes and
-methods, and commit changes. The server accepts connections only from programs on your own computer
+methods, and commit changes. The server accepts connections only from programs on your computer
 (`127.0.0.1`), so nothing on your network can reach your database through it.
 
 The MCP server is off by default. Turning it on does not start anything by itself: it sets GemDB
