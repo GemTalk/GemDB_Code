@@ -76,6 +76,7 @@ export async function installEngine(
           `The database catalog does not publish version ${version}. ` +
             `Clear the "gemdb.engineVersion" setting to use the version GemDB ships with, ` +
             `or extract ${version} into ${rootPath()} yourself.`,
+          { cause: e },
         );
       }
       throw e;

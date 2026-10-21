@@ -762,7 +762,7 @@ describe.skipIf(!haveExtent || !canMakeFixture())('the Debug Console at a pause'
       }),
     ];
 
-    let sessions = 0;
+    let sessions: number;
     try {
       ({ sessions } = await inCell(
         nb,

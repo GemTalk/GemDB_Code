@@ -171,6 +171,7 @@ export function dbPassword(): string {
       `Cannot read the database password from ${file}` +
         (external ? ' (gemdb.externalDatabase.passwordFile)' : '') +
         `: ${e instanceof Error ? e.message : String(e)}`,
+      { cause: e },
     );
   }
   const password = text.split(/\r?\n/, 1)[0]?.trim() ?? '';
