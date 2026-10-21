@@ -117,20 +117,22 @@ delete the matching records.
 Events sent to Scarf carry no identifier, so they cannot be traced back to
 you, and there is no record of yours there to look up or delete.
 
-## Tracking pixel in the README
+## Tracking pixel in the README and the walkthrough
 
-The README ends with a Scarf tracking pixel, an invisible image that loads when you view it.
+The README ends with a Scarf tracking pixel, an invisible image that loads when you view it. The
+first step of the GemDB walkthrough in VS Code shows the same image, which loads when VS Code
+displays that step. Turning telemetry off in VS Code does not stop either one.
 
 **What we collect:** Scarf looks up business details for the requesting network address, such as
 company, general location, and cloud provider. Scarf states that it does not store IP addresses and
 purges personally identifiable information right after the lookup. GemDB only sees aggregate
 summaries, never your address.
 
-**Why:** We use the counts to see how many people view this README and what kinds of organizations
-are interested. We do not use them for advertising.
+**Why:** We use the counts to see how many people view this README or start the walkthrough, and
+what kinds of organizations are interested. We do not use them for advertising.
 
-**Opting out:** Block remote images in your browser or with an ad blocker. The README reads the same
-without the pixel.
+**Opting out:** For the README, block remote images in your browser or with an ad blocker. The
+README reads the same without the pixel.
 
 Learn more from Scarf:
 [How the pixel works](https://docs.scarf.sh/faq/#how-does-the-tracking-pixel-work) ·
@@ -140,5 +142,5 @@ Questions? Contact GemDB at [gemdb.com](https://www.gemdb.com/).
 
 ## Changes
 
-Last updated: 2026-10-16. Changes to this notice will be published in this
+Last updated: 2026-10-20. Changes to this notice will be published in this
 repository.
