@@ -268,13 +268,15 @@ inspects are data, never executed. It requires: the repository is
 `GemTalk/GemDB_Code`; the dispatch is from the default branch; `package.json`
 is at the requested version; `CHANGELOG.md` has a dated `## [X.Y.Z] -
 YYYY-MM-DD` section **and an empty `[Unreleased]`**; no `vX.Y.Z` tag exists;
-the **newest** `ci-complete` on that exact commit concluded `success`; and a
+the **newest push-triggered** CI run on that exact commit concluded `success`
+(a dispatch, which may bundle other Grail/MCP refs, does not count); and a
 CI run for that commit **still holds all three packages**.
 
 That last one is the check most likely to stop you, and the fix is not in this
-repository. CI keeps a release's packages for 90 days (7 for a branch or a
-dispatch); past that, re-run CI on the release commit — Actions → CI → that
-run → *Re-run all jobs* — and dispatch again once it is green.
+repository. CI keeps the packages from a push to `main` for 90 days; past
+that, re-run the release commit's **push** run — Actions → CI → that commit's
+push run (not a dispatch) → *Re-run all jobs* — and dispatch again once it is
+green.
 
 `collect` then adds the check `validate` cannot make. With no checkout,
 `validate` can only ask whether a dated heading exists; rendering the notes is
