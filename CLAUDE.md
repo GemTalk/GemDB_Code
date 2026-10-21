@@ -62,8 +62,12 @@ force-stop uses), and "ready" means gslist status `OK`, not "listed": a
 stone at `Startup` is listed and refuses logins, so wait on it, never start it.
 `stoneState` reads the rest, case-insensitively since the engine prints mixed
 case: `Shutdown` fails at once, and any other listed status (`exe deleted`,
-`frozen`, ...) goes on to the login as it always did. The wrapper in `cli.ts`
-makes the same calls in shell; change both together.
+`frozen`, ...) goes on to the login as it always did. The `gemdb` wrapper in
+`cli.ts` keeps no copy of this: it only fast-paths a stone that reads `ok`, and
+every other case (including an external database) runs
+`gemdb-shell.js --ensure-stone`, which calls `bringUp` (`cliStart.ts`) and so
+`ensureProcesses` with `assertSafeToStart`. File mode starts the stone only
+(`listener: false`): it is a linked topaz and never goes through NetLDI.
 
 ## CI
 
@@ -219,7 +223,10 @@ bundle and `node_modules/koffi` (this platform's binary only) to
 `process.execPath` recorded at generation time, `ELECTRON_RUN_AS_NODE=1`, a
 PATH `node` as fallback. "Open GemDB Shell" opens a terminal on that wrapper,
 so the shell is out of the extension host entirely: a wedged FFI call is a
-dead tab, not a dead window. The reason this exists is measured topaz history:
+dead tab, not a dead window. The same bundle is the wrapper's cold start:
+`--ensure-stone` runs before anything touches stdin, so a file, `-c` or `-m`
+run that finds the stone down needs the bundle too (and refuses without it,
+with the Shell's messages, rather than falling back to bash). The reason this exists is measured topaz history:
 Grail's own topaz REPL (`gemdb`'s old no-argument handoff) wraps evaluation in
 `on: Error do:`, and Grail's Python exceptions descend from
 `AbstractException`, not `Error` — so a `ZeroDivisionError` printed a

@@ -68,8 +68,15 @@ vi.mock('../lock', async (importOriginal) => {
 
 const { expectedEnginePath } = await import('../paths');
 const { STONE_LOCK_NAME } = await import('../lock');
-const { ensureListener, ensureProcesses, stoneReady, stoneState, waitForStoneReady } =
-  await import('../processes');
+const {
+  EXTERNAL_SHUTTING_DOWN_MESSAGE,
+  assertExternalDatabaseUp,
+  ensureListener,
+  ensureProcesses,
+  stoneReady,
+  stoneState,
+  waitForStoneReady,
+} = await import('../processes');
 const { parseGslist } = await import('../gslist');
 
 function row(status: string, type: 'Stone' | 'Netldi', name: string): string {
@@ -161,6 +168,24 @@ describe('ensureProcesses', () => {
     await ensureProcesses();
 
     expect(gslistCalls).toBe(3);
+  });
+
+  it('asks gslist one time fewer on a cold start when the caller just looked', async () => {
+    listings = ['', STONE_UP];
+
+    const started = await ensureProcesses({ listener: false, skipQuickCheck: true });
+
+    expect(started).toEqual({ startedStone: true, startedNetldi: false });
+    expect(gslistCalls).toBe(2);
+  });
+
+  it('still takes the lock and starts nothing when the stone turns out to be up', async () => {
+    listings = [STONE_UP];
+
+    const started = await ensureProcesses({ listener: false, skipQuickCheck: true });
+
+    expect(started).toEqual({ startedStone: false, startedNetldi: false });
+    expect(spawned).toEqual([]);
   });
 
   it('starts both, guards first, when neither is up', async () => {
@@ -284,6 +309,51 @@ describe('ensureProcesses', () => {
     expect(await check(STONE_UP)).toBe(false);
     expect(await check(LISTENER_UP)).toBe(false);
     expect(await check([STONE_STARTING, LISTENER_UP].join('\n'))).toBe(false);
+  });
+});
+
+describe('starting the stone alone', () => {
+  it('starts the stone, guards first, and never the listener', async () => {
+    listings = ['', '', STONE_UP];
+    const beforeStoneStart = vi.fn(() => {
+      expect(spawned).toEqual([]);
+    });
+
+    const started = await ensureProcesses({ beforeStoneStart, listener: false });
+
+    expect(started).toEqual({ startedStone: true, startedNetldi: false });
+    expect(beforeStoneStart).toHaveBeenCalledTimes(1);
+    expect(spawned).toEqual(['startstone']);
+  });
+
+  it('takes no lock for a stone that is up with no listener', async () => {
+    listings = [STONE_UP];
+
+    const started = await ensureProcesses({ listener: false });
+
+    expect(started).toEqual({ startedStone: false, startedNetldi: false });
+    expect(gslistCalls).toBe(1);
+    expect(satisfied).toBeUndefined();
+    expect(spawned).toEqual([]);
+  });
+
+  it('still waits for a stone that is starting, and starts no listener beside it', async () => {
+    listings = [STONE_STARTING, STONE_STARTING, STONE_UP];
+
+    const started = await ensureProcesses({ listener: false });
+
+    expect(started).toEqual({ startedStone: false, startedNetldi: false });
+    expect(spawned).toEqual([]);
+  });
+
+  it('stops waiting for the lock once the stone is up, listener or not', async () => {
+    listings = [STONE_STARTING];
+    const done = ensureProcesses({ listener: false });
+    await new Promise((resolve) => setImmediate(resolve));
+    listings = [STONE_UP];
+
+    expect(await satisfied?.()).toBe(true);
+    await done;
   });
 });
 
@@ -493,5 +563,77 @@ describe('waiting for the stone lock', () => {
 
     expect(outcome.error?.message).toMatch(/^This window has been starting the database/);
     expect(outcome.error?.message).toContain(STONE_LOCK_NAME);
+  });
+});
+
+describe('checking an external database', () => {
+  const EXTERNAL_STONE = row('OK', 'Stone', 'gs64stone');
+  const EXTERNAL_LISTENER = row('OK', 'Netldi', 'gs64ldi');
+
+  beforeEach(() => {
+    const gemstone = path.join(root, 'external');
+    fs.mkdirSync(path.join(gemstone, 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(gemstone, 'bin', 'gslist'), '');
+    __setSetting('gemdb.externalDatabase.gemstone', gemstone);
+  });
+
+  it('passes when the stone and the listener are up', async () => {
+    listings = [[EXTERNAL_STONE, EXTERNAL_LISTENER].join('\n')];
+
+    await expect(assertExternalDatabaseUp({ listener: true })).resolves.toBeUndefined();
+  });
+
+  it('says the administrator runs it when there is no stone, without waiting', async () => {
+    listings = [''];
+
+    await expect(assertExternalDatabaseUp({ listener: false })).rejects.toThrow(
+      /administrator runs\. Ask them to start it/,
+    );
+    expect(gslistCalls).toBe(1);
+  });
+
+  it('waits for a stone that is still starting', async () => {
+    const starting = row('Startup', 'Stone', 'gs64stone');
+    listings = [starting, starting, [EXTERNAL_STONE, EXTERNAL_LISTENER].join('\n')];
+    const report = vi.fn();
+
+    await assertExternalDatabaseUp({ listener: true, report });
+
+    expect(report).toHaveBeenCalledWith('Waiting for the database to finish starting…');
+  });
+
+  it('names no log of ours when a stone is still starting after a minute', async () => {
+    listings = [row('Startup', 'Stone', 'gs64stone')];
+
+    const failure = await waitForStoneReady(undefined, { pollMs: 1, timeoutMs: 20 }).catch(
+      (e: Error) => e,
+    );
+
+    expect((failure as Error).message).toBe('The database has been starting for over a minute.');
+  });
+
+  it('says the administrator runs it for a stone at Shutdown, even after it was starting', async () => {
+    listings = [row('Startup', 'Stone', 'gs64stone'), row('Shutdown', 'Stone', 'gs64stone')];
+
+    await expect(assertExternalDatabaseUp({ listener: true })).rejects.toThrow(
+      EXTERNAL_SHUTTING_DOWN_MESSAGE,
+    );
+  });
+
+  it('names no log of ours when a stone that was starting disappears', async () => {
+    listings = [row('Startup', 'Stone', 'gs64stone'), ''];
+
+    const failure = await assertExternalDatabaseUp({ listener: false }).catch((e: Error) => e);
+
+    expect((failure as Error).message).toBe('The database stopped while it was starting.');
+  });
+
+  it('requires a listener only when asked to', async () => {
+    listings = [EXTERNAL_STONE];
+
+    await expect(assertExternalDatabaseUp({ listener: false })).resolves.toBeUndefined();
+    await expect(assertExternalDatabaseUp({ listener: true })).rejects.toThrow(
+      /NetLDI gs64ldi.*administrator runs/,
+    );
   });
 });

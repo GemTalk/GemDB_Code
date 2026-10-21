@@ -70,6 +70,21 @@ cannot be given it, and GemDB Code says so rather than starting it.
   `gemdb app.py`, or of **Run Python File in GemDB**, stop the program as Ctrl+C would. On Linux it
   usually did not: the program carried on out of sight, its `finally` blocks unrun, holding its
   database session. macOS was not affected.
+- **The window and the GemDB Shell wait for an external database that is still starting.** They
+  used to report one at `Startup` as up, and the first login then failed. A stone that is shutting
+  down is now said to be run by the machine's administrator, who is the one to start it again.
+- **`gemdb file.py`, `-c` and `-m` start the database the way the window and the GemDB Shell do.**
+  A database left by an older engine is now refused with the sentence that says what to delete,
+  instead of a raw 4045 at the first login, and a lack of room or an NFS root path is refused
+  too. A `gemdb` run that finds the database being started by another process now
+  says it is waiting, and waits as long as the window does, instead of giving up after ten seconds.
+  A run starts the database only, not the session listener it never uses. A mistyped file name or
+  a `-c` with no code no longer starts the database before failing.
+- **`gemdb` says so when Python has not been installed into the database yet.** Run on a database
+  GemDB Code had not finished setting up, a file, `-c`, `-m` and the GemDB Shell printed compile
+  errors from the driver, or a refused login, and the GemDB Shell in a terminal could start a
+  database with no Python in it. They now stop with "Python support is not installed in this
+  database yet. Run "GemDB: Start GemDB" in VS Code and let it finish", before starting anything.
 - **A line or block pasted into the Debug Console with leading spaces runs**, and so does a watch
   expression written that way. It used to fail with `IndentationError: unexpected indent`; the
   indentation every line shares is now taken off before it runs, as Python's `textwrap.dedent`

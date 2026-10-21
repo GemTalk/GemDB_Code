@@ -60,14 +60,12 @@ import {
   mcpPath,
 } from './paths';
 import {
+  assertExternalDatabaseUp,
   ensureListener,
   ensureProcesses,
-  externalDatabaseDownError,
-  findNetldi,
   findStone,
   isListening,
   isRunning,
-  listProcesses,
   stopNetldi,
   stopStone,
 } from './processes';
@@ -893,8 +891,10 @@ async function startProcesses(
   // in terms of what to do about it.
   const external = externalDatabase();
   if (external) {
-    const running = listProcesses();
-    if (!findStone(running) || !findNetldi(running)) throw externalDatabaseDownError(external);
+    await assertExternalDatabaseUp({
+      listener: true,
+      report: (message) => progress?.report({ message }),
+    });
     log('The database is running.');
     return { startedStone: false, startedNetldi: false };
   }

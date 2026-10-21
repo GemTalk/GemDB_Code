@@ -481,12 +481,15 @@ function safeRead(file: string): string | undefined {
 }
 
 /**
- * The name of the stone lock, shared with the generated `gemdb` wrapper.
+ * The name of the stone lock, shared with older `gemdb` wrappers.
  *
- * Exported because the wrapper takes the same lock in shell, and a lock each
- * would not be a lock at all: both doors start the same stone -- the editor on
- * activation, a terminal command on any invocation -- and two commands close
- * together is all it takes. Two stoned processes held one extent0.dbf
+ * The current wrapper takes it through `ensureProcesses` (`gemdb-shell.js
+ * --ensure-stone`); wrappers written by 1.8.0 and earlier still take it in
+ * bash, and one of those can be on the same root path, written by another
+ * editor or version. So the name, the directory format and the pid file must
+ * not change until those wrappers are gone. A lock each would not be a lock at
+ * all: both doors start the same stone -- the editor on activation, a terminal
+ * command on any invocation -- and two commands close together is all it takes. Two stoned processes held one extent0.dbf
  * read-write for a week on a developer machine before anyone noticed, because
  * gslist keys Stone rows by name and shows one row for two stones.
  */
@@ -520,9 +523,9 @@ export const STONE_LOCK_IDLE_MS = 30_000;
  *
  * A DIRECTORY rather than a file, unlike the setup lock above: `mkdir` is the
  * atomic create-or-fail primitive available to both this and the shell
- * wrapper, and `flock` is not on a stock macOS. The owning pid goes in a file
+ * wrappers older versions wrote, and `flock` is not on a stock macOS. The owning pid goes in a file
  * inside it, so a lock left by a crash can be told from one held by a live
- * process -- the same test the wrapper makes.
+ * process -- the same test an older wrapper makes in bash.
  *
  * Waiting is the point: a caller that stepped aside used to carry on as if
  * the stone were up — to the listener and the Grail file-in — while the
@@ -540,6 +543,8 @@ export async function withStoneLock<T>(
   wait: {
     satisfied?: () => boolean | Promise<boolean>;
     progressing?: () => boolean;
+    /** Told once, when the lock turns out to be held: for a caller whose `log` goes nowhere. */
+    report?: (message: string) => void;
     pollMs?: number;
     timeoutMs?: number;
   } = {},
@@ -561,6 +566,11 @@ export async function withStoneLock<T>(
         ours
           ? 'This window is already starting the database; waiting for it.'
           : 'Another process is starting the database; waiting for it.',
+      );
+      wait.report?.(
+        ours
+          ? 'This window is already starting the database; waiting for it…'
+          : 'Waiting for another process to finish starting the database…',
       );
     }
     await sleep(wait.pollMs ?? STONE_LOCK_POLL_MS);

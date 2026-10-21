@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { __resetSettings, __setSetting } from '../__mocks__/vscode';
 import { cliPath, ensureCliCurrent, putCliOnPath, writeCliScripts } from '../cli';
 import { STONE_LOCK_NAME } from '../lock';
-import { cliStampPath, expectedEnginePath } from '../paths';
+import { GRAIL_NOT_INSTALLED } from '../grailMessages';
+import { cliStampPath, expectedEnginePath, grailStampPath } from '../paths';
 
 /**
  * The generator, not the command: what the files say and where they land.
@@ -121,7 +122,7 @@ describe('writeCliScripts', () => {
       'topaz -L -q -I "$ROOT/bin/gemdb-run-init.tpz" -P "$ROOT/bin/gemdb-run.tpz"',
     );
     expect(script).toContain('GEMDB_TOPAZ_LOG="$(mktemp');
-    expect(script).toMatch(/if \[ -z "\$STATUS" \]; then\n\s+sed .* "\$GEMDB_TOPAZ_LOG" >&2\n/);
+    expect(script).toMatch(/if \[ -z "\$RUN_STATUS" \]; then\n\s+sed .* "\$GEMDB_TOPAZ_LOG" >&2\n/);
   });
 
   it('tidies up after the run however it ends, topaz included', () => {
@@ -204,8 +205,9 @@ describe('writeCliScripts', () => {
 
     writeCliScripts(ext);
 
-    // File and module mode do not need the bundle, so the wrapper is written
-    // regardless; its shell branch reports the gap at run time instead.
+    // A run against a database that is already up does not need the bundle, so
+    // the wrapper is written regardless; a cold start and the Shell report the
+    // gap at run time instead.
     expect(fs.existsSync(cliPath())).toBe(true);
     expect(fs.existsSync(path.join(root, 'bin', 'gemdb-shell.js'))).toBe(false);
     expect(fs.readFileSync(cliPath(), 'utf8')).toContain('has no shell program');
@@ -347,41 +349,35 @@ describe('putCliOnPath', () => {
 });
 
 /**
- * Starting the stone is a check-then-act with nothing between the check and
- * the start, and every `gemdb` command runs it -- so two ordinary commands
- * close together are enough to start two stones on one extent. That happened:
- * two stoned processes held the same extent0.dbf read-write for a week, and
- * `gslist` showed one row for them because it keys Stone rows by name.
+ * What the wrapper decides about starting the database, with stand-ins for
+ * everything it calls. It only recognises a stone that answers (`ok`) and runs
+ * against it; every other case is handed to the shell program's
+ * `--ensure-stone`, which is where the lock, the guards and the waiting live
+ * (and are tested, in processes.test.ts and cliStart.test.ts).
  *
- * The stubs stand in for the engine binaries the wrapper calls by absolute
- * path. `startstone` records that it ran and leaves a marker holding the
- * stone's status; `gslist` reports a stone, with that status, only once the
- * marker exists, so a wrapper that re-checks after taking the lock sees what
- * a real one would. Each `gslist` call is counted in `gslist.calls`.
+ * `gslist` reports a stone with the status in `stone.up`; the shell program is
+ * a script that records how it was called and, when it exits 0, leaves the
+ * stone `OK` as a real start would; `topaz` records that the run began and
+ * reports exit status 0.
  */
 describe('starting the database', () => {
-  function installEngineStubs(): { starts: string } {
+  const callsLog = (name: string): string => path.join(root, `${name}.log`);
+
+  function readCalls(name: string): string[] {
+    return fs.existsSync(callsLog(name))
+      ? fs.readFileSync(callsLog(name), 'utf8').split('\n').filter(Boolean)
+      : [];
+  }
+
+  function installStubs(): void {
     const bin = path.join(expectedEnginePath(), 'bin');
     fs.mkdirSync(bin, { recursive: true });
     const marker = path.join(root, 'stone.up');
-    const starts = path.join(root, 'starts.log');
-    const countdown = path.join(root, 'stone.countdown');
-    const next = path.join(root, 'stone.next');
-    const calls = path.join(root, 'gslist.calls');
-
     fs.writeFileSync(
       path.join(bin, 'gslist'),
       [
         '#!/bin/sh',
-        `echo "$*" >> '${calls}'`,
-        // A stone that changes state on its own: see stoneBecomes.
-        `if [ -f '${countdown}' ]; then`,
-        `  n=$(cat '${countdown}')`,
-        `  if [ "$n" -le 0 ]; then`,
-        `    rm -f '${countdown}'`,
-        `    if [ -f '${next}' ]; then mv '${next}' '${marker}'; else rm -f '${marker}'; fi`,
-        `  else echo $((n - 1)) > '${countdown}'; fi`,
-        'fi',
+        `echo "$*" >> '${callsLog('gslist')}'`,
         // The shape of a real -cvl row: status, version, owner, pid, port, date, type, name.
         `[ -f '${marker}' ] && echo "$(cat '${marker}')  4.0.0.a4  me  1 1 Oct 13 15:57 Stone   gemdb"`,
         'exit 0',
@@ -389,278 +385,239 @@ describe('starting the database', () => {
       ].join('\n'),
     );
     fs.writeFileSync(
-      path.join(bin, 'startstone'),
-      `#!/bin/sh\nsleep 0.2\necho started >> '${starts}'\necho OK > '${marker}'\nexit 0\n`,
+      path.join(bin, 'topaz'),
+      `#!/bin/sh\necho "$*" >> '${callsLog('topaz')}'\necho "\${ELECTRON_RUN_AS_NODE:-unset}" >> '${callsLog('topazenv')}'\necho 0 > "$GEMDB_STATUS_FILE"\nexit 0\n`,
     );
     fs.chmodSync(path.join(bin, 'gslist'), 0o755);
-    fs.chmodSync(path.join(bin, 'startstone'), 0o755);
-    return { starts };
+    fs.chmodSync(path.join(bin, 'topaz'), 0o755);
+    // Run by the real node the wrapper recorded; records its arguments and
+    // what its stdin is, and starts the stone unless told to fail.
+    fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, 'bin', 'gemdb-shell.js'),
+      [
+        "const fs = require('fs');",
+        'const stdin = fs.fstatSync(0);',
+        `const terminal = require('tty').isatty(0);`,
+        `fs.appendFileSync('${callsLog('shell')}', process.argv.slice(2).join(' ') + (terminal ? ' tty' : stdin.isCharacterDevice() ? ' null' : ' other') + '\\n');`,
+        `const fail = fs.existsSync('${path.join(root, 'ensure.fails')}');`,
+        "if (fail) { process.stderr.write('gemdb: the database could not be started.\\n'); process.exit(1); }",
+        `fs.writeFileSync('${marker}', 'OK');`,
+        '',
+      ].join('\n'),
+    );
   }
 
-  /**
-   * Leave a stone at `status` that becomes `then` (or disappears, when
-   * undefined) after `calls` gslist calls — the wrapper's own pace rather than
-   * the clock's, since how long it takes to reach its stone checks varies.
-   */
-  function stoneBecomes(status: string, then: string | undefined, calls: number): void {
+  function stoneIs(status: string): void {
     fs.writeFileSync(path.join(root, 'stone.up'), status);
-    if (then !== undefined) fs.writeFileSync(path.join(root, 'stone.next'), then);
-    fs.writeFileSync(path.join(root, 'stone.countdown'), String(calls));
   }
 
-  function gslistCalls(): number {
-    const calls = path.join(root, 'gslist.calls');
-    return fs.existsSync(calls)
-      ? fs.readFileSync(calls, 'utf8').split('\n').filter(Boolean).length
-      : 0;
-  }
-
-  /** Run the wrapper on a path that does not exist: it exits after the
-   *  stone-start block and before topaz, which is the part under test. */
-  function runWrapper(): Promise<string> {
+  function run(args: string[]): Promise<{ code: number; stderr: string }> {
     return new Promise((resolve) => {
-      execFile(cliPath(), [path.join(root, 'nothing-here.py')], (_error, _stdout, stderr) =>
-        resolve(stderr),
+      // The editor's own environment may carry the variable under test.
+      const { ELECTRON_RUN_AS_NODE: _unused, ...env } = process.env;
+      execFile(cliPath(), args, { env }, (error, _stdout, stderr) =>
+        resolve({ code: error ? Number(error.code) : 0, stderr }),
       );
     });
   }
 
-  it('locks on the same name the extension does', () => {
-    // Two doors start this stone: the extension on activation and this wrapper
-    // on any command. A lock each would not be a lock -- so if one side is
-    // renamed, this fails rather than quietly reopening the race.
-    writeCliScripts(ext);
-    expect(fs.readFileSync(cliPath(), 'utf8')).toContain(STONE_LOCK_NAME);
-  });
-
-  it('takes over a lock whose owner is gone, rather than blocking for ever', async () => {
-    writeCliScripts(ext);
-    const { starts } = installEngineStubs();
-    // Debris from a crash: a held lock naming a pid that is not running.
-    const lock = path.join(root, '.gemdb-stone.lock');
-    fs.mkdirSync(lock);
-    fs.writeFileSync(path.join(lock, 'pid'), '999999\n');
-
-    await runWrapper();
-
-    expect(fs.existsSync(starts)).toBe(true);
-    expect(fs.existsSync(lock)).toBe(false);
-  });
-
-  /** Make a path look ten seconds old, past the grace given to a half-written lock. */
-  function backdate(target: string): void {
-    const then = new Date(Date.now() - 10_000);
-    fs.utimesSync(target, then, then);
+  /** A script file to run: arguments that exist, so only the start is under test. */
+  function aProgram(): string {
+    const file = path.join(root, 'program.py');
+    fs.writeFileSync(file, 'print(1)\n');
+    return file;
   }
 
-  it('leaves alone a lock whose pid is not written yet', async () => {
-    // mkdir and the pid write are two steps, so a fresh empty lock is another
-    // process mid-claim. Removing it would start a second stone beside theirs.
-    writeCliScripts(ext);
-    const { starts } = installEngineStubs();
-    const lock = path.join(root, '.gemdb-stone.lock');
-    fs.mkdirSync(lock);
-    // The "other process" finishes: the stone comes up while the wrapper waits.
-    setTimeout(() => fs.writeFileSync(path.join(root, 'stone.up'), 'OK'), 300);
-
-    await runWrapper();
-
-    expect(fs.existsSync(lock)).toBe(true);
-    expect(fs.existsSync(starts)).toBe(false);
-  });
-
-  it('takes over a lock that has had no pid for longer than any claim takes', async () => {
-    writeCliScripts(ext);
-    const { starts } = installEngineStubs();
-    const lock = path.join(root, '.gemdb-stone.lock');
-    fs.mkdirSync(lock);
-    backdate(lock);
-
-    await runWrapper();
-
-    expect(fs.existsSync(starts)).toBe(true);
-    expect(fs.existsSync(lock)).toBe(false);
-  });
-
-  it('does not remove a lock that someone else took over while it was starting', async () => {
-    // If ours was judged stale and stolen mid-start, the lock is the thief's now.
-    writeCliScripts(ext);
-    const bin = path.join(expectedEnginePath(), 'bin');
-    installEngineStubs();
-    const lock = path.join(root, '.gemdb-stone.lock');
-    fs.writeFileSync(
-      path.join(bin, 'startstone'),
-      `#!/bin/sh\necho ${process.pid} > '${lock}/pid'\necho OK > '${path.join(root, 'stone.up')}'\nexit 0\n`,
-    );
-
-    await runWrapper();
-
-    expect(fs.readFileSync(path.join(lock, 'pid'), 'utf8').trim()).toBe(String(process.pid));
-  });
-
-  /** The stone lock and steal guard a stealer left when it died inside the guard. */
-  function leaveDeadStealersDebris(): void {
-    const lock = path.join(root, '.gemdb-stone.lock');
-    fs.mkdirSync(lock);
-    fs.writeFileSync(path.join(lock, 'pid'), '999999\n');
-    fs.mkdirSync(`${lock}.steal`);
-    backdate(`${lock}.steal`);
+  function stampGrail(): void {
+    fs.mkdirSync(path.dirname(grailStampPath()), { recursive: true });
+    fs.writeFileSync(grailStampPath(), 'grail=test\n');
   }
 
-  /** What is left beside the stone lock: the guard, or a tomb it was moved to. */
-  function guardLeftovers(): string[] {
-    return fs.readdirSync(root).filter((name) => name.startsWith('.gemdb-stone.lock.steal'));
-  }
-
-  it('takes over the steal guard of a stealer that died inside it', async () => {
+  beforeEach(() => {
     writeCliScripts(ext);
-    const { starts } = installEngineStubs();
-    leaveDeadStealersDebris();
-
-    await runWrapper();
-
-    expect(fs.existsSync(starts)).toBe(true);
-    expect(guardLeftovers()).toEqual([]);
+    installStubs();
+    stampGrail();
   });
 
-  it('starts the stone once when several commands race over a dead stealer’s guard', async () => {
-    // A smoke test of the takeover under contention, not a reproduction of the
-    // race it closes: that window is too narrow to hit with natural timing,
-    // and this passes against delete-in-place too. No assertion on leftovers:
-    // a guard put back in the rare three-stealer case can outlive the run.
-    writeCliScripts(ext);
-    const { starts } = installEngineStubs();
-    leaveDeadStealersDebris();
+  it('runs against a stone that answers without calling the shell program', async () => {
+    stoneIs('OK');
 
-    await Promise.all([runWrapper(), runWrapper(), runWrapper(), runWrapper()]);
+    const { code } = await run([aProgram()]);
 
-    expect(fs.readFileSync(starts, 'utf8').trim().split('\n')).toHaveLength(1);
+    expect(code).toBe(0);
+    expect(readCalls('gslist')).toHaveLength(1);
+    expect(readCalls('shell')).toEqual([]);
+    expect(readCalls('topaz')).toHaveLength(1);
   });
 
-  it('starts the stone once when several commands race', async () => {
-    writeCliScripts(ext);
-    const { starts } = installEngineStubs();
+  it('hands a stone that is not running to the shell program, once, with no terminal on its stdin', async () => {
+    const { code } = await run([aProgram()]);
 
-    await Promise.all([runWrapper(), runWrapper(), runWrapper(), runWrapper()]);
-
-    const started = fs.existsSync(starts)
-      ? fs.readFileSync(starts, 'utf8').trim().split('\n').filter(Boolean).length
-      : 0;
-    expect(started).toBe(1);
-  });
-  it('waits for a stone that is still starting instead of starting a second one', async () => {
-    // Listed at Startup with nobody holding the lock: a crash being recovered,
-    // or a start by a GemDB that does not wait for OK.
-    writeCliScripts(ext);
-    const { starts } = installEngineStubs();
-    // Still starting for the first check, the re-check in the lock, and the
-    // first wait for it.
-    stoneBecomes('Startup', 'OK', 3);
-
-    const stderr = await runWrapper();
-
-    expect(fs.existsSync(starts)).toBe(false);
-    expect(stderr).toContain('waiting for the database to finish starting');
-    expect(stderr).toContain("can't open file");
+    expect(code).toBe(0);
+    expect(readCalls('shell')).toEqual(['--ensure-stone null']);
+    expect(readCalls('topaz')).toHaveLength(1);
   });
 
-  it('names the stone log when a stone that was starting disappears', async () => {
-    writeCliScripts(ext);
-    const { starts } = installEngineStubs();
-    stoneBecomes('Startup', undefined, 3);
+  it('leaves the shell program’s environment out of the program it then runs', async () => {
+    await run([aProgram()]);
 
-    const stderr = await runWrapper();
-
-    expect(fs.existsSync(starts)).toBe(false);
-    expect(stderr).toMatch(/stopped while it was starting\. See .*gemdb\.log/);
+    expect(readCalls('shell')).toHaveLength(1);
+    expect(readCalls('topazenv')).toEqual(['unset']);
   });
 
-  // Statuses the engine prints that are neither OK nor starting. They went on
-  // to the login before GemDB waited for OK, and still do: "exe deleted" is a
-  // stone left running when the engine tree was replaced, and it takes logins.
-  for (const status of ['exe deleted', 'frozen', 'full']) {
-    it(`goes on to the login for a stone that reads "${status}", asking once`, async () => {
-      writeCliScripts(ext);
-      const { starts } = installEngineStubs();
-      fs.writeFileSync(path.join(root, 'stone.up'), status);
+  it('hands -c and -m runs over the same way', async () => {
+    await run(['-c', 'print(1)']);
+    fs.rmSync(path.join(root, 'stone.up'));
+    await run(['-m', 'json.tool']);
 
-      const stderr = await runWrapper();
+    expect(readCalls('shell')).toEqual(['--ensure-stone null', '--ensure-stone null']);
+  });
 
-      expect(fs.existsSync(starts)).toBe(false);
-      expect(gslistCalls()).toBe(1);
-      expect(stderr).toContain("can't open file");
+  // Whatever is not plain `ok` is the shell program's to judge: waiting for a
+  // stone that is starting, refusing one that is stopping, letting a stone
+  // that reads "exe deleted" go on to its login.
+  for (const status of ['Startup', 'Recovery', 'Shutdown', 'exe deleted', 'frozen']) {
+    it(`hands a stone that reads "${status}" to the shell program`, async () => {
+      stoneIs(status);
+
+      await run([aProgram()]);
+
+      expect(readCalls('shell')).toEqual(['--ensure-stone null']);
     });
   }
 
-  it('says a stone at Shutdown is shutting down, at once, rather than waiting on it', async () => {
-    writeCliScripts(ext);
-    const { starts } = installEngineStubs();
-    fs.writeFileSync(path.join(root, 'stone.up'), 'Shutdown');
+  it('stops where the shell program fails, showing what it said, and runs nothing', async () => {
+    fs.writeFileSync(path.join(root, 'ensure.fails'), '');
 
-    const stderr = await runWrapper();
+    const { code, stderr } = await run([aProgram()]);
 
-    expect(fs.existsSync(starts)).toBe(false);
-    expect(gslistCalls()).toBe(1);
-    expect(stderr).toContain('the database is shutting down');
-    expect(stderr).not.toContain("can't open file");
+    expect(code).toBe(1);
+    expect(stderr).toContain('gemdb: the database could not be started.');
+    expect(readCalls('topaz')).toEqual([]);
   });
 
-  describe('for a database this machine’s administrator runs', () => {
-    /** The stubbed engine, configured as someone else's, with a stone named as the stubs name it. */
-    function external(): void {
+  it('hands an external database to the shell program too, when it is not answering', async () => {
+    __setSetting('gemdb.externalDatabase.gemstone', expectedEnginePath());
+    __setSetting('gemdb.externalDatabase.globalDirectory', root);
+    __setSetting('gemdb.externalDatabase.stone', 'gemdb');
+    writeCliScripts(ext);
+    // Staging put the extension's own bundle over the stand-in.
+    installStubs();
+    stoneIs('Startup');
+
+    await run([aProgram()]);
+
+    expect(readCalls('shell')).toEqual(['--ensure-stone null']);
+  });
+
+  it('refuses without a shell program rather than starting the database itself', async () => {
+    fs.rmSync(path.join(root, 'bin', 'gemdb-shell.js'));
+
+    const { code, stderr } = await run([aProgram()]);
+
+    expect(code).toBe(1);
+    expect(stderr).toContain('this installation has no shell program');
+    expect(readCalls('topaz')).toEqual([]);
+  });
+
+  it('refuses without a Node runtime to run the shell program', async () => {
+    const wrapper = fs.readFileSync(cliPath(), 'utf8');
+    fs.writeFileSync(
+      cliPath(),
+      wrapper
+        .replace(`NODE="${process.execPath}"`, 'NODE="/nowhere/node"')
+        .replace('command -v node', 'command -v no-such-node-anywhere'),
+    );
+
+    const { code, stderr } = await run([aProgram()]);
+
+    expect(code).toBe(1);
+    expect(stderr).toContain('no Node runtime found');
+    expect(readCalls('topaz')).toEqual([]);
+  });
+
+  it('fails a file that is not there without looking for the stone or starting it', async () => {
+    const { code, stderr } = await run([path.join(root, 'nothing-here.py')]);
+
+    expect(code).toBe(2);
+    expect(stderr).toContain("can't open file");
+    expect(readCalls('gslist')).toEqual([]);
+    expect(readCalls('shell')).toEqual([]);
+  });
+
+  it('fails -c with no code without looking for the stone or starting it', async () => {
+    const { code, stderr } = await run(['-c']);
+
+    expect(code).toBe(2);
+    expect(stderr).toContain('-c requires an argument');
+    expect(readCalls('gslist')).toEqual([]);
+    expect(readCalls('shell')).toEqual([]);
+  });
+
+  describe('in a database Python has not been filed into', () => {
+    beforeEach(() => {
+      fs.rmSync(grailStampPath());
+    });
+
+    // Exact, quotes and all: the message holds double quotes, and one pasted
+    // unescaped into the script would end its echo early.
+    const refusal = `gemdb: ${GRAIL_NOT_INSTALLED}\n`;
+
+    for (const mode of ['a file', '-c', '-m']) {
+      it(`refuses ${mode}, whatever the stone is doing, without calling anything`, async () => {
+        stoneIs('OK');
+        const args =
+          mode === 'a file'
+            ? [aProgram()]
+            : mode === '-c'
+              ? ['-c', 'print(1)']
+              : ['-m', 'json.tool'];
+
+        const { code, stderr } = await run(args);
+
+        expect(code).toBe(1);
+        expect(stderr).toBe(refusal);
+        expect(readCalls('gslist')).toEqual([]);
+        expect(readCalls('shell')).toEqual([]);
+        expect(readCalls('topaz')).toEqual([]);
+      });
+    }
+
+    it('still answers --version and --help', async () => {
+      const { code } = await run(['--version']);
+
+      expect(code).toBe(0);
+    });
+
+    it('still reports a bad argument as one, before the missing Python', async () => {
+      const { code, stderr } = await run([path.join(root, 'nothing-here.py')]);
+
+      expect(code).toBe(2);
+      expect(stderr).toContain("can't open file");
+    });
+
+    it('is not asked of an external database, whose Python someone else filed in', async () => {
       __setSetting('gemdb.externalDatabase.gemstone', expectedEnginePath());
       __setSetting('gemdb.externalDatabase.globalDirectory', root);
       __setSetting('gemdb.externalDatabase.stone', 'gemdb');
-    }
-
-    const lock = (): string => path.join(root, STONE_LOCK_NAME);
-
-    it('starts nothing and takes no lock when the stone is not running', async () => {
-      external();
       writeCliScripts(ext);
-      const { starts } = installEngineStubs();
+      installStubs();
+      stoneIs('OK');
 
-      const stderr = await runWrapper();
+      const { code } = await run([aProgram()]);
 
-      expect(fs.existsSync(starts)).toBe(false);
-      expect(fs.existsSync(lock())).toBe(false);
-      expect(stderr).toContain("It is run by this machine's administrator");
+      expect(code).toBe(0);
+      expect(readCalls('topaz')).toHaveLength(1);
     });
+  });
 
-    it('waits for a stone that is still starting, and never starts one', async () => {
-      external();
-      writeCliScripts(ext);
-      const { starts } = installEngineStubs();
-      stoneBecomes('Startup', 'OK', 2);
+  it('carries nothing of its own that starts a stone or takes the lock', () => {
+    const wrapper = fs.readFileSync(cliPath(), 'utf8');
 
-      const stderr = await runWrapper();
-
-      expect(fs.existsSync(starts)).toBe(false);
-      expect(fs.existsSync(lock())).toBe(false);
-      expect(stderr).toContain('waiting for the database to finish starting');
-      expect(stderr).toContain("can't open file");
-    });
-
-    it('does not start a stone that disappears while starting, or point at a log of ours', async () => {
-      external();
-      writeCliScripts(ext);
-      const { starts } = installEngineStubs();
-      stoneBecomes('Startup', undefined, 2);
-
-      const stderr = await runWrapper();
-
-      expect(fs.existsSync(starts)).toBe(false);
-      expect(stderr).toContain('stopped while it was starting.');
-      expect(stderr).not.toContain('gemdb.log');
-    });
-
-    it('generates no way to reach startstone at all', () => {
-      external();
-      writeCliScripts(ext);
-
-      const wrapper = fs.readFileSync(cliPath(), 'utf8');
-      expect(wrapper).not.toContain('bin/startstone');
-      expect(wrapper).not.toContain(STONE_LOCK_NAME);
-    });
+    // Every start goes through the shell program, so there is one lock
+    // mechanism and one set of guards, not a bash copy that drifts.
+    expect(wrapper).not.toContain('startstone');
+    expect(wrapper).not.toContain(STONE_LOCK_NAME);
   });
 });
