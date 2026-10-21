@@ -7,17 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **Closing the terminal ends a `gemdb` run on Linux every time.** Now and then the run carried on
-  out of sight after its tab closed, its `finally` blocks unrun, holding its database session.
-
 ## [1.9.0] - 2026-10-20
 
 The database now starts from GemStone's Rowan image, because Python support and the MCP server now
 install with Rowan. Start with a fresh database: delete `~/GemDB/db` before starting this release.
 The engine is unchanged at 4.0.0.a5, but a database an earlier GemDB Code created has no Rowan and
-cannot be given it, and GemDB Code says so rather than starting it.
+cannot be given it, and GemDB Code says so rather than starting it. This release also adds an
+Inspector for any object.
 
 ### Added
 
@@ -43,6 +39,10 @@ cannot be given it, and GemDB Code says so rather than starting it.
   brief administrator login, and logins are what the database has few of. When that login is refused
   — the database has no session left to give — it shows the names and processes any session can see,
   and still offers to close this window's own notebooks.
+- **Building an application with an AI agent.** The README now opens with a short block to paste
+  into an agent's chat, and has a reference section on building an application on GemDB: a worked
+  two-file example, how arguments, imports and uncommitted changes behave, what happens to stored
+  objects when a class changes, and how to retry after a `ConflictError`.
 
 ### Changed
 
@@ -61,6 +61,10 @@ cannot be given it, and GemDB Code says so rather than starting it.
   `np.char` now match CPython. `import flask` no longer leaves each new session with something to
   commit, and a request to a Flask app stored in the database writes nothing, so
   `with gemdb.transaction():` works after either.
+- **The walkthrough's first step shows the Scarf image too.** The same invisible image the README
+  ends with now loads when VS Code shows the first step of the GemDB walkthrough, and Scarf counts
+  it. Turning telemetry off in VS Code does not stop it. [USAGE_DATA.md](USAGE_DATA.md) says what
+  Scarf receives.
 - **A newer MCP server (0.9.0).** Every session it starts reaches the database by `localhost`, and
   `find_python_senders` reports each call where Python sends it.
 
