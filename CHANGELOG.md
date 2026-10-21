@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Closing the terminal ends a `gemdb` run on Linux every time.** Now and then the run carried on
+  out of sight after its tab closed, its `finally` blocks unrun, holding its database session.
+
 ## [1.9.0] - 2026-10-20
 
 The database now starts from GemStone's Rowan image, because Python support and the MCP server now
