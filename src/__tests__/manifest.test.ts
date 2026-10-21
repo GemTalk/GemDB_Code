@@ -146,8 +146,39 @@ describe('the Persisted Objects contributions', () => {
         'gemdb.savedObjects.abort',
         'gemdb.savedObjects.copyAccess',
         'gemdb.savedObjects.remove',
+        // Run from the palette, these would arrive with no row to inspect.
+        'gemdb.inspectVariable',
+        'gemdb.savedObjects.inspect',
       ]),
     );
+  });
+
+  it('offers Inspect first among GemDB’s items on Variables and Watch rows, in a GemDB session only', () => {
+    for (const menu of ['debug/variables/context', 'debug/watch/context']) {
+      const entry = menus[menu]?.find((e) => e.command === 'gemdb.inspectVariable');
+      expect(entry?.when).toBe('debugType == gemdb');
+      expect(entry?.group).toBe('z_gemdb@0');
+    }
+    expect(title('gemdb.inspectVariable')).toBe('Inspect');
+  });
+
+  it('offers Inspect first on the Persisted Objects rows that hold an object', () => {
+    const entry = menus['view/item/context']?.find(
+      (e) => e.command === 'gemdb.savedObjects.inspect',
+    );
+    expect(entry?.group).toBe('0_open@0');
+    const shown = new RegExp(/viewItem =~ \/(.*)\/$/.exec(entry?.when ?? '')![1]!);
+    for (const item of [
+      'gemdbSavedObject',
+      'gemdbSavedObject gemdbContainer',
+      'gemdbSavedPending gemdbChanged',
+      'gemdbSavedStack',
+      'gemdbPersistedField gemdbContainer',
+    ]) {
+      expect(shown.test(item)).toBe(true);
+    }
+    expect(shown.test('gemdbNotebook')).toBe(false);
+    expect(shown.test('gemdbRange')).toBe(false);
   });
 
   it('says in the title bar buttons’ tooltips what they do to the notebook', () => {

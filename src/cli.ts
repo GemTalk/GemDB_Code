@@ -591,17 +591,29 @@ fi
 # it unwinds. They are listed in a loop rather than kept in an array, because
 # 3.2 calls an empty array unbound under set -u.
 #
-# A terminal hangs this script up twice, and the trap ignores the second. The
-# tab's own shell, not this script, owns the terminal: on a hangup it passes
-# SIGHUP on to its job, and the kernel hangs up the foreground group as well.
-# Measured on Ubuntu 26.04 (bash 5.3), the second arrived as end_run began and
-# ended the script on its first line, leaving topaz running, the finally
-# blocks unrun and the files behind; on macOS none reached the trap. A script
-# that owns the terminal itself, as under expect, is hung up only once.
+# A terminal hangs this script up twice. The tab's own shell, not this script,
+# owns the terminal: on a hangup it passes SIGHUP on to its job, and the kernel
+# hangs up the foreground group as well. Under bash's default the first starts
+# the EXIT trap and the second ends the script as the trap is entered, before
+# any line of it can ignore a second: traced on CI's Ubuntu runners, the script
+# died on the call to end_run itself, leaving topaz running under init, the
+# finally blocks unrun and the files behind, in 3 closes of 20 on x64 and 9 of
+# 20 on arm64 (#170). No line inside the trap can close that gap.
+#
+# So while topaz runs this script ignores SIGHUP, and a watcher beside it
+# answers the hangup: a subshell whose trap is set before topaz starts, so a
+# second hangup finds a trap already there rather than bash's default. It stops
+# topaz as Ctrl-C would, and this script then finishes as it does after any
+# interrupted run. The watcher waits on a sleep in the background, because bash
+# runs a trap only once a foreground command has ended. It does not hear
+# Ctrl-C, which bash ignores in a script's background jobs, so Ctrl-C still
+# reaches topaz alone. Under nohup the hangup is ignored on entry, bash will not
+# trap it, and the watcher never answers, which is what nohup asks for.
 CODE_FILE=""
 GEMDB_STATUS_FILE=""
 GEMDB_TOPAZ_LOG=""
 TOPAZ_RUNNING=""
+WATCHER=""
 wait_for_exit() {
   local tries=0
   while kill -0 "$1" 2>/dev/null && [ "$tries" -lt "$2" ]; do
@@ -619,8 +631,24 @@ stop_topaz() {
   kill -TERM "$pid" 2>/dev/null
   wait_for_exit "$pid" 50 || true
 }
+HUNG_UP=""
+on_hangup() {
+  [ -z "$HUNG_UP" ] || return 0
+  HUNG_UP=yes
+  stop_topaz
+  exit 0
+}
+watch_for_hangup() {
+  trap 'kill "$!" 2>/dev/null; exit 0' TERM
+  trap on_hangup HUP
+  while kill -0 $$ 2>/dev/null; do
+    sleep 60 &
+    wait $!
+  done
+}
 end_run() {
   trap '' HUP
+  if [ -n "$WATCHER" ]; then kill "$WATCHER" 2>/dev/null; fi
   if [ -n "$TOPAZ_RUNNING" ]; then stop_topaz; fi
   local f
   for f in "$CODE_FILE" "\${CODE_FILE%.py}" "$GEMDB_STATUS_FILE" "$GEMDB_TOPAZ_LOG"; do
@@ -648,6 +676,9 @@ fi
 GEMDB_STATUS_FILE="$(mktemp "\${TMPDIR:-/tmp}/gemdb-status-XXXXXX")"
 GEMDB_TOPAZ_LOG="$(mktemp "\${TMPDIR:-/tmp}/gemdb-topaz-XXXXXX")"
 export GEMDB_STATUS_FILE GEMDB_TOPAZ_LOG
+watch_for_hangup </dev/null >/dev/null 2>&1 &
+WATCHER=$!
+trap '' HUP
 TOPAZ_RUNNING=yes
 topaz -L -q -I "$ROOT/bin/gemdb-run-init.tpz" -P "$ROOT/bin/gemdb-run.tpz" ${TOPAZ_TUNING} -- "$@"
 RC=$?

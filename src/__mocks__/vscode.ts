@@ -219,6 +219,31 @@ export const __uriHandler: { handler?: { handleUri(uri: { path: string; query: s
 /** What was last written to the clipboard. */
 export const __clipboard = { text: '' };
 
+/** A webview panel as created: what its page was given, posted, and is told. */
+export interface FakeWebviewPanel {
+  viewType: string;
+  title: string;
+  options: unknown;
+  /** Everything the extension posted to the page, in order. */
+  posted: Record<string, unknown>[];
+  webview: {
+    html: string;
+    postMessage(message: Record<string, unknown>): Promise<boolean>;
+    onDidReceiveMessage(listener: (message: unknown) => void): Disposable;
+  };
+  onDidDispose(listener: () => void): Disposable;
+  reveal(): void;
+  dispose(): void;
+  /** Send a message from the page, as its script's postMessage would. */
+  receive(message: Record<string, unknown>): void;
+  disposed: boolean;
+}
+
+/** Webview panels created so far, in order. */
+export const __webviewPanels: FakeWebviewPanel[] = [];
+
+export const ViewColumn = { Active: -1, Beside: -2, One: 1, Two: 2 } as const;
+
 export const window = {
   createOutputChannel(_name: string) {
     return {
@@ -249,6 +274,44 @@ export const window = {
   }): Disposable {
     __uriHandler.handler = handler;
     return new Disposable(() => (__uriHandler.handler = undefined));
+  },
+  createWebviewPanel(viewType: string, title: string, _show: unknown, options?: unknown) {
+    const received: Array<(message: unknown) => void> = [];
+    const disposed: Array<() => void> = [];
+    const panel: FakeWebviewPanel = {
+      viewType,
+      title,
+      options,
+      posted: [],
+      disposed: false,
+      webview: {
+        html: '',
+        postMessage: async (message: Record<string, unknown>) => {
+          panel.posted.push(message);
+          return true;
+        },
+        onDidReceiveMessage: (listener: (message: unknown) => void) => {
+          received.push(listener);
+          return new Disposable(() => received.splice(received.indexOf(listener), 1));
+        },
+      },
+      onDidDispose: (listener: () => void) => {
+        disposed.push(listener);
+        return new Disposable(() => {});
+      },
+      reveal: () => {},
+      dispose: () => {
+        if (panel.disposed) return;
+        panel.disposed = true;
+        disposed.slice().forEach((listener) => listener());
+      },
+      receive: (message: Record<string, unknown>) => received.forEach((l) => l(message)),
+    };
+    __webviewPanels.push(panel);
+    return panel;
+  },
+  setStatusBarMessage(_text: string, _timeout?: number): Disposable {
+    return new Disposable(() => {});
   },
   registerTreeDataProvider(_viewId: string, _provider: unknown): Disposable {
     return new Disposable(() => {});

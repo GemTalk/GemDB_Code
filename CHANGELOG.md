@@ -7,8 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Closing the terminal ends a `gemdb` run on Linux every time.** Now and then the run carried on
+  out of sight after its tab closed, its `finally` blocks unrun, holding its database session.
+
+## [1.9.0] - 2026-10-20
+
+The database now starts from GemStone's Rowan image, because Python support and the MCP server now
+install with Rowan. Start with a fresh database: delete `~/GemDB/db` before starting this release.
+The engine is unchanged at 4.0.0.a5, but a database an earlier GemDB Code created has no Rowan and
+cannot be given it, and GemDB Code says so rather than starting it.
+
 ### Added
 
+- **An Inspector for any object.** Right-click a Variables row, a Watch row or a Persisted Objects
+  row (a saved stack's too), and choose **Inspect**: the object opens beside the editor in a strip
+  of columns, each with tabs for what the object has — its attributes (grouped as in Variables),
+  its items or entries a page at a time with a jump to a position or a key, its whole repr, its
+  class (methods with their source, the MRO, the bases, the docstring) — and an Evaluate tab that
+  runs Python with `self` bound to it. Double-click a row to open it in a new column, Enter to
+  open it in place, with back and forward. A column's header shows the Python expression that
+  reaches it, its OOP and whether it is committed. It keeps working after the pause resumes and
+  between cells. **Edit Value…** changes a row (and ↺ puts it back) in the notebook's
+  transaction, and **Add to Persisted Objects…** adds a row's object, or a column's, as it does
+  from Variables. `%inspect expr` in the Debug Console opens any result. The tab names the
+  variable and its type (`counter · function`), and the file it came from shows small in the
+  header, beside its OOP. It is Jasper's Inspector, brought over for Python.
 - **See every session on the database.** Click the Sessions row in the GemDB view, or run **GemDB:
   Show Database Sessions**, for a tab listing every session on the database, not only this window's:
   what each one is (a notebook, a GemDB Shell, another window, topaz, the MCP server, the database's
@@ -32,8 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sys.path`, is now imported in preference to the bundled one, which used to win every time. A
   class statement binds its name only once the class is complete, so a class whose body, metaclass
   or decorator raises leaves the name as it was. Assigning `__defaults__` or `__kwdefaults__` takes
-  effect even when it adds or removes a default. `import flask` no longer leaves each new session
-  with something to commit, and a request to a Flask app stored in the database writes nothing, so
+  effect even when it adds or removes a default. numpy's `loadtxt`, `np.save`/`np.load` and
+  `np.char` now match CPython. `import flask` no longer leaves each new session with something to
+  commit, and a request to a Flask app stored in the database writes nothing, so
   `with gemdb.transaction():` works after either.
 - **A newer MCP server (0.9.0).** Every session it starts reaches the database by `localhost`, and
   `find_python_senders` reports each call where Python sends it.
@@ -59,6 +85,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   errors from the driver, or a refused login, and the GemDB Shell in a terminal could start a
   database with no Python in it. They now stop with "Python support is not installed in this
   database yet. Run "GemDB: Start GemDB" in VS Code and let it finish", before starting anything.
+- **A line or block pasted into the Debug Console with leading spaces runs**, and so does a watch
+  expression written that way. It used to fail with `IndentationError: unexpected indent`; the
+  indentation every line shares is now taken off before it runs, as Python's `textwrap.dedent`
+  takes it off, so a pasted block keeps its own shape.
 
 ## [1.8.0] - 2026-10-18
 
@@ -1171,7 +1201,8 @@ gets out of the way.
 - **`sys.exit(n)` exits 1 rather than `n`**, and **`input()` is not yet
   supported**. Both are upstream in Grail.
 
-[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.5.4...v1.6.0

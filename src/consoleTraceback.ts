@@ -1,7 +1,9 @@
 import { ConsoleError, TracebackFrame } from './pauseVariables';
 
 /**
- * A Debug Console error, written the way a Jupyter notebook shows one:
+ * A Debug Console error — or one from the Inspector's Evaluate tab, whose input
+ * is called `Inspector` rather than `Debug Console` — written the way a Jupyter
+ * notebook shows one:
  *
  * ```
  * ---------------------------------------------------------------------------
@@ -27,7 +29,10 @@ import { ConsoleError, TracebackFrame } from './pauseVariables';
 
 /** Where a traceback frame's source is: what to call it, and its lines when they can be read. */
 export interface PlacedFrame {
-  /** `Debug Console`, `Cell [2]`, or for a file the path: `File /w/mod.py`. */
+  /**
+   * `Debug Console` (or `Inspector`, for its Evaluate tab: `placeFrame`'s
+   * `input`), `Cell [2]`, or for a file the path: `File /w/mod.py`.
+   */
   label: string;
   /** Whether `label` names a file, which takes `:line` rather than `, line N`. */
   isFile: boolean;

@@ -121,9 +121,23 @@ shell passing the hangup on and once from the kernel, and on Ubuntu 26.04
 first line: topaz was left running under init, no `finally` ran, and the
 temporary files stayed. 1.8.0 shipped like that, and closing a tab on Linux
 stopped the run in two tries out of seven. On macOS no second hangup reached
-the trap. So the trap now ignores SIGHUP, and the integration test closes a
-pty with an interactive shell in front of the wrapper, which fails against
-the 1.8.0 wrapper on Linux.
+the trap. So the trap was made to ignore SIGHUP, and the integration test
+closes a pty with an interactive shell in front of the wrapper, which fails
+against the 1.8.0 wrapper on Linux.
+
+Ignoring it inside the trap was not enough, because the second hangup can land
+as the trap is entered, before its first line runs: bash, already handling the
+first, ends the script on the second (#170). The test failed in 8 of 47 Linux
+CI jobs, and repeated 20 times with the wrapper traced, closing the tab left
+topaz running in 3 closes on x64 and 9 on arm64, each trace ending at the call
+to `end_run`. So the wrapper now ignores SIGHUP itself for as long as topaz
+runs, and a watcher subshell started just before topaz answers the hangup: its
+trap is set before any hangup can arrive, so a second finds a trap rather than
+bash's default. It stops topaz as Ctrl-C would and exits; the wrapper then
+finishes as it does after any interrupted run, and kills the watcher on the way
+out. The watcher waits on a background `sleep` because bash defers a trap until
+a foreground command ends, and it never sees Ctrl-C, which bash ignores in a
+script's background jobs.
 
 Errors in the driver are caught as
 `AbstractException`, not `Error`: Grail's Python exceptions live outside the

@@ -728,12 +728,14 @@ export class GciSession {
    *
    * `redDots` marks a Python run: it is armed with the red dots of the moment
    * and runs with `RUN_FLAGS`. Anything else — a view's read — runs at flags
-   * 0, where no red dot fires.
+   * 0, where no red dot fires. `passHalts` goes on past a breakpoint() the run
+   * reaches instead of opening the debugger on it, as a paused query with
+   * `passHalts` does: the user's own code run from a panel, not a cell.
    */
   async executeAsync(
     code: string,
     onOutput?: OutputSink,
-    options: { redDots?: boolean } = {},
+    options: { redDots?: boolean; passHalts?: boolean } = {},
   ): Promise<string> {
     this.lastUsedAt = Date.now();
     const handle = this.requireHandle();
@@ -783,6 +785,18 @@ export class GciSession {
           if (this.breakPending) {
             this.gci.GciTsClearStack(handle, err.context);
             throw new ExecutionInterrupted('The execution was interrupted.');
+          }
+          // The user's own code run from a panel (the Inspector's Evaluate) goes on past a
+          // breakpoint() it reaches, as it does at a pause, rather than opening the debugger on it.
+          if (options.passHalts) {
+            ({ result: oop, err } = await this.gci.GciTsContinueWithAsync(
+              handle,
+              err.context,
+              OOP_ILLEGAL,
+              null,
+              flags,
+            ));
+            continue;
           }
           if (!haltHandler) {
             onOutput?.(this.breakpointNotice(err.context));

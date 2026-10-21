@@ -2,7 +2,7 @@
   "name": "gemdb",
   "displayName": "GemDB Code",
   "description": "Python with built-in transactional persistence (using true ACID semantics). When you have critical, complex data that must be consistent, use GemDB.",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "publisher": "gemtalksystems",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -415,6 +415,11 @@
         "category": "GemDB"
       },
       {
+        "command": "gemdb.inspectVariable",
+        "title": "Inspect",
+        "category": "GemDB"
+      },
+      {
         "command": "gemdb.saveVariable",
         "title": "Add to Persisted Objects…",
         "category": "GemDB"
@@ -482,6 +487,11 @@
       {
         "command": "gemdb.savedObjects.goToItem",
         "title": "Go to Item…",
+        "category": "GemDB"
+      },
+      {
+        "command": "gemdb.savedObjects.inspect",
+        "title": "Inspect",
         "category": "GemDB"
       },
       {
@@ -668,6 +678,14 @@
           "when": "false"
         },
         {
+          "command": "gemdb.savedObjects.inspect",
+          "when": "false"
+        },
+        {
+          "command": "gemdb.inspectVariable",
+          "when": "false"
+        },
+        {
           "command": "gemdb.savedObjects.revert",
           "when": "false"
         },
@@ -686,6 +704,11 @@
       ],
       "debug/variables/context": [
         {
+          "command": "gemdb.inspectVariable",
+          "when": "debugType == gemdb",
+          "group": "z_gemdb@0"
+        },
+        {
           "command": "gemdb.showInDebugConsole",
           "when": "debugType == gemdb",
           "group": "z_gemdb@1"
@@ -699,6 +722,13 @@
           "command": "gemdb.saveVariable",
           "when": "debugType == gemdb",
           "group": "z_gemdb@3"
+        }
+      ],
+      "debug/watch/context": [
+        {
+          "command": "gemdb.inspectVariable",
+          "when": "debugType == gemdb",
+          "group": "z_gemdb@0"
         }
       ],
       "view/item/context": [
@@ -736,6 +766,11 @@
           "command": "gemdb.savedObjects.goToItem",
           "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /( gemdbContainer( gemdbChanged)?|^gemdbRange)$/",
           "group": "0_open@2"
+        },
+        {
+          "command": "gemdb.savedObjects.inspect",
+          "when": "(view == gemdbSavedObjects || view == gemdbSavedObjectsDebug) && viewItem =~ /^(gemdbSavedObject|gemdbSavedPending|gemdbSavedStack|gemdbPersistedField)( gemdbContainer)?( gemdbChanged)?$/",
+          "group": "0_open@0"
         },
         {
           "command": "gemdb.savedObjects.revert",
@@ -884,6 +919,7 @@
   "devDependencies": {
     "@eslint-community/eslint-plugin-eslint-comments": "^4.8.1",
     "@eslint/js": "^9.19.0",
+    "@types/jsdom": "^28.0.3",
     "@types/node": "^22.15",
     "@types/vscode": "^1.101.0",
     "@typescript/native": "npm:typescript@^7.0.2",
@@ -892,6 +928,7 @@
     "esbuild": "^0.28.1",
     "eslint": "^10.12.0",
     "globals": "^17.13.0",
+    "jsdom": "^29.1.1",
     "lefthook": "^2.2.2",
     "ovsx": "^1.2.0",
     "prettier": "^3.9.10",

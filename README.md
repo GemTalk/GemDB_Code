@@ -462,11 +462,12 @@ database, select that kernel from the kernel picker at the top right.
   notebook's transaction, as it would be from a cell. Right-click a Variables row for **Show in
   Debug Console**, which puts that object in the console (an object with its attributes
   listed, a list or dict as one row that opens) and leaves its name at the prompt, or `_` for a
-  nested row, ready for the next line, or **Evaluate with self…**,
-  which runs an expression with `self` bound to it (`len(self.history)`) and shows the answer
-  there. Lines starting with `%` are GemDB commands, not Python: `%persist p` adds `p` to
-  Persisted Objects (`%persist expr as key` for anything else), `%pending` lists the persisted
-  objects the notebook's next commit writes — each by its path under `gemdb.root`, with a link
+  nested row, ready for the next line, or **Evaluate with self…**, which runs an expression with
+  `self` bound to it (`len(self.history)`) and shows the answer there. A line or block pasted with
+  leading spaces, in the console or as a watch, runs as if typed without them. Lines starting with
+  `%` are GemDB commands, not Python: `%persist p` adds `p` to Persisted Objects
+  (`%persist expr as key` for anything else), `%inspect p` opens `p`, or any expression, in an
+  Inspector (below), `%pending` lists the persisted objects the notebook's next commit writes — each by its path under `gemdb.root`, with a link
   (Ctrl+click) that shows it in Persisted Objects, where each changed object is marked **M**, its
   hover sets the committed value beside the new one, and right-click **Revert to Committed Value**
   undoes the change — `%commit` commits the
@@ -499,6 +500,26 @@ database, select that kernel from the kernel picker at the top right.
   discard what is pending.
   **Debug Python File in GemDB** does the same for a `.py` file (see above). In the GemDB Shell
   and in **Run Python File in GemDB**, `breakpoint()` prints where it was and the code carries on.
+- **Inspect**, on a Variables row, a Watch row or a Persisted Objects row (or `%inspect` in the
+  Debug Console), opens the object in an Inspector beside the editor: a strip of columns, one
+  object each, with tabs for what it has — its **Attributes** (grouped as in Variables, the groups
+  opening in place), its **Items** or **Entries** a page of 100 at a time with a box to jump to a
+  position or a key, its whole **Repr** (and its `str()` when that differs), its **Class** (methods
+  by the class that defines them, with their source, the MRO, the bases and the docstring) — and an
+  **Evaluate** tab that runs Python with `self` bound to it and the program's names in scope
+  (Shift+Enter to display the answer; Ctrl+K I opens it in a new column). Double-click a row to
+  open its object in a new column; Enter opens it in place, and ‹ › go back and forward. Each
+  column's header shows the Python that reaches it (`p.tags['origin']`, which **Copy as
+  Expression** copies), the object's OOP, and whether it is committed. The Inspector outlives the
+  pause: it holds its objects in the session that has them, so it keeps working after the cell
+  resumes and between cells, and says so when the notebook is busy running one (↻ reads it
+  again). **Edit Value…** changes a row: what you type runs as an Evaluate line does, and its
+  value is stored in the notebook's transaction, as **Set Value** stores one; ↺ puts back the very
+  object the row held before. **Add to Persisted Objects…**, on a row's menu or at the end of a
+  column's tabs, adds that object under `gemdb.root` as it does from Variables. An object opened
+  from Persisted Objects' committed entries offers neither, since nothing would commit the change
+  there; open it from a notebook to change it. Evaluate still reads it, and anything an Evaluate
+  line changes there is thrown away.
 - Each notebook has its own session and its own transaction, so a commit in one notebook never
   commits another notebook's half-finished changes. Closing a notebook ends its session and discards
   anything it has not committed.
