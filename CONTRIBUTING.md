@@ -428,6 +428,7 @@ dominated by a few things that **must** be there:
 | `grail/` | the Python runtime, plus a compiled shim per supported platform |
 | `mcp/` | the MCP server payload, filed into the database when the feature is enabled |
 | `resources/setSharedMemory*.sh` | what the `sudo` prompt runs; Linux packages also need `setRemoveIPC.sh` |
+| `resources/inspector/` | the Inspector's page: three scripts and a stylesheet, read from disk when a panel opens |
 | `node_modules/koffi/` | the native FFI addon; it is a runtime `dependency`, not bundled, because it loads its own platform binary at run time |
 
 Every package carries all three shims and all three koffi binaries rather than

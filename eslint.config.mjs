@@ -122,4 +122,12 @@ export default tseslint.config(
     files: ['**/*.{mjs,cjs,js}'],
     languageOptions: { globals: { ...globals.node } },
   },
+  {
+    // The Inspector's webview scripts run in the browser, not in Node, and the
+    // last one loaded reads the globals the first two set (src/inspector.ts).
+    files: ['resources/inspector/**/*.js'],
+    languageOptions: {
+      globals: { ...globals.browser, EvaluatePane: 'readonly', MillerColumns: 'readonly' },
+    },
+  },
 );
