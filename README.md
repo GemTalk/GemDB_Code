@@ -121,6 +121,7 @@ The rest of this page covers the details behind each feature.
 - [The `gemdb` command](#the-gemdb-command)
 - [Build an application on GemDB](#build-an-application-on-gemdb)
 - [Notebooks](#notebooks)
+- [Debug a notebook cell](#debug-a-notebook-cell)
 - [Connect an AI agent](#connect-an-ai-agent)
 - [The Brain Freeze demo](#the-brain-freeze-demo)
 - [Where things live](#where-things-live)
@@ -609,82 +610,6 @@ database, select that kernel from the kernel picker at the top right.
   the notebook's session; run `gemdb.abort()` to discard those too.
 - `print()` output streams into the cell while the cell runs. `input()` opens an input box, and
   pressing Escape raises `KeyboardInterrupt`.
-- `breakpoint()` pauses the cell and opens VS Code's debugger on it, with no setup: the Call Stack
-  shows the Python frames, the paused line is highlighted, and Variables shows each frame's locals
-  and the notebook's globals, expandable into attributes, items and entries, with classes and
-  functions folded into their own rows. Each value starts with its type, and a container's with its
-  size too (`{Point} Point(3, 4)`, `{list: 3} […]`); **Copy Value** copies the value without them.
-  An object with attributes, its own or its class's, opens on everything it has: its own attributes, its class's, its properties and slots,
-  with its methods under **function variables** and its names with double underscores, such as `__module__`, under **special variables**. Right-click a row and choose **Set Value** to change
-  a local, a global, an attribute, a list item or a dict entry. The value you type is a Python
-  expression, and the run continues with it. It can use the notebook's globals, or a `.py` file's,
-  on any row, and on a Locals row the frame's locals too. **Continue** resumes the cell where it paused; **Stop**
-  ends it, along with any cells queued after it. The **Debug Console** and **Watch** work at the
-  pause: type Python and it runs in the frame selected in the Call Stack, with that frame's locals,
-  its module's globals and the builtins, and a result opens like a Variables row. Names you bind
-  there last until the run resumes; an error reads as a notebook traceback; a long-running line can
-  be stopped from the notification that appears. A change to an object made there is in the
-  notebook's transaction, as it would be from a cell. Right-click a Variables row for **Show in
-  Debug Console**, which puts that object in the console (an object with its attributes
-  listed, a list or dict as one row that opens) and leaves its name at the prompt, or `_` for a
-  nested row, ready for the next line, or **Evaluate with self…**, which runs an expression with
-  `self` bound to it (`len(self.history)`) and shows the answer there. A line or block pasted with
-  leading spaces, in the console or as a watch, runs as if typed without them. Lines starting with
-  `%` are GemDB commands, not Python: `%persist p` adds `p` to Persisted Objects
-  (`%persist expr as key` for anything else), `%inspect p` opens `p`, or any expression, in an
-  Inspector (below), `%pending` lists the persisted objects the notebook's next commit writes — each by its path under `gemdb.root`, with a link
-  (Ctrl+click) that shows it in Persisted Objects, where each changed object is marked **M**, its
-  hover sets the committed value beside the new one, and right-click **Revert to Committed Value**
-  undoes the change — `%commit` commits the
-  notebook, `%names` lists what you have bound in the console, and `%help` lists them all. Type `%` and the
-  console suggests them. `gemdb` is always available in the console, so a line copied from Persisted
-  Objects, such as `gemdb.root["orders"]`, works even if the program never imported it. What Persisted Objects holds is available by its
-  key too (`o` for `gemdb.root["o"]`), unless the paused code has its own name `o`; `persisted.o` reaches it whatever `o` means, and a
-  bare persisted name is labeled with where it came from. While you type a name, autocomplete
-  offers `persisted.o` for each persisted entry it starts (press Tab to take a suggestion). Stepping is not supported yet, and neither are red
-  dots in a cell (they work in `.py` files; see above). Right-click a Variables row and choose **Add to Persisted Objects…** to keep that object: it
-  goes in `gemdb.root` under the key you give (one is suggested) and is written at the notebook's
-  next commit. The **Persisted Objects** view, under GemDB and in Run and Debug, lists what `gemdb.root`
-  holds. Each entry opens like a Variables row, with its type badges and groups, and you can keep
-  opening what is inside it, with nothing paused: a committed entry is read by GemDB's own session,
-  any time, even after a restart; one added and not committed yet is read by its notebook's, while
-  that notebook is not running a cell. A list or dict longer than 500 items opens to ranges of 500 —
-  `[0 … 499]`, `[500 … 999]`, … — each opening to its items, nested for a very long one, as in
-  Variables; and when `gemdb.root` holds more than 200 entries, it shows them as ranges of 200.
-  Right-click a list, set or dict (or one of its ranges) and choose **Go to Item…** to type a position
-  (negative counts from the end; `[42]`, as the ranges write it, also works) or a dict's key, and the
-  view opens down to that item and selects it; a key it can't find says so and how keys are written.
-  Every notebook with uncommitted changes is listed below `gemdb.root`, paused or not, with
-  **Commit** and **Abort** on its row and a **Pending changes** group: the persisted objects its
-  next commit changes, as `%pending` lists them. Click one to go to it under `gemdb.root`, marked
-  **M**. The view's title bar always has **Commit** and **Abort** for the notebook you are working in. **Add Stack to Persisted Objects…** on the Call Stack saves the whole paused stack the same
-  way; once committed, Persisted Objects reopens it in the debugger, even after a restart. Its
-  Debug Console works on the saved objects: call a method, bind a name, change an object,
-  `%persist` one. A change waits uncommitted; the console says when the stack opens that `%commit`
-  (or ✓) would write it into the saved stack, and closing the stack prompts you to commit or
-  discard what is pending.
-  **Debug Python File in GemDB** does the same for a `.py` file (see above). In the GemDB Shell
-  and in **Run Python File in GemDB**, `breakpoint()` prints where it was and the code carries on.
-- **Inspect**, on a Variables row, a Watch row or a Persisted Objects row (or `%inspect` in the
-  Debug Console), opens the object in an Inspector beside the editor: a strip of columns, one
-  object each, with tabs for what it has — its **Attributes** (grouped as in Variables, the groups
-  opening in place), its **Items** or **Entries** a page of 100 at a time with a box to jump to a
-  position or a key, its whole **Repr** (and its `str()` when that differs), its **Class** (methods
-  by the class that defines them, with their source, the MRO, the bases and the docstring) — and an
-  **Evaluate** tab that runs Python with `self` bound to it and the program's names in scope
-  (Shift+Enter to display the answer; Ctrl+K I opens it in a new column). Double-click a row to
-  open its object in a new column; Enter opens it in place, and ‹ › go back and forward. Each
-  column's header shows the Python that reaches it (`p.tags['origin']`, which **Copy as
-  Expression** copies), the object's OOP, and whether it is committed. The Inspector outlives the
-  pause: it holds its objects in the session that has them, so it keeps working after the cell
-  resumes and between cells, and says so when the notebook is busy running one (↻ reads it
-  again). **Edit Value…** changes a row: what you type runs as an Evaluate line does, and its
-  value is stored in the notebook's transaction, as **Set Value** stores one; ↺ puts back the very
-  object the row held before. **Add to Persisted Objects…**, on a row's menu or at the end of a
-  column's tabs, adds that object under `gemdb.root` as it does from Variables. An object opened
-  from Persisted Objects' committed entries offers neither, since nothing would commit the change
-  there; open it from a notebook to change it. Evaluate still reads it, and anything an Evaluate
-  line changes there is thrown away.
 - Each notebook has its own session and its own transaction, so a commit in one notebook never
   commits another notebook's half-finished changes. Closing a notebook ends its session and discards
   anything it has not committed.
@@ -692,6 +617,192 @@ database, select that kernel from the kernel picker at the top right.
   session. Commit before you save, or save before you start work.
 - Renaming a notebook from VS Code's Explorer keeps its session and variables. Renaming it outside
   VS Code, or using Save As, starts a new session.
+
+### Debug a notebook cell
+
+Call `breakpoint()` in a notebook cell to pause it. VS Code opens its debugger on the cell with no
+setup. The Call Stack lists the function calls that led to the pause, and the paused line is
+highlighted.
+
+- **Continue** resumes the cell where it paused.
+- **Stop** ends the cell, along with any cells queued after it.
+
+Stepping is not supported yet, and neither are red dots in a notebook cell. They work in `.py` files;
+see [The `gemdb` command](#the-gemdb-command), where **Debug Python File in GemDB** gives a `.py`
+file the same debugger. In the GemDB Shell and in **Run Python File in GemDB**, `breakpoint()`
+prints where it was and the code carries on.
+
+#### Look at what the cell has
+
+When a cell pauses, open **Variables** in Run and Debug. It can show two groups:
+
+- **Locals** are the variables of the function the pause is in. This group appears only when the
+  pause is inside a function.
+- **Globals** are the names your notebook has defined.
+
+Each row shows a name, a type and a value, such as `{int} 100`. A container also shows its size, such
+as `{dict: 1} {'a': 1}`. **Copy Value** copies the value without the type and size.
+
+Expand a row to look inside it:
+
+- A list or dictionary opens to its items or entries.
+- Any other object opens to its attributes: the ones it has itself, the ones it gets from its class,
+  and its properties and slots.
+- Functions, including an object's methods, are under **function variables**. Imported modules are
+  under **module variables**. Names with double underscores, such as `__module__`, are under
+  **special variables**.
+
+#### Change a value
+
+To change a value while the cell is paused, right-click its row in **Variables** and choose **Set
+Value**. You can change a variable, an attribute, an item in a list, or a value in a dictionary.
+Type a Python expression, such as `42` or `old_total + 1`. The cell uses the new value when you
+click **Continue**.
+
+The change is made in the notebook's current transaction. In the expression you can use the
+notebook's globals. On a row under **Locals**, you can also use that function's local variables.
+
+#### Run code at the pause
+
+The **Debug Console** (in the bottom panel) runs Python while the cell is paused. So does **Watch**,
+a panel in Run and Debug where you add an expression to see its value each time the cell pauses.
+Type a line in the console and it runs in the function the pause is in. It can use that function's
+local variables, its module's globals and Python's built-in names. The result opens like a row in
+Variables.
+
+- Names you create in the console last until the cell resumes.
+- An error reads like a notebook traceback.
+- If a line runs for a long time, a notification lets you stop it.
+- A change you make to an object here is part of the notebook's transaction, as it would be from a
+  cell.
+- If you paste code that starts with spaces, such as a block copied from a file, it still runs. The
+  spaces that every line shares are removed first. This works in the Debug Console and for a Watch
+  expression.
+
+Right-click a row in Variables for two shortcuts:
+
+- **Show in Debug Console** puts that object in the console. An object is shown with its attributes
+  listed, and a list or dictionary as one row that you can open. The row's name is left at the
+  prompt, or a single underscore (`_`) for a row nested inside another, ready for your next line.
+- Choose **Evaluate with self…** to run an expression with `self` bound to that object, such as
+  `len(self.history)`. The answer shows in the console.
+
+#### Commands that start with %
+
+A line in the Debug Console that starts with `%` is a GemDB command, not Python. Type `%` and the
+console suggests them.
+
+| Command                | What it does                                                                                                                                                                                                                                                      |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `%persist p`           | Adds `p` to Persisted Objects. It is saved when the notebook commits.                                                                                                                                                                                             |
+| `%persist expr as key` | Adds the result of any expression, under the key you give.                                                                                                                                                                                                        |
+| `%inspect expr`        | Opens `p`, or any expression, in an Inspector (see [Inspect an object](#inspect-an-object)).                                                                                                                                                                      |
+| `%pending`             | Lists the persisted objects the notebook's next commit writes, each by its path under `gemdb.root`. Ctrl+click a link to show it in Persisted Objects. It also counts a few records that Grail keeps outside `gemdb.root`, which Persisted Objects does not show. |
+| `%commit`              | Commits the notebook.                                                                                                                                                                                                                                             |
+| `%names`               | Lists the names you have bound in the console.                                                                                                                                                                                                                    |
+| `%help`                | Lists all of these.                                                                                                                                                                                                                                               |
+
+Two more things work in the console:
+
+- `gemdb` is always available, so a line copied from Persisted Objects, such as
+  `gemdb.root["orders"]`, works even if your program never imported it.
+- Each object in Persisted Objects is available by its key. `o` is `gemdb.root["o"]`, unless the
+  paused code has its own name `o`. `persisted.o` always reaches it, whatever `o` means, and a bare
+  persisted name is labeled with where it came from. Type `persisted` to list them all. While you
+  type a name, autocomplete offers `persisted.o` for each persisted entry it starts. Press Tab to
+  take a suggestion.
+
+#### Persisted Objects
+
+The **Persisted Objects** view, under GemDB and in Run and Debug, lists the objects stored under
+`gemdb.root`.
+
+**Add an object.** Right-click a row in Variables and choose **Add to Persisted Objects…**. The
+object goes in `gemdb.root` under the key you give (one is suggested), and is written at the
+notebook's next commit. Until then its row reads "added, not persisted yet". To drop one addition
+before you commit, right-click it and choose **Remove from Persisted Objects**.
+
+**Review entry contents.** Expand an entry to see what is in it, the same way you expand a row in
+Variables: its attributes, or its items if it is a list or dictionary. You don't need a cell stopped
+at a breakpoint to do this. Variables shows values only while a cell is paused, but Persisted
+Objects works at any time. An entry you have committed is saved in the database, so you can open it
+at any time, even after you close VS Code and open it again. An entry you added but have not
+committed yet is not saved. It exists only in your notebook, so you can open it only while the
+notebook is not running a cell.
+
+**Long lists.** A list or dictionary longer than 500 items opens to ranges of 500: `[0 … 499]`,
+`[500 … 999]`, and so on. Each range opens to its items, and a very long one nests. When
+`gemdb.root` has more than 200 entries, they show as ranges of 200. To jump to an item,
+right-click a list, set or dictionary (or one of its ranges) and choose **Go to Item…**. Type a
+position (a negative one counts from the end, and `[42]`, as the ranges write it, also works) or a
+dictionary's key. The view opens down to that item and selects it. If it can't find a key, it says
+so and how keys are written.
+
+**Uncommitted changes.** Every notebook with uncommitted changes is listed below `gemdb.root`,
+paused or not. Its row has **Commit** (✓) and **Abort** (↺) and a **Pending changes** group, which
+lists the persisted objects pending the next commit. **Abort** discards all of the notebook's
+uncommitted changes, not only the objects you added. Click an entry in Pending changes to go to it
+under `gemdb.root`, where it is marked **M**. Hover over it to see what changed. Right-click it and
+choose **Revert to Committed Value** to undo the change; VS Code asks you to confirm. If the view
+still shows a change you reverted, click **Refresh** (↻). The view's title bar always has **Commit**
+and **Abort** for the notebook you are working in.
+
+#### Save a paused stack
+
+To keep a paused cell as it is, right-click a row in the Call Stack and choose **Add Stack to
+Persisted Objects…**. VS Code suggests a key under `gemdb.root` for it. The stack is saved like any
+other object you add to Persisted Objects: it is written at the notebook's next commit.
+
+After you commit, you can reopen the saved stack in the debugger: right-click it in Persisted
+Objects and choose **Open Saved Stack in the Debugger**. When nothing is running, you can also click
+**Restore a Saved Stack…** in Run and Debug.
+
+The reopened stack has its own Debug Console, and it works on the saved objects. You can call a
+method, bind a name, change an object, or `%persist` one. A change stays uncommitted until you run
+`%commit`, which overwrites what was saved. When you close the stack with a change pending, VS Code
+asks whether to commit it. If you click **Cancel**, the change is discarded and the stack stays as
+it was saved.
+
+#### Inspect an object
+
+An Inspector shows one object in detail, in a column beside the editor. Use it when a row in
+Variables is too small to show what you need.
+
+**Open one.** Right-click a row in Variables, Watch or Persisted Objects and choose **Inspect**. Or
+type `%inspect` and a name or expression in the Debug Console, such as `%inspect p`.
+
+**Tabs.** Each column has tabs for what the object has, so they differ from one object to the next.
+A list has **Items**, **Repr**, **Class** and **Evaluate**. A dictionary has **Entries** instead of
+Items, and an integer has neither.
+
+- **Attributes**: the object's attributes, grouped as in Variables.
+- **Items** or **Entries**: the contents of a list or dictionary, 100 at a time, with a box to jump
+  to a position or a key.
+- **Repr**: the object's full text form, and its `str()` when that is different.
+- **Class**: the object's class, with its module and base classes, and four sub-tabs: **Methods**,
+  **Attributes**, **MRO** (the order Python searches classes for a name) and **Docstring**.
+- **Evaluate**: type Python and it runs with `self` standing for the object. **Display It** shows
+  the answer, **Execute It** runs it without showing one, and **Inspect It** opens the answer in a
+  new column. Shift+Enter does Display It. Ctrl+K D, E and I do the three (Cmd+K on macOS).
+
+**Move around.** Right-click a row for **Inspect**, which opens its object in a new column, or
+**Dive Here**, which opens it in the same column. ‹ and › go back and forward. The header of each
+column shows the Python that reaches the object, such as `self[:2][0]`. **Copy as Expression**
+copies it. The header also shows the object's OOP (its identifier in the database) and a
+**committed** or **not committed** badge.
+
+**After the cell resumes.** The Inspector keeps working after the cell continues, and between cells.
+If the notebook is busy running a cell, the Inspector says so. Click ↻ to read the object again.
+
+**Change something.** Choose **Edit Value…** to change a row. Type a Python expression, as in the
+Evaluate tab. A ↺ appears next to the new value, and clicking it returns the previous value. To add
+the object under `gemdb.root`, choose **Add to Persisted Objects…** in a row's menu or at the top
+right of a column.
+
+An object you open from a committed entry in Persisted Objects can't be changed there, because
+nothing would commit the change. It offers neither **Edit Value…** nor **Add to Persisted
+Objects…**. Evaluate still reads the object, and anything an Evaluate line changes is thrown away.
+To change the object, open it from a notebook.
 
 ### Connect an AI agent
 
