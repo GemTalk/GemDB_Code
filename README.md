@@ -792,7 +792,8 @@ copies it. The header also shows the object's OOP (its identifier in the databas
 **committed** or **not committed** badge.
 
 **After the cell resumes.** The Inspector keeps working after the cell continues, and between cells.
-If the notebook is busy running a cell, the Inspector says so. Click ↻ to read the object again.
+If the notebook is busy running a cell, the Inspector tells you to refresh once it finishes. Click ↻
+to read the object again.
 
 **Change something.** Choose **Edit Value…** to change a row. Type a Python expression, as in the
 Evaluate tab. A ↺ appears next to the new value, and clicking it returns the previous value. To add
