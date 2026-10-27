@@ -21,13 +21,17 @@
 # keeping methods a release removes (the upgrade test's synthetic case), and
 # 5d0333f runs the upgrade's temporary stone on the caller's own stone config
 # (UPGRADE_ENGINE_STONE_CONFIG): GemDB's key and 10240 MB cap, without which
-# that stone refused GemDB's pregrown extent. Move this to the merge commit
-# once #1867 lands on main.
+# that stone refused GemDB's pregrown extent. ab9de40 (that branch merged with
+# main) adds the repair of a deployed class whose bases a newer Grail changed
+# while none of its instances is stored -- EmailMessage, once Grail took
+# CPython's email package -- in scripts/redeployModules.gs, which
+# install-grail.sh now runs last, as Grail's install.sh does. Move this to the
+# merge commit once #1867 lands on main.
 #
 # The previous pin was c8cbc92 (main as of 2026-10-20), the first Rowan-project
 # Grail: Tonel packages in src/Grail-*, loaded by install_rowan.gs into an image
 # started from extent0.rowan3.dbf.
-PINNED_GRAIL_REF=5d0333f35c17b7051902471dba2b9fbd8c79185f
+PINNED_GRAIL_REF=ab9de4063d952844e55fe969ece03067e2f6302d
 
 # mcp_server: 0.9.0 (main as of 2026-10-19), 20 commits (9 PRs) on from the
 # previous pin (d836520) -- and, like Grail, NOW A ROWAN PROJECT (#57). Its six
