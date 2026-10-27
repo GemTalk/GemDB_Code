@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { DiskSpaceError } from '../database';
 import {
   EngineUpgradeError,
+  STONE_CONFIG_VARIABLE,
   UpgradeScriptError,
   UpgradeWorld,
   failureReason,
@@ -12,6 +13,7 @@ import {
   runUpgradeScript,
   upgradeBackupPath,
   upgradeEngine,
+  writeStoneConfig,
 } from '../engineUpgrade';
 
 /**
@@ -211,6 +213,7 @@ describe('running the script', () => {
       [
         'echo "$@" > "$(dirname "$0")/args"',
         'echo "$GEMSTONE" > "$(dirname "$0")/gemstone"',
+        'echo "${UPGRADE_ENGINE_STONE_CONFIG:-unset}" > "$(dirname "$0")/stoneconfig"',
         'echo "upgrade_engine: backing up the extent"',
         'echo "noise from topaz" >&2',
         `echo "${lastLine}"`,
@@ -230,9 +233,13 @@ describe('running the script', () => {
       stone: 'gemdbupgrade',
       from: '4.0.0.a5',
       env: { ...process.env, GEMSTONE: '/products/a8' },
+      stoneConfig: '/db/log/upgrade-stone.conf',
       cwd: dir,
       onOutput: (text) => seen.push(text),
     });
+    expect(fs.readFileSync(path.join(dir, 'stoneconfig'), 'utf8').trim()).toBe(
+      '/db/log/upgrade-stone.conf',
+    );
     expect(fs.readFileSync(path.join(dir, 'args'), 'utf8').trim()).toBe(
       '--in-place /x/extent0.dbf gemdbupgrade 4.0.0.a5',
     );
@@ -253,5 +260,41 @@ describe('running the script', () => {
         onOutput: () => undefined,
       }),
     ).rejects.toThrow('FAILED: upgradeImage; extent restored');
+  });
+});
+
+describe('the stone configuration the script is handed', () => {
+  let dir = '';
+  afterEach(() => {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+    dir = '';
+  });
+
+  it('is named by the variable Grail reads', () => {
+    expect(STONE_CONFIG_VARIABLE).toBe('UPGRADE_ENGINE_STONE_CONFIG');
+  });
+
+  // The brain-freeze gate on #180: the temporary stone ran with the product's
+  // defaults, took the 8192 MB default maximum, and refused GemDB's extent,
+  // pregrown to the key's 10240 MB. The cap is in system.conf and the key in
+  // gemdb.conf, so the file the script gets must carry both.
+  it('carries the key from the stone’s file and the cap from system.conf, in reading order', () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gemdb-upgrade-conf-'));
+    const system = path.join(dir, 'system.conf');
+    const stone = path.join(dir, 'gemdb.conf');
+    fs.writeFileSync(system, 'DBF_EXTENT_SIZES = 10240MB;\nDBF_PRE_GROW = TRUE;\n');
+    fs.writeFileSync(stone, `KEYFILE = "${dir}/gemdb.key";\nDBF_EXTENT_SIZES = 2048MB;\n`);
+    const out = writeStoneConfig(
+      [system, stone, path.join(dir, 'missing.conf')],
+      path.join(dir, 'log', 'upgrade-stone.conf'),
+    );
+
+    const text = fs.readFileSync(out, 'utf8');
+    expect(text).toContain('DBF_EXTENT_SIZES = 10240MB;');
+    expect(text).toContain(`KEYFILE = "${dir}/gemdb.key";`);
+    // The stone reads system.conf first and its own file second, and a later
+    // setting wins, so the developer's override in gemdb.conf must come last.
+    expect(text.indexOf('2048MB')).toBeGreaterThan(text.indexOf('10240MB'));
+    expect(text).not.toContain('missing.conf');
   });
 });

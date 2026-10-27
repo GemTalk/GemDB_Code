@@ -7,6 +7,7 @@ import {
   isExternalDatabase,
   mcpEnabled,
   rootPath,
+  STONE_NAME,
 } from './config';
 import { ensureDatabaseAccount } from './account';
 import { writeCliScripts } from './cli';
@@ -16,6 +17,7 @@ import {
   assertDatabaseMatchesEngine,
   assertRoomForUpgradeBackup,
   createDatabase,
+  ensureSpaceLimits,
   DatabaseOnNfsError,
   DatabaseUpgradeNeededError,
   DatabaseVersionError,
@@ -30,6 +32,7 @@ import {
   EngineUpgradeError,
   UPGRADE_STONE_NAME,
   UpgradeWorld,
+  writeStoneConfig,
   latestUpgradeLine,
   runUpgradeScript,
   upgradeBackupPath,
@@ -65,6 +68,7 @@ import {
   osConfigAllowsStart,
 } from './osConfig';
 import {
+  databaseConfPath,
   databaseExists,
   databaseLogPath,
   databasePath,
@@ -861,6 +865,7 @@ export function engineUpgradeWorld(
     stopNetldi: () => stopNetldi(previousEngine),
     runScript: (report) =>
       runUpgradeScript({
+        stoneConfig: writeUpgradeStoneConfig(),
         script: upgradeScriptPath(extensionPath),
         extent: extentPath(),
         stone: UPGRADE_STONE_NAME,
@@ -884,6 +889,21 @@ export function engineUpgradeWorld(
 
 function truncate(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+}
+
+/**
+ * Write the configuration GemDB's stone starts with as one file for the
+ * upgrade's temporary stone (`stoneConfigText` says why), and answer its path.
+ * The space limits first, as `assertSafeToStart` would give them before a
+ * start: a database an earlier GemDB created may not have them yet.
+ */
+function writeUpgradeStoneConfig(): string {
+  ensureSpaceLimits();
+  const conf = databaseConfPath();
+  return writeStoneConfig(
+    [path.join(conf, 'system.conf'), path.join(conf, `${STONE_NAME}.conf`)],
+    path.join(databaseLogPath(), 'upgrade-stone.conf'),
+  );
 }
 
 /**

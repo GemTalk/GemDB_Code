@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
 
@@ -66,6 +67,51 @@ export function failureReason(output: string): string | undefined {
   return latestUpgradeLine(output) ?? lines.pop();
 }
 
+/**
+ * The variable that hands the script the caller's own stone configuration.
+ * Its KEYFILE, DBF_EXTENT_SIZES and the rest take effect for the temporary
+ * stone; the script layers its own settings (the extent, its tranlogs,
+ * passwordless logins) on top.
+ */
+export const STONE_CONFIG_VARIABLE = 'UPGRADE_ENGINE_STONE_CONFIG';
+
+/**
+ * One configuration file saying what GemDB's stone is started with.
+ *
+ * Needed because the temporary stone otherwise runs with the product's
+ * defaults, and a GemDB extent is not a default one: it is pregrown to the key's
+ * 10240 MB, and with no DBF_EXTENT_SIZES the stone takes the 8192 MB default
+ * maximum and refuses it ("repository is already of size 10240 Mbytes, which is
+ * larger than your maximum licensed repository size of 8192 Mbytes" -- the
+ * brain-freeze gate, on #180). GemDB's stone reads two files, `system.conf`
+ * (GEMSTONE_SYS_CONF: the extent, its size cap, the free-space threshold,
+ * pregrow) and then its own `<stone>.conf` (GEMSTONE_EXE_CONF: KEYFILE, the
+ * page cache), and neither alone carries both the key and the cap. So they
+ * are concatenated in the order the stone reads them, which keeps its rule
+ * that a later setting wins.
+ */
+export function stoneConfigText(files: { path: string; text: string }[]): string {
+  return [
+    "# What GemDB starts its stone with, for the engine upgrade's temporary stone.",
+    '# Written by GemDB before each upgrade; edit the files it names instead.',
+    ...files.map((f) => `\n# --- ${f.path}\n${f.text.replace(/\n*$/, '')}`),
+    '',
+  ].join('\n');
+}
+
+/**
+ * Write {@link stoneConfigText} of the `sources` that exist to `out`, and
+ * answer `out`. The sources in the order the stone reads them.
+ */
+export function writeStoneConfig(sources: string[], out: string): string {
+  const files = sources
+    .filter((file) => fs.existsSync(file))
+    .map((file) => ({ path: file, text: fs.readFileSync(file, 'utf-8') }));
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  fs.writeFileSync(out, stoneConfigText(files));
+  return out;
+}
+
 /** How to run the script once. */
 export interface UpgradeScriptRun {
   script: string;
@@ -74,6 +120,8 @@ export interface UpgradeScriptRun {
   from: string;
   /** Must name the NEW engine as GEMSTONE, and GEMSTONE_GLOBAL_DIR. */
   env: NodeJS.ProcessEnv;
+  /** The caller's stone configuration file, passed as {@link STONE_CONFIG_VARIABLE}. */
+  stoneConfig?: string;
   cwd: string;
   /** Every chunk of output, as it arrives. */
   onOutput: (text: string) => void;
@@ -98,8 +146,11 @@ export class UpgradeScriptError extends Error {
  */
 export function runUpgradeScript(run: UpgradeScriptRun): Promise<void> {
   return new Promise((resolve, reject) => {
+    const env = run.stoneConfig
+      ? { ...run.env, [STONE_CONFIG_VARIABLE]: run.stoneConfig }
+      : run.env;
     const child = spawn('bash', [run.script, '--in-place', run.extent, run.stone, run.from], {
-      env: run.env,
+      env,
       cwd: run.cwd,
     });
     let tail = '';
