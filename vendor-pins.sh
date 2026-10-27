@@ -11,26 +11,19 @@
 # Bumping a pin is a one-line PR to this file; a green CI run on it is the
 # proof the new upstream commit works.
 
-# Grail: main as of 2026-10-20, 31 commits (8 PRs) on from the previous pin
-# (a78e8c0) -- and GRAIL IS NOW A ROWAN PROJECT (#1721, #1722). Its packages are
-# Tonel in src/Grail-*, its project is in rowan/, and install.sh loads it with
-# Rowan (scripts/install_rowan.gs) instead of filing in src/smalltalk/install.gs,
-# which is gone, as is scripts/kernel_class_extensions.gs. It needs an image
-# started from the engine's bin/extent0.rowan3.dbf, so GemDB now creates its
-# database from that (database.ts), install-grail.sh runs the Rowan load with
-# Grail's GEM_TEMPOBJ_CACHE_SIZE and probes for Rowan first, and bundle-grail.sh
-# ships rowan/ and checks every package and doit the component names instead of
-# scanning `input` lines, of which none remain. The shim and its Makefile are
-# as before; the gemdb Python package is unchanged.
+# Grail: TEMPORARILY the head of fix/engine-upgrade (GemTalk/Grail PR #1867),
+# not main, for the engine move to 4.0.0.a8 (GemDB_Code #178). It carries
+# scripts/upgrade_engine.sh --in-place, which GemDB runs to upgrade an a5
+# database in place, with GemStone's upgradeImage.topaz for a8 bundled under
+# scripts/upgrade/4.0.0.a8 (a8 ships none); and the install repairs a Grail an
+# engine upgrade has stripped (it recompiles the LoadedMethods upgradeImage
+# removed, and re-enables the user's GsPackage). Move this to the merge commit
+# once #1867 lands on main.
 #
-# Also in the range: #1716 moves the bundled third-party packages (flask,
-# werkzeug, jinja2, django, ...) to src/python/bundled, searched after sys.path,
-# so a user's own copy wins; #1718 binds a class's name only once the class is
-# complete; #1719 makes a shape-changing __defaults__ assignment rebind calls;
-# #1720 fixes numpy's census cases; #1723 stops a bare `import flask` dirtying
-# every fresh session on a deployed stone (#1667, filed by GemDB); and #1725
-# makes a request to a deployed Flask app write nothing (#1229).
-PINNED_GRAIL_REF=c8cbc92dfc183fd61f5fd0b7c92b56e82c0b686b
+# The previous pin was c8cbc92 (main as of 2026-10-20), the first Rowan-project
+# Grail: Tonel packages in src/Grail-*, loaded by install_rowan.gs into an image
+# started from extent0.rowan3.dbf.
+PINNED_GRAIL_REF=0c5e215f15a2a6e3d09bb2795e30852c1356cc57
 
 # mcp_server: 0.9.0 (main as of 2026-10-19), 20 commits (9 PRs) on from the
 # previous pin (d836520) -- and, like Grail, NOW A ROWAN PROJECT (#57). Its six
