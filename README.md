@@ -622,15 +622,17 @@ database, select that kernel from the kernel picker at the top right.
 
 Call `breakpoint()` in a notebook cell to pause it. VS Code opens its debugger on the cell with no
 setup. The Call Stack lists the function calls that led to the pause, and the paused line is
-highlighted.
+highlighted. Calling `breakpoint()` works the same way in **Debug Python File in GemDB**. In the
+GemDB Shell and in **Run Python File in GemDB**, `breakpoint()` prints the file and line it was on,
+and the code keeps running.
 
 - **Continue** resumes the cell where it paused.
 - **Stop** ends the cell, along with any cells queued after it.
 
-Stepping is not supported yet, and neither are red dots in a notebook cell. They work in `.py` files;
-see [The `gemdb` command](#the-gemdb-command), where **Debug Python File in GemDB** gives a `.py`
-file the same debugger. In the GemDB Shell and in **Run Python File in GemDB**, `breakpoint()`
-prints where it was and the code carries on.
+Stepping is not supported yet. Red dots, the breakpoints you set by clicking beside a line number,
+do not work in a notebook cell. They do work in a `.py` file you run with **Debug Python File in
+GemDB**, and when a notebook cell calls into one. See [The `gemdb` command](#the-gemdb-command)
+section for an explanation of how to debug a `.py` file and what red dots do not support yet.
 
 #### Look at what the cell has
 
@@ -659,8 +661,8 @@ Value**. You can change a variable, an attribute, an item in a list, or a value 
 Type a Python expression, such as `42` or `old_total + 1`. The cell uses the new value when you
 click **Continue**.
 
-The change is made in the notebook's current transaction. In the expression you can use the
-notebook's globals. On a row under **Locals**, you can also use that function's local variables.
+The change stays uncommitted until you commit, like a change made in a cell. In the expression you
+can use global variables, from any row, and local variables, from a row under **Locals**.
 
 #### Run code at the pause
 
@@ -673,8 +675,7 @@ Variables.
 - Names you create in the console last until the cell resumes.
 - An error reads like a notebook traceback.
 - If a line runs for a long time, a notification lets you stop it.
-- A change you make to an object here is part of the notebook's transaction, as it would be from a
-  cell.
+- A change you make to an object here stays uncommitted until you commit, as it would from a cell.
 - If you paste code that starts with spaces, such as a block copied from a file, it still runs. The
   spaces that every line shares are removed first. This works in the Debug Console and for a Watch
   expression.
@@ -719,8 +720,11 @@ The **Persisted Objects** view, under GemDB and in Run and Debug, lists the obje
 
 **Add an object.** Right-click a row in Variables and choose **Add to Persisted Objects…**. The
 object goes in `gemdb.root` under the key you give (one is suggested), and is written at the
-notebook's next commit. Until then its row reads "added, not persisted yet". To drop one addition
-before you commit, right-click it and choose **Remove from Persisted Objects**.
+notebook's next commit. Until then its row reads "added, not persisted yet".
+
+**Remove an object.** Right-click an entry and choose **Remove from Persisted Objects**. For an
+object you added but have not committed, this drops the addition. For an entry you have already
+committed, it deletes the entry from `gemdb.root` and commits the removal at once.
 
 **Review entry contents.** Expand an entry to see what is in it, the same way you expand a row in
 Variables: its attributes, or its items if it is a list or dictionary. You don't need a cell stopped
@@ -731,12 +735,14 @@ committed yet is not saved. It exists only in your notebook, so you can open it 
 notebook is not running a cell.
 
 **Long lists.** A list or dictionary longer than 500 items opens to ranges of 500: `[0 … 499]`,
-`[500 … 999]`, and so on. Each range opens to its items, and a very long one nests. When
-`gemdb.root` has more than 200 entries, they show as ranges of 200. To jump to an item,
-right-click a list, set or dictionary (or one of its ranges) and choose **Go to Item…**. Type a
-position (a negative one counts from the end, and `[42]`, as the ranges write it, also works) or a
-dictionary's key. The view opens down to that item and selects it. If it can't find a key, it says
-so and how keys are written.
+`[500 … 999]`, and so on. Each range opens to its items. A list longer than 250,000 items opens to
+ranges of 250,000 first, and each of those opens to ranges of 500. When `gemdb.root` has more than
+200 entries, they show as ranges of 200.
+
+To jump to an item, right-click a list, set or dictionary (or one of its ranges) and choose **Go to
+Item…**. Type a position (a negative one counts from the end, and `[42]`, as the ranges write it,
+also works) or a dictionary's key. The view opens down to that item and selects it. If it can't find
+a key, it says so and how keys are written.
 
 **Uncommitted changes.** Every notebook with uncommitted changes is listed below `gemdb.root`,
 paused or not. Its row has **Commit** (✓) and **Abort** (↺) and a **Pending changes** group, which
@@ -765,8 +771,9 @@ it was saved.
 
 #### Inspect an object
 
-An Inspector shows one object in detail, in a column beside the editor. Use it when a row in
-Variables is too small to show what you need.
+An Inspector shows one object in detail, in its own tab beside the editor. Use it when a row in
+Variables is too small to show what you need. The tab holds a strip of columns, one object per
+column.
 
 **Open one.** Right-click a row in Variables, Watch or Persisted Objects and choose **Inspect**. Or
 type `%inspect` and a name or expression in the Debug Console, such as `%inspect p`.
