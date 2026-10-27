@@ -18,13 +18,16 @@
 # scripts/upgrade/4.0.0.a8 (a8 ships none); and the install repairs a Grail an
 # engine upgrade has stripped (it recompiles the LoadedMethods upgradeImage
 # removed, and re-enables the user's GsPackage). ff418a3 also fixes a reinstall
-# keeping methods a release removes (the upgrade test's synthetic case). Move
-# this to the merge commit once #1867 lands on main.
+# keeping methods a release removes (the upgrade test's synthetic case), and
+# 5d0333f runs the upgrade's temporary stone on the caller's own stone config
+# (UPGRADE_ENGINE_STONE_CONFIG): GemDB's key and 10240 MB cap, without which
+# that stone refused GemDB's pregrown extent. Move this to the merge commit
+# once #1867 lands on main.
 #
 # The previous pin was c8cbc92 (main as of 2026-10-20), the first Rowan-project
 # Grail: Tonel packages in src/Grail-*, loaded by install_rowan.gs into an image
 # started from extent0.rowan3.dbf.
-PINNED_GRAIL_REF=ff418a36f319e6e53a2ed79205f051a487ba437b
+PINNED_GRAIL_REF=5d0333f35c17b7051902471dba2b9fbd8c79185f
 
 # mcp_server: 0.9.0 (main as of 2026-10-19), 20 commits (9 PRs) on from the
 # previous pin (d836520) -- and, like Grail, NOW A ROWAN PROJECT (#57). Its six
