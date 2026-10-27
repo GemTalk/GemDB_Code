@@ -344,13 +344,13 @@ issue rather than rediscovered:
   to abort on conflict or the app wedges for good. (Grail #851, #850 for
   `sys.argv` being topaz's.)
 
-Two of those were measured on Grail `46c2a68` and **do not reproduce on
-`c875e56`**: a schema change no longer keeps `isinstance` at all (a record
-written before the change fails `isinstance` against the edited class — use
-`type(obj).__name__` instead), and a first call to a never-compiled function no
-longer dirties the session by itself (what dirties it is running the code at
-all — see below). Both are reproducible either way, and
-[GemTalk/brain-freeze](https://github.com/GemTalk/brain-freeze) carries
+Two of those were measured on Grail `46c2a68` and have since changed. On the
+pinned `c8cbc92` a schema change keeps `isinstance` again, as the bullet above
+says (a record written before the change still passes `isinstance` against the
+edited class). The other **does not reproduce on `c875e56`**: a first call to a
+never-compiled function no longer dirties the session by itself (what dirties
+it is running the code at all — see below). Both are reproducible either way,
+and [GemTalk/brain-freeze](https://github.com/GemTalk/brain-freeze) carries
 scripts that print which behaviour the Grail in front of you has. Check which
 Grail commit is pinned (`vendor-pins.sh`) before relying on either version of
 these findings.
