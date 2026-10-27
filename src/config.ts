@@ -18,9 +18,14 @@ import * as vscode from 'vscode';
  * version — Grail requires a 4.0 of 2026-07-29 or later, which is what makes
  * an alpha the pin rather than a released 3.7.
  *
- * The version string is the whole of it, the `a5` suffix included: it names the
+ * The version string is the whole of it, the `a8` suffix included: it names the
  * product directory, the download, and the GCI library GemDB loads
- * (`libgcits-4.0.0.a5-64.dylib`).
+ * (`libgcits-4.0.0.a8-64.dylib`).
+ *
+ * a8 is the first pin move that does not orphan every existing database: an
+ * a5 database is upgraded in place (`ENGINE_UPGRADES` in database.ts). A pin
+ * move adds its pair there once the upgrade has been run on it; without one,
+ * every database an older engine wrote is refused, as before.
  *
  * **Do not count on an old alpha staying downloadable.** 4.0.0.Alpha1 was the
  * pin until 2026-09-16, when 4.0.0.a2 replaced it and the Alpha1 directory
@@ -29,12 +34,13 @@ import * as vscode from 'vscode';
  * a3 when a3 arrived on 2026-09-24, and a3 beside a4 when a4 arrived on
  * 2026-09-28 — by which time a2 answered 404. a5 arrived on 2026-10-17 with
  * both a3 and a4 still listed. So the catalog does not always drop the
- * previous alpha at once, but nothing promises it keeps one. Note the
+ * previous alpha at once, but nothing promises it keeps one. a8 arrived with
+ * a5 still listed (checked 2026-10-27). Note the
  * spelling changed at a2: `Alpha1` to a lowercase `a2`. That is upstream's to
  * choose and nothing here should try to normalise it, but it does mean a
  * version cannot be derived by incrementing the last one.
  */
-export const PINNED_ENGINE_VERSION = '4.0.0.a5';
+export const PINNED_ENGINE_VERSION = '4.0.0.a8';
 
 /**
  * GemDB manages exactly one database, with fixed names. Hiding the naming is

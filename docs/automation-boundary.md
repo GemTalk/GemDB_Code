@@ -166,6 +166,22 @@ the file let the row vanish while a logout still killed the database.
 Measured 2026-10-12 on systemd 249 and 255: the reload applies it, no restart
 of logind, and a segment survives a logout that destroys it under the default.
 
+**Upgrading the database to a newer engine — always asked, modal.** A pin
+move whose `from -> to` pair is in `ENGINE_UPGRADES` (database.ts) upgrades
+the database in place rather than refusing it: `ensureRunning` stops the
+previous engine's stone and listener and runs Grail's
+`scripts/upgrade_engine.sh --in-place` (`engineUpgrade.ts`). It rewrites the
+user's only copy of their data, so it is asked even though it is recoverable:
+the script copies the extent to `<extent>.pre-<from>` first and copies it back
+if anything fails, but undoing a *successful* upgrade is by hand. The question
+says where the copy goes and that it stays until the user deletes it. Asked
+only from the triggers that ask about a Python update — someone who asked for
+the database. Auto-start and an agent get a warning with **Upgrade
+Database…**, which runs Start and so asks; a modal nobody asked for would sit
+unanswered, and the upgrade stops the database for minutes. Python support
+and the MCP server are then installed again without a second question: the
+upgrade removed their compiled methods, and the question already said so.
+
 **Choosing another root path when the default is on NFS — asked, once setup
 has refused.** The stone will not open a repository on an NFS mount, and on
 many shared Linux machines `~` is one (#69). Setup checks before downloading

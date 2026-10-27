@@ -256,16 +256,29 @@ the older extent, `gslist` says OK, and the login fails with 4045. So every pin
 move orphans every existing database, and the guard is what turns that into a
 sentence.
 
-There is no upgrade to offer instead: 3.7.5 shipped `bin/upgradeImage`, and no
-4.0 alpha ships one (checked again on a5), so converting the image is not
-something GemDB could do on a user's behalf. The guard reads the repository's
-version with
-`copydbf -i` and refuses, naming both versions and the directory to delete.
-Checked in two places, and both are needed: `prepareFiles`, which is the
-first-install path, and `assertSafeToStart` before the stone starts (the
-`beforeStoneStart` that `ensureProcesses` runs inside the stone lock), because
-an extension update reaches that line without preparing anything — engine
-downloaded, database present, Grail staged, so `isInstalled()` is true.
+Since a8 there is an upgrade to offer, for the pairs GemDB has measured
+(`ENGINE_UPGRADES` in `database.ts`, a5 -> a8 so far): no 4.0 alpha ships
+`bin/upgradeImage`, but Grail's `scripts/upgrade_engine.sh --in-place` carries
+the upgrade and a workaround for each defect on the way. `ensureRunning`
+checks the extent's version with `copydbf -i` once per window and extent,
+before the processes start, and runs it (`engineUpgrade.ts`): it asks, stops
+the stone and listener **with the previous engine** — a8's `stopstone` cannot
+log in to an a5 stone (4044, measured), and after an extension update the old
+stone is usually still up, which is why this cannot live in the pre-start
+guard alone — and forgets the Grail and MCP stamps, so the start reinstalls
+both. The script backs the extent up to `<extent>.pre-<from>` and puts it back
+on failure; GemDB refuses to run it while a stone is still listed, since that
+restore under a running stone would corrupt what it protects. Anything else
+is still refused by the guard, which reads the repository's version the same
+way: an older engine without a measured pair (with the directory to delete),
+or a newer one (without that advice). Checked in two places, and both are
+needed: `prepareFiles`, which is the first-install path and lets an
+upgradable database through, and `assertSafeToStart` before the stone starts
+(the `beforeStoneStart` that `ensureProcesses` runs inside the stone lock),
+because an extension update reaches that line without preparing anything —
+engine downloaded, database present, Grail staged, so `isInstalled()` is true.
+The GemDB Shell's cold start meets that guard and says to start GemDB in VS
+Code, which asks.
 
 **The database starts from the Rowan image, and one that did not is refused
 the same way.** Grail and the MCP server became Rowan projects on 2026-10-19,

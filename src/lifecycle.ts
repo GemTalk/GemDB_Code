@@ -14,14 +14,28 @@ import {
   assertDatabaseIsLocal,
   assertDatabaseHasRowan,
   assertDatabaseMatchesEngine,
+  assertRoomForUpgradeBackup,
   createDatabase,
   DatabaseOnNfsError,
+  DatabaseUpgradeNeededError,
   DatabaseVersionError,
   DiskSpaceError,
   assertRoomForSetup,
   assertSafeToStart,
+  pendingEngineUpgrade,
   removeDatabase,
+  repositoryVersion,
 } from './database';
+import {
+  EngineUpgradeError,
+  UPGRADE_STONE_NAME,
+  UpgradeWorld,
+  latestUpgradeLine,
+  runUpgradeScript,
+  upgradeBackupPath,
+  upgradeEngine,
+  upgradeScriptPath,
+} from './engineUpgrade';
 import { Progress, installEngine, removeEngine } from './engine';
 import {
   bundledGrailStamp,
@@ -52,15 +66,20 @@ import {
 } from './osConfig';
 import {
   databaseExists,
+  databaseLogPath,
   databasePath,
   enginePath,
+  extentPath,
   grailInstalled,
   grailPath,
   grailStagedOnDisk,
+  grailStampPath,
   mcpPath,
+  mcpStampPath,
 } from './paths';
 import {
   assertExternalDatabaseUp,
+  engineEnvironment,
   ensureListener,
   ensureProcesses,
   findStone,
@@ -69,8 +88,8 @@ import {
   stopNetldi,
   stopStone,
 } from './processes';
-import { isSupportedPlatform, setContext } from './platform';
-import { withSetupLockWhenFree } from './lock';
+import { libraryPathVariable, isSupportedPlatform, setContext } from './platform';
+import { withSetupLockWhenFree, withStoneLock } from './lock';
 import { isOnNfs } from './networkFileSystem';
 import { logoutAll } from './session';
 import { ensureStatmonitor } from './statmonitor';
@@ -167,8 +186,10 @@ async function prepareFiles(
 
   // Before anything is created or copied: a database an older engine wrote
   // cannot be used by this one, and the engine will not say so until a login
-  // fails. See assertDatabaseMatchesEngine.
-  assertDatabaseMatchesEngine(engine, engineVersion());
+  // fails. See assertDatabaseMatchesEngine. One GemDB can upgrade is let
+  // through: nothing here touches it, and the start that follows upgrades it
+  // (`upgradeEngineIfNeeded`), asking first.
+  assertDatabaseMatchesEngine(engine, engineVersion(), { allowUpgrade: true });
   assertDatabaseHasRowan();
 
   progress.report({ message: 'Creating your database…' });
@@ -378,6 +399,30 @@ export async function prepare(extensionPath: string): Promise<SetupOutcome> {
 /** Log a failure and offer the log, in the one shape every step uses. */
 function reportFailure(what: string, e: unknown): void {
   log(`\n${what} failed: ${errorMessage(e)}`);
+
+  // Asked for where nobody could be asked — auto-start, an agent — so the
+  // message offers the start that asks.
+  if (e instanceof DatabaseUpgradeNeededError) {
+    void vscode.window.showWarningMessage(e.message, 'Upgrade Database…').then((choice) => {
+      if (choice === 'Upgrade Database…') void vscode.commands.executeCommand('gemdb.start');
+    });
+    return;
+  }
+
+  // The upgrade has said what state it left the database in; modal, because
+  // the user's data is what it is about, and the log is where the detail is.
+  if (e instanceof EngineUpgradeError) {
+    void vscode.window
+      .showErrorMessage(
+        'Upgrading your database failed',
+        { modal: true, detail: e.message },
+        'Show Log',
+      )
+      .then((choice) => {
+        if (choice === 'Show Log') showLog();
+      });
+    return;
+  }
 
   // A database the engine cannot read is not a step that failed — it is a
   // decision waiting on the user, and it needs the whole message rather than
@@ -618,6 +663,16 @@ async function ensureRunningOnce(extensionPath: string, trigger: Trigger): Promi
   }
   const osPrompted = osResult !== OS_CONFIG_RESULT.alreadyConfigured;
 
+  // After shared memory, which the upgrade's own stone needs, and before the
+  // processes start, which it needs stopped. An external database's engine is
+  // its administrator's to upgrade.
+  if (!isExternalDatabase()) {
+    const upgrade = await upgradeEngineIfNeeded(extensionPath, trigger);
+    if (upgrade === 'notAsked') return failed(DATABASE_OUTCOME.upgradeNeeded);
+    if (upgrade === 'declined') return failed(DATABASE_OUTCOME.upgradeDeclined);
+    if (upgrade === 'failed') return failed(DATABASE_OUTCOME.upgradeFailed);
+  }
+
   return vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: 'Starting GemDB' },
     async (progress) => {
@@ -665,6 +720,170 @@ async function ensureRunningOnce(extensionPath: string, trigger: Trigger): Promi
       }
     },
   );
+}
+
+/**
+ * The extents found to need no upgrade in this window, so the `copydbf` read
+ * is made once rather than on every notebook cell, which all come through
+ * `ensureRunning`. Keyed by path, so a root-path change looks again.
+ */
+const engineChecked = new Set<string>();
+
+/**
+ * Upgrade the database in place when the engine GemDB now runs is newer than
+ * the one that wrote it, and the pair is one GemDB has measured
+ * (`ENGINE_UPGRADES`). See `assertDatabaseMatchesEngine` for why, and
+ * `upgradeEngine` for the steps.
+ *
+ * Here rather than in the stone's pre-start guard because a stone the previous
+ * engine started is still running after an extension update — stones outlive
+ * the editor — so the guard, which runs only when a stone is about to start,
+ * would never see it, and every login would fail with 4045.
+ *
+ * Asked only of someone who asked for the database: the same triggers that are
+ * asked about a Python update. Anything else (auto-start, an agent) is told
+ * what is needed, with a button that asks.
+ */
+async function upgradeEngineIfNeeded(
+  extensionPath: string,
+  trigger: Trigger,
+): Promise<'none' | 'upgraded' | 'notAsked' | 'declined' | 'failed'> {
+  const engine = enginePath();
+  const key = extentPath();
+  if (!engine || engineChecked.has(key)) return 'none';
+  const plan = pendingEngineUpgrade(engine, engineVersion());
+  if (!plan) {
+    // Refusals stay with the pre-start guard, which says them.
+    engineChecked.add(key);
+    return 'none';
+  }
+  if (!ASKS_ABOUT_PYTHON_UPDATES.has(trigger)) {
+    log(`The database needs upgrading from GemStone ${plan.from} to ${plan.to}.`);
+    reportFailure('Starting GemDB', new DatabaseUpgradeNeededError(plan.from, plan.to));
+    return 'notAsked';
+  }
+  try {
+    const result = await upgradeEngine(
+      { ...plan, extent: key },
+      engineUpgradeWorld(extensionPath, engine, plan.from),
+    );
+    if (result === 'declined') return 'declined';
+    engineChecked.add(key);
+    void vscode.window.showInformationMessage(
+      `Your database now runs on GemStone ${plan.to}. The original is kept at ` +
+        `${upgradeBackupPath(key, plan.from)} until you delete it.`,
+    );
+    return 'upgraded';
+  } catch (e) {
+    reportFailure('Upgrading the database', e);
+    return 'failed';
+  }
+}
+
+const UPGRADE_DATABASE = 'Upgrade Database';
+
+async function confirmEngineUpgrade(from: string, to: string, backup: string): Promise<boolean> {
+  const choice = await vscode.window.showWarningMessage(
+    `Upgrade your database to GemStone ${to}?`,
+    {
+      modal: true,
+      detail:
+        `It was written by GemStone ${from}, which this release of GemDB no longer runs, ` +
+        'so it cannot start until it is upgraded. The upgrade takes a few minutes, and ' +
+        'stops the database while it runs.\n\n' +
+        `GemDB first copies the database to ${backup}. If anything fails, it puts that ` +
+        'copy back, so the database is never left half-upgraded. The copy is kept until ' +
+        'you delete it. Python support and the MCP server are installed again afterwards.',
+    },
+    UPGRADE_DATABASE,
+  );
+  return choice === UPGRADE_DATABASE;
+}
+
+/**
+ * The environment the upgrade script runs in: the new engine, GemDB's lock
+ * directory, and nothing else of GemStone's. GemDB's own configuration
+ * variables (`GEMSTONE_SYS_CONF`, `GEMSTONE_NRS_ALL`, ...) describe GemDB's
+ * stone, not the script's temporary one, and a developer's shell may carry
+ * some of its own.
+ */
+function upgradeEnvironment(engine: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(process.env)) {
+    if (!name.startsWith('GEMSTONE')) env[name] = value;
+  }
+  const own = engineEnvironment();
+  return {
+    ...env,
+    GEMSTONE: engine,
+    GEMSTONE_GLOBAL_DIR: own.GEMSTONE_GLOBAL_DIR,
+    PATH: own.PATH,
+    [libraryPathVariable()]: own[libraryPathVariable()],
+  };
+}
+
+/**
+ * The machine and the editor as the upgrade sees them. Exported for the
+ * integration test, which runs the real upgrade with its own answer.
+ */
+export function engineUpgradeWorld(
+  extensionPath: string,
+  engine: string,
+  from: string,
+): UpgradeWorld {
+  // A stone the previous engine started answers only to that engine's
+  // stopstone (measured: a8's fails to log in to an a5 stone, error 4044).
+  const previousEngine = enginePath(from);
+  return {
+    confirm: confirmEngineUpgrade,
+    withProgress: (work) =>
+      Promise.resolve(
+        vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: 'Upgrading your database' },
+          (progress) => work((message) => progress.report({ message: truncate(message, 80) })),
+        ),
+      ),
+    assertRoomForBackup: assertRoomForUpgradeBackup,
+    withStoneLock: async (work) => {
+      await withStoneLock(work);
+    },
+    logout: logoutAll,
+    stoneUp: () => isRunning(),
+    listenerUp: () => isListening(),
+    stopStone: async () => {
+      if (!previousEngine && findStone()?.version !== engineVersion()) {
+        throw new Error(
+          `the running database was started by GemStone ${from}, which is no longer installed`,
+        );
+      }
+      await stopStone(false, previousEngine);
+    },
+    stopNetldi: () => stopNetldi(previousEngine),
+    runScript: (report) =>
+      runUpgradeScript({
+        script: upgradeScriptPath(extensionPath),
+        extent: extentPath(),
+        stone: UPGRADE_STONE_NAME,
+        from,
+        env: upgradeEnvironment(engine),
+        cwd: databaseLogPath(),
+        onOutput: (text) => {
+          log(text.trimEnd());
+          const line = latestUpgradeLine(text);
+          if (line) report(line);
+        },
+      }),
+    repositoryVersion: () => repositoryVersion(engine),
+    forgetInstalls: () => {
+      fs.rmSync(grailStampPath(), { force: true });
+      fs.rmSync(mcpStampPath(), { force: true });
+    },
+    log,
+  };
+}
+
+function truncate(value: string, max: number): string {
+  return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
 }
 
 /**

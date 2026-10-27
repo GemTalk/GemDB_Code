@@ -544,46 +544,202 @@ export function assertDatabaseHasRowan(): void {
 }
 
 /**
- * Refuse to touch a database an older engine wrote.
+ * The engine upgrades GemDB performs in place, as `from -> to` pairs.
+ *
+ * Pairs rather than a floor, because each is a measurement: Grail's
+ * `scripts/upgrade_engine.sh` carries a workaround for every GemStone and Rowan
+ * defect met on the way from a5 to a8, and nothing says the next alpha needs
+ * the same ones. A pin move adds its pair once the upgrade has been run on it.
+ * Earlier alphas need no pair: a database from before a5 has no Rowan, and
+ * `assertDatabaseHasRowan` refuses it whatever the engine.
+ */
+export const ENGINE_UPGRADES: readonly { from: string; to: string }[] = [
+  { from: '4.0.0.a5', to: '4.0.0.a8' },
+];
+
+/**
+ * Order two GemStone versions, or undefined when either cannot be read.
+ *
+ * `3.7.5`, `4.0.0.Alpha1`, `4.0.0.a8`: numbers first, then an alpha sorts
+ * before the release it leads to. The spelling changed at a2 (`Alpha1` to
+ * `a2`), so both are read.
+ */
+export function compareEngineVersions(a: string, b: string): number | undefined {
+  const parse = (v: string): number[] | undefined => {
+    const m = v.trim().match(/^(\d+)\.(\d+)\.(\d+)(?:\.(?:a|alpha)(\d+))?$/i);
+    if (!m) return undefined;
+    // A release sorts after every alpha of the same number.
+    return [Number(m[1]), Number(m[2]), Number(m[3]), m[4] === undefined ? Infinity : Number(m[4])];
+  };
+  const pa = parse(a);
+  const pb = parse(b);
+  if (!pa || !pb) return undefined;
+  for (let i = 0; i < pa.length; i++) {
+    if (pa[i] !== pb[i]) return pa[i] < pb[i] ? -1 : 1;
+  }
+  return 0;
+}
+
+/** What the database's engine version means for starting it under this one. */
+export type EngineVerdict =
+  | { kind: 'matches' }
+  | { kind: 'upgrade'; from: string; to: string }
+  | { kind: 'older' | 'newer' | 'unknown'; from: string; to: string };
+
+/**
+ * Judge the version `copydbf -i` read against the engine GemDB runs. Pure.
+ *
+ * An unreadable version (`repository` undefined) matches: an extent copydbf
+ * cannot read is the engine's to report when it opens it, and refusing on the
+ * strength of a failed probe would turn a question into an outage.
+ */
+export function judgeRepositoryVersion(
+  repository: string | undefined,
+  engine: string,
+  upgrades: readonly { from: string; to: string }[] = ENGINE_UPGRADES,
+): EngineVerdict {
+  if (!repository || repository === engine) return { kind: 'matches' };
+  const pair = { from: repository, to: engine };
+  if (upgrades.some((u) => u.from === repository && u.to === engine)) {
+    return { kind: 'upgrade', ...pair };
+  }
+  const order = compareEngineVersions(repository, engine);
+  if (order === undefined) return { kind: 'unknown', ...pair };
+  return { kind: order < 0 ? 'older' : 'newer', ...pair };
+}
+
+/**
+ * Raised when the database needs the in-place engine upgrade before it can
+ * start, wherever the upgrade cannot be offered: the GemDB Shell's cold start,
+ * auto-start, an AI agent's tool call. `ensureRunning` offers it when someone
+ * asked for the database.
+ */
+export class DatabaseUpgradeNeededError extends Error {
+  constructor(
+    readonly from: string,
+    readonly to: string,
+  ) {
+    super(
+      `The database at ${databasePath()} was written by GemStone ${from}, and this release ` +
+        `of GemDB runs GemStone ${to}. GemDB can upgrade it in place, keeping a backup ` +
+        'of the original: run "GemDB: Start GemDB" in VS Code and confirm the upgrade.',
+    );
+  }
+}
+
+/** The error for a verdict GemDB will not start on, or undefined when it can. */
+export function engineVerdictError(
+  verdict: EngineVerdict,
+): DatabaseVersionError | DatabaseUpgradeNeededError | undefined {
+  switch (verdict.kind) {
+    case 'matches':
+      return undefined;
+    case 'upgrade':
+      return new DatabaseUpgradeNeededError(verdict.from, verdict.to);
+    case 'newer':
+      return new DatabaseVersionError(
+        `The database at ${databasePath()} was written by GemStone ${verdict.from}, which is ` +
+          `newer than the GemStone ${verdict.to} this release of GemDB runs, and an engine ` +
+          'cannot open a database a newer one wrote. Update GemDB to a release that runs ' +
+          `GemStone ${verdict.from} (or clear the "gemdb.engineVersion" setting, if you set it). ` +
+          'The database is untouched.',
+      );
+    case 'older':
+    case 'unknown': {
+      const from = ENGINE_UPGRADES.filter((u) => u.to === verdict.to).map((u) => u.from);
+      const offered = from.length
+        ? `GemDB upgrades a database in place only from GemStone ${from.join(' or ')}`
+        : `GemDB has no in-place upgrade to GemStone ${verdict.to}`;
+      return new DatabaseVersionError(
+        `The database at ${databasePath()} was created by GemStone ${verdict.from}, ` +
+          `but this release of GemDB runs GemStone ${verdict.to}. ${offered}, so this ` +
+          `database has to be recreated: delete ${databasePath()} and start GemDB again. ` +
+          'Anything stored in it is lost, so copy out whatever you still need first.',
+      );
+    }
+  }
+}
+
+/**
+ * The in-place upgrade the database on disk needs, or undefined when it needs
+ * none (or needs something GemDB will not do, which the guard below refuses).
+ */
+export function pendingEngineUpgrade(
+  enginePath: string,
+  engineVersion: string,
+): { from: string; to: string } | undefined {
+  const verdict = judgeRepositoryVersion(repositoryVersion(enginePath), engineVersion);
+  return verdict.kind === 'upgrade' ? { from: verdict.from, to: verdict.to } : undefined;
+}
+
+/**
+ * Refuse to start a database this engine cannot open as it stands.
  *
  * This exists because the failure it replaces is so much worse than an error
- * message. Measured on 2026-09-11, moving from 3.7.5 to 4.0.0.Alpha1: the
- * extent format is unchanged (`compatibilityLevel: 855` either way), so the
- * 4.0 stone **starts** on a 3.7.5 repository and `gslist` reports it OK — the
- * status bar says the database is running. Every login then fails with
+ * message. Measured on 2026-09-11 moving 3.7.5 -> 4.0.0.Alpha1, and again on
+ * every alpha-to-alpha pin move since (a1 -> a2, a2 -> a3, a3 -> a4, a4 -> a5):
+ * the extent format is unchanged (`compatibilityLevel: 855` either way), so the
+ * newer stone **starts** on the older repository and `gslist` reports it OK —
+ * the status bar says the database is running. Every login then fails with
  * GemStone error 4045, "The Gem and dbf versions are incompatible", so the
  * first notebook cell, the shell and the MCP server all fail at once with an
- * error that names neither the cause nor the cure.
+ * error that names neither the cause nor the cure. So every pin move puts every
+ * existing database on the far side of this guard.
  *
- * The same holds one alpha to the next, and that is the case a user actually
- * meets: measured 2026-09-16, an Alpha1 extent still reads
- * `compatibilityLevel: 855` under the a2 engine, so the a2 stone starts on it
- * and every login fails exactly as above. Measured again 2026-09-24 for a2 ->
- * a3, with the same result: 855 either way, the a3 stone starts on an a2
- * extent, `gslist` says OK, and the login fails with 4045. So every pin move
- * puts every existing database on the far side of this guard.
+ * Until a8 the only cure was to delete the database: no 4.0 alpha ships
+ * `bin/upgradeImage`. Grail now carries the upgrade instead
+ * (`scripts/upgrade_engine.sh --in-place`, GemTalk/Grail#1866), with a
+ * workaround for each GemStone and Rowan defect on the way, and
+ * `ensureRunning` runs it (`engineUpgrade.ts`): asked first, with the extent
+ * backed up beside itself and put back if anything fails. So the guard now
+ * sorts the database into four cases ({@link judgeRepositoryVersion}):
  *
- * There is no in-place upgrade to offer instead: 3.7.5 shipped
- * `bin/upgradeImage`, and no 4.0 alpha ships one (checked again on a3), so
- * converting the image is not something GemDB could do on the user's behalf
- * even if it wanted to. Saying
- * so and stopping is the honest move, and at this stage of the product — very
- * few users, all of them close by — losing a scratch database is the cheaper
- * end of the trade against silently running against a repository that cannot
- * answer.
+ * - **matches** (or `copydbf` cannot say): nothing to do;
+ * - **upgrade**, a pair in {@link ENGINE_UPGRADES}: refused here with
+ *   {@link DatabaseUpgradeNeededError}, which says how to get the upgrade,
+ *   unless `allowUpgrade` — the setup path passes it, because preparing files
+ *   touches no database and the start that follows does the upgrade;
+ * - **older** with no measured upgrade, or **unknown**: refused, naming the
+ *   directory to delete, as before;
+ * - **newer** than the engine: refused, since no engine opens a database a
+ *   newer one wrote, and deleting it would be the wrong advice.
  *
  * Checked before the stone starts rather than at login, because a stone that
  * starts is what makes this confusing in the first place.
  */
-export function assertDatabaseMatchesEngine(enginePath: string, engineVersion: string): void {
-  const repository = repositoryVersion(enginePath);
-  if (!repository || repository === engineVersion) return;
-  throw new DatabaseVersionError(
-    `The database at ${databasePath()} was created by GemStone ${repository}, ` +
-      `but this release of GemDB runs GemStone ${engineVersion}. ` +
-      'There is no in-place upgrade — GemStone 4.0 ships no upgradeImage — so the ' +
-      `database has to be recreated: delete ${databasePath()} and start GemDB again. ` +
-      'Anything stored in it is lost, so copy out whatever you still need first.',
+export function assertDatabaseMatchesEngine(
+  enginePath: string,
+  engineVersion: string,
+  opts: { allowUpgrade?: boolean } = {},
+): void {
+  const verdict = judgeRepositoryVersion(repositoryVersion(enginePath), engineVersion);
+  if (verdict.kind === 'upgrade' && opts.allowUpgrade) return;
+  const error = engineVerdictError(verdict);
+  if (error) throw error;
+}
+
+/**
+ * Refuse to start an upgrade whose backup the disk cannot hold: the upgrade
+ * copies the extent beside itself first, and the stone has pregrown it to its
+ * reserved size, so the copy is that big. Never refuses when it cannot read
+ * the disk; the copy failing still leaves the database as it was.
+ */
+export function assertRoomForUpgradeBackup(): void {
+  const free = freeDiskMb(databasePath());
+  if (free === undefined) return;
+  let extentMb: number;
+  try {
+    extentMb = fs.statSync(extentPath()).size / 1048576;
+  } catch {
+    return;
+  }
+  // The temporary stone's transaction logs and the upgrade's own logs, besides.
+  const needMb = Math.ceil(extentMb + 1024);
+  if (free >= needMb) return;
+  throw new DiskSpaceError(
+    `Upgrading the database keeps a copy of it first, which needs about ` +
+      `${Math.ceil(needMb / 1024)} GB of disk, and ${databasePath()} has ` +
+      `${Math.floor(free / 1024)} GB free. Free some disk space and start GemDB again.`,
   );
 }
 
