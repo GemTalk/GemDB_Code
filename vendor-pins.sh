@@ -11,27 +11,21 @@
 # Bumping a pin is a one-line PR to this file; a green CI run on it is the
 # proof the new upstream commit works.
 
-# Grail: TEMPORARILY the head of fix/engine-upgrade (GemTalk/Grail PR #1867),
-# not main, for the engine move to 4.0.0.a8 (GemDB_Code #178). It carries
-# scripts/upgrade_engine.sh --in-place, which GemDB runs to upgrade an a5
-# database in place, with GemStone's upgradeImage.topaz for a8 bundled under
-# scripts/upgrade/4.0.0.a8 (a8 ships none); and the install repairs a Grail an
-# engine upgrade has stripped (it recompiles the LoadedMethods upgradeImage
-# removed, and re-enables the user's GsPackage). ff418a3 also fixes a reinstall
-# keeping methods a release removes (the upgrade test's synthetic case), and
-# 5d0333f runs the upgrade's temporary stone on the caller's own stone config
-# (UPGRADE_ENGINE_STONE_CONFIG): GemDB's key and 10240 MB cap, without which
-# that stone refused GemDB's pregrown extent. ab9de40 (that branch merged with
-# main) adds the repair of a deployed class whose bases a newer Grail changed
-# while none of its instances is stored -- EmailMessage, once Grail took
-# CPython's email package -- in scripts/redeployModules.gs, which
-# install-grail.sh now runs last, as Grail's install.sh does. Move this to the
-# merge commit once #1867 lands on main.
-#
-# The previous pin was c8cbc92 (main as of 2026-10-20), the first Rowan-project
-# Grail: Tonel packages in src/Grail-*, loaded by install_rowan.gs into an image
-# started from extent0.rowan3.dbf.
-PINNED_GRAIL_REF=ab9de4063d952844e55fe969ece03067e2f6302d
+# Grail: main as of 2026-10-28 (29833cd), for the engine move to 4.0.0.a8
+# (GemDB_Code #178). Since the previous pin it carries:
+#   - #1867: scripts/upgrade_engine.sh --in-place, which GemDB runs to upgrade
+#     an a5 database in place, with GemStone's upgradeImage.topaz for a8 bundled
+#     under scripts/upgrade/4.0.0.a8 (a8 ships none); the temporary stone runs
+#     on GemDB's own stone config (UPGRADE_ENGINE_STONE_CONFIG: its key and
+#     10240 MB cap). The install repairs a Grail an engine upgrade has stripped,
+#     and scripts/redeployModules.gs, which install-grail.sh runs last, rebuilds
+#     a deployed class whose bases changed while none of its instances is
+#     stored (EmailMessage, once Grail took CPython's email package).
+#   - #1888: a rebuilt module's defs evaluate their defaults again (werkzeug's
+#     dataclass fields failed to redeploy), and the redeploy reports outcomes.
+#   - #1886: compile() inside an except SyntaxError: handler parses by its own
+#     mode (the brain-freeze notebook's eval-then-exec fallback).
+PINNED_GRAIL_REF=29833cdb3758dcdb50473174672f6f145437e036
 
 # mcp_server: 0.9.0 (main as of 2026-10-19), 20 commits (9 PRs) on from the
 # previous pin (d836520) -- and, like Grail, NOW A ROWAN PROJECT (#57). Its six
