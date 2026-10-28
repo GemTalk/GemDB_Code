@@ -31,8 +31,8 @@ export type { EngineProcess } from './gslist';
  * Starting the NetLDI with these set is what makes `import` work in every
  * session afterwards, without the user configuring anything.
  */
-export function engineEnvironment(): Record<string, string> {
-  const gs = enginePath();
+export function engineEnvironment(gemstone?: string): Record<string, string> {
+  const gs = gemstone ?? enginePath();
   const external = externalDatabase();
   if (!gs) {
     throw new Error(
@@ -607,10 +607,15 @@ export function stopStoneArgs(force: boolean): string[] {
   return [...flags, '-t', String(STOP_TIMEOUT_SECONDS), STONE_NAME, ADMIN_USER, ADMIN_PASSWORD];
 }
 
-export async function stopStone(force = false): Promise<void> {
+/**
+ * Stop GemDB's stone. `gemstone` names the engine to stop it with, when it is
+ * not the one GemDB runs now: a stone the previous engine started, before an
+ * engine upgrade.
+ */
+export async function stopStone(force = false, gemstone?: string): Promise<void> {
   requireOwnDatabase('stop');
   logStep(force ? 'Stopping the database, disconnecting other sessions' : 'Stopping the database');
-  const env = engineEnvironment();
+  const env = engineEnvironment(gemstone);
   await runEngineCommand(
     path.join(env.GEMSTONE, 'bin', 'stopstone'),
     stopStoneArgs(force),
@@ -619,9 +624,9 @@ export async function stopStone(force = false): Promise<void> {
   );
 }
 
-export async function stopNetldi(): Promise<void> {
+export async function stopNetldi(gemstone?: string): Promise<void> {
   requireOwnDatabase('stop');
-  const env = engineEnvironment();
+  const env = engineEnvironment(gemstone);
   await runEngineCommand(
     path.join(env.GEMSTONE, 'bin', 'stopnetldi'),
     [NETLDI_NAME],
