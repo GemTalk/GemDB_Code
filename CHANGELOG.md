@@ -7,14 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-10-28
+
+The database engine moves to GemStone 4.0.0.a8, and this time **you keep your database**. Do not
+delete `~/GemDB/db`. The first time you start GemDB after updating from 1.9.0, it asks to upgrade
+the database in place, keeps a copy of the original, and puts that copy back if anything goes
+wrong. The bundled Python runtime moves forward too.
+
 ### Changed
 
-- **The database engine is GemStone 4.0.0.a8.** A database GemStone 4.0.0.a5 wrote is upgraded in
-  place instead of having to be deleted: starting GemDB asks first, copies the database to
-  `db/data/extent0.dbf.pre-4.0.0.a5`, upgrades it with Grail's engine upgrade, and installs Python
-  support and the MCP server again. If the upgrade fails, the copy is put back and GemDB says so
-  rather than starting. A database from before 4.0.0.a5 still has to be recreated, and one a newer
-  engine wrote is refused without the advice to delete it.
+- **The database engine is GemStone 4.0.0.a8, and your 1.9.0 database is upgraded in place.**
+  Earlier engine changes meant deleting `~/GemDB/db` and everything in it. Now, the first time you
+  start the database after updating (**Start GemDB**, a notebook cell, the GemDB Shell, **Run** or
+  **Debug Python File in GemDB**), GemDB Code asks before it touches anything:
+  - **What it does.** It stops the database, copies it to `~/GemDB/db/data/extent0.dbf.pre-4.0.0.a5`,
+    upgrades it to 4.0.0.a8, then starts it and installs Python support and the MCP server again,
+    without asking a second time. What you have stored comes across: your objects, your classes'
+    instances, and code you deployed into the database. A notification says where the copy is when
+    it is done.
+  - **How long it takes.** The upgrade itself took about a minute in testing, and installing Python
+    support afterwards takes a few minutes, as it does on a first start. A progress notification
+    shows each step, and the full output goes to the GemDB log.
+  - **Disk space.** The copy needs about as much free disk as the database itself, plus 1 GB: about
+    11 GB for a database GemDB Code created. GemDB Code checks first and says so if there is not
+    enough, and nothing is changed. The copy is kept until you delete it, so once you are happy with
+    the upgraded database, delete `extent0.dbf.pre-4.0.0.a5` to get the space back.
+  - **If you say no.** Nothing is changed and the database does not start. You are asked again the
+    next time something starts it.
+  - **If it fails.** The copy is put back, so the database is as 1.9.0 left it, and GemDB Code shows
+    an error with **Show Log** and does not start the database. If it cannot confirm the database
+    was put back, it says so and names the copy, which is your original. Starting again tries the
+    upgrade again.
+  - **When nobody asked for the database.** Starting on its own when VS Code opens, or for an AI
+    agent through the MCP server, never upgrades. GemDB Code shows a warning with an **Upgrade
+    Database…** button instead. The `gemdb` command, run in a terminal while the database is
+    stopped, says to start GemDB in VS Code and confirm the upgrade there.
+
+  A database created by GemDB Code 1.8.0 or earlier still has to be recreated, as 1.9.0 already
+  said. A database a newer engine wrote is refused, and GemDB Code no longer suggests deleting it. A
+  database another administrator runs (`gemdb.externalDatabase.gemstone`) is theirs to upgrade, and
+  GemDB Code does not touch it.
+
+- **A newer Python runtime.** 176 commits across 134 pull requests since 1.9.0. More of CPython's
+  standard library is included: the `email` package (CPython's own, replacing Grail's), `gzip` and
+  the `compression` package with the `zlib` they need, `binascii` and `base64`, `cmd`, `sched`,
+  `fileinput`, `filecmp`, `rlcompleter`, `shelve`, `urllib.robotparser`, `timeit` and `plistlib`.
+  FastAPI's own test suite agrees with CPython, `cffi` works (so `argon2` does, and `pydantic`
+  imports again), and numpy's core test modules agree with CPython. `match` statements, f-strings,
+  annotations, `compile()` and the `SyntaxError`s CPython raises behave as CPython's do in many more
+  cases, and file names that are not UTF-8, and `bytes` paths, reach the file they name. Installing
+  this Python support over the previous one keeps what you have stored working: modules you
+  deployed are rebuilt in place, so stored instances keep their classes, and stored enum members
+  stay members.
 
 ## [1.9.0] - 2026-10-20
 
@@ -1214,7 +1258,8 @@ gets out of the way.
 - **`sys.exit(n)` exits 1 rather than `n`**, and **`input()` is not yet
   supported**. Both are upstream in Grail.
 
-[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/GemTalk/GemDB_Code/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/GemTalk/GemDB_Code/compare/v1.6.0...v1.7.0
