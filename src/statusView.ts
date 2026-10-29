@@ -8,6 +8,7 @@ import {
   keepStatisticsDays,
   mcpEnabled,
   mcpReadOnly,
+  reinstallPythonOnUpdate,
   statisticsIntervalSeconds,
 } from './config';
 import { GrailInstallFailure, bundledGrailStamp, grailInstallFailure, grailLabel } from './grail';
@@ -126,8 +127,10 @@ export function pythonRow(facts: {
   bundled: string | undefined;
   failure: GrailInstallFailure | undefined;
   running: boolean;
+  /** `gemdb.reinstallPythonOnUpdate`: whether an update installs by itself. */
+  installsUpdates: boolean;
 }): Row {
-  const { installed, bundled, failure, running } = facts;
+  const { installed, bundled, failure, running, installsUpdates } = facts;
   if (failure) {
     return {
       label: 'Python',
@@ -158,9 +161,11 @@ export function pythonRow(facts: {
       ? `Python support ${grailLabel(bundled)} is ready to be added to the database. That happens ` +
         'automatically the first time you open the GemDB Shell or run a notebook cell.'
       : outdated
-        ? `This GemDB update ships Python support ${grailLabel(bundled)}. GemDB asks before ` +
-          'installing it, because data committed with the current one stops working as its ' +
-          'type. Click to install it.'
+        ? `This GemDB update ships Python support ${grailLabel(bundled)}. ` +
+          (installsUpdates
+            ? 'GemDB installs it the next time the database starts or you run Python. '
+            : 'gemdb.reinstallPythonOnUpdate is off, so the database keeps its current one. ') +
+          'What you have stored keeps working across the update. Click to install it now.'
         : 'The Python implementation installed in your database.',
     icon: neverInstalled
       ? new vscode.ThemeIcon('symbol-namespace')
@@ -446,6 +451,7 @@ export class StatusViewProvider implements vscode.TreeDataProvider<Row> {
         bundled: bundledGrailStamp(this.extensionPath),
         failure,
         running: state === 'running',
+        installsUpdates: reinstallPythonOnUpdate(),
       }),
     );
 

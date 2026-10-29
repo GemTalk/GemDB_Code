@@ -65,10 +65,9 @@ export function grailFailurePath(): string {
 }
 
 /**
- * Record of the Grail build the user chose not to file into the database.
- *
- * Beside the database for the same reason as the failure record: the answer is
- * about this database's data, so a fresh database starts without it.
+ * Record of the Grail build the user chose not to file into the database,
+ * written by 1.7.0 to 1.9.0, which asked before an update. Nothing writes it
+ * now; `recordGrailInstalled` removes one an earlier release left.
  */
 export function grailDeclinedPath(): string {
   return path.join(databasePath(), '.gemdb-grail-declined');
