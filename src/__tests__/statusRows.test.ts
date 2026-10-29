@@ -22,7 +22,13 @@ const failure: GrailInstallFailure = {
 
 describe('the Python row', () => {
   it('says the install failed, and shows why', () => {
-    const row = pythonRow({ installed: undefined, bundled: BUNDLED, failure, running: true });
+    const row = pythonRow({
+      installed: undefined,
+      bundled: BUNDLED,
+      failure,
+      running: true,
+      installsUpdates: true,
+    });
 
     expect(row.description).toBe('install failed — see the GemDB output');
     expect(row.tooltip).toContain('exit code 1');
@@ -30,13 +36,25 @@ describe('the Python row', () => {
   });
 
   it('retries the install when the database is running', () => {
-    const row = pythonRow({ installed: undefined, bundled: BUNDLED, failure, running: true });
+    const row = pythonRow({
+      installed: undefined,
+      bundled: BUNDLED,
+      failure,
+      running: true,
+      installsUpdates: true,
+    });
 
     expect(row.command?.command).toBe('gemdb.reinstallPython');
   });
 
   it('starts the database when it is stopped, since starting retries the install', () => {
-    const row = pythonRow({ installed: undefined, bundled: BUNDLED, failure, running: false });
+    const row = pythonRow({
+      installed: undefined,
+      bundled: BUNDLED,
+      failure,
+      running: false,
+      installsUpdates: true,
+    });
 
     expect(row.command?.command).toBe('gemdb.start');
     expect(row.tooltip).toContain('tries again the next time it starts');
@@ -46,7 +64,13 @@ describe('the Python row', () => {
     // A failed update is recorded against the new build, and the old stamp
     // may or may not have survived; either way the row must not say Python
     // is waiting to be installed for the first time.
-    const row = pythonRow({ installed: OLDER, bundled: BUNDLED, failure, running: true });
+    const row = pythonRow({
+      installed: OLDER,
+      bundled: BUNDLED,
+      failure,
+      running: true,
+      installsUpdates: true,
+    });
 
     expect(row.description).toBe('install failed — see the GemDB output');
   });
@@ -57,6 +81,7 @@ describe('the Python row', () => {
       bundled: BUNDLED,
       failure: undefined,
       running: true,
+      installsUpdates: true,
     });
 
     expect(row.description).toBe('installs when you first run Python');
@@ -69,6 +94,7 @@ describe('the Python row', () => {
       bundled: BUNDLED,
       failure: undefined,
       running: true,
+      installsUpdates: true,
     });
 
     expect(row.description).toBe('0.1-2200-gnew');
@@ -81,9 +107,38 @@ describe('the Python row', () => {
       bundled: BUNDLED,
       failure: undefined,
       running: true,
+      installsUpdates: true,
     });
 
     expect(row.description).toBe('0.1-2100-gold — update available');
+    expect(row.command?.command).toBe('gemdb.reinstallPython');
+  });
+
+  it('says an update installs on the next start, and that stored data keeps working', () => {
+    const row = pythonRow({
+      installed: OLDER,
+      bundled: BUNDLED,
+      failure: undefined,
+      running: true,
+      installsUpdates: true,
+    });
+
+    expect(row.tooltip).toContain('the next time the database starts');
+    expect(row.tooltip).toContain('keeps working');
+    expect(row.tooltip).not.toMatch(/stops working/);
+  });
+
+  it('names the setting that holds an update back, when it is off', () => {
+    const row = pythonRow({
+      installed: OLDER,
+      bundled: BUNDLED,
+      failure: undefined,
+      running: true,
+      installsUpdates: false,
+    });
+
+    expect(row.tooltip).toContain('gemdb.reinstallPythonOnUpdate');
+    expect(row.tooltip).not.toMatch(/stops working/);
     expect(row.command?.command).toBe('gemdb.reinstallPython');
   });
 });

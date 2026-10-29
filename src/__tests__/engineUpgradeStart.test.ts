@@ -16,8 +16,6 @@ vi.mock('../grail', () => ({
   stageGrail: () => {},
   fileInGrail: async () => {},
   bundledGrailStamp: () => 'grail=0.1-1-gabc\n',
-  grailUpdateDeclined: () => undefined,
-  recordGrailUpdateDeclined: () => {},
 }));
 
 /** Each test gets its own extent path: `ensureRunning` remembers an extent it has checked. */

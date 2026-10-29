@@ -212,12 +212,17 @@ The first time the database starts, usually right after setup, GemDB Code instal
 into it. This takes a few minutes and shows its progress in a notification. If the database cannot
 start yet, this happens the first time you open a shell or run a notebook cell instead.
 
-When a GemDB Code update ships newer Python support, GemDB Code prompts you before installing it into
-a database that already has Python support. Data committed with the old version stops working as its
-type afterward (dates and times, decimals, tuples and sets, and instances of your classes), so
-install it into a database that holds nothing you need. If you keep the current version, GemDB Code
-does not prompt you again for that update; **GemDB: Reinstall the Python Execution Engine** installs
-it later.
+When a GemDB Code update ships newer Python support, GemDB Code installs it into your database the
+next time the database starts or you run Python, without prompting you. What you have stored keeps
+working: dates and times, decimals, tuples and sets, enum members, and instances of your own classes
+keep their types, and modules you deployed into the database are rebuilt in place, so stored objects
+keep their classes. Two exceptions remain. If the update changes the base classes of a class you
+have stored instances of, importing its module raises an error that names the class and the
+`gemdb.schema.rebase(...)` call that moves those instances onto the new class. And a class statement
+inside a function (other than `collections.namedtuple`) makes a new class each time its module is
+rebuilt, so instances stored before the update keep the old class. To keep the current version
+until you choose, turn off `gemdb.reinstallPythonOnUpdate`; **GemDB: Reinstall the Python Execution
+Engine** then installs the update when you run it.
 
 #### Changes that need your permission
 
@@ -834,8 +839,8 @@ To keep your data, copy out anything you need before you update GemDB Code.
 ### Settings
 
 The default GemDB Code settings are designed to work on most systems, so most users do not need to
-change them. These include settings for locating where GemDB Code stores files, collecting garbage,
-recording statistics, and setting up the MCP server for AI agents.
+change them. These include settings for locating where GemDB Code stores files, updating Python
+support, collecting garbage, recording statistics, and setting up the MCP server for AI agents.
 
 If you want to review them, open VS Code's Settings (Ctrl+, on Linux, or Cmd+, on macOS) and search
 for `gemdb`, or go to **Extensions** > **GemDB Code** in the list on the left. If you need to
@@ -847,6 +852,7 @@ them to other computers. The following table lists all of the settings and the d
 | -------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------ |
 | `gemdb.rootPath`                                   | `~/GemDB`       | Where GemDB Code keeps everything; must be on a local disk                           |
 | `gemdb.engineVersion`                              | _(empty)_       | Advanced: override the pinned engine version                                         |
+| `gemdb.reinstallPythonOnUpdate`                    | `true`          | Install the Python support a GemDB Code update ships into your database by itself    |
 | `gemdb.maintenance.garbageCollectionIntervalHours` | `24`            | Hours between scheduled garbage collections; `0` collects only when space runs short |
 | `gemdb.maintenance.abortIdleSessionsAfterMinutes`  | `10`            | Minutes before an idle session with no uncommitted changes is refreshed              |
 | `gemdb.statistics.collect`                         | `true`          | Whether the database records its statistics for GemDB Stats                          |

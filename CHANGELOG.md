@@ -59,6 +59,19 @@ wrong. The bundled Python runtime moves forward too.
   this Python support over the previous one keeps what you have stored working: modules you
   deployed are rebuilt in place, so stored instances keep their classes, and stored enum members
   stay members.
+- **Newer Python support installs without asking again.** Since 1.7.0, GemDB Code asked before
+  installing the Python support an update ships into a database that already had it, and warned
+  that stored dates and times, decimals, tuples and sets, and instances of your own classes would
+  stop working. That is no longer true: the install keeps them working, and Grail's upgrade test
+  checks it, from the Python support 1.9.0 installed, every night. So the next time the database
+  starts or you run Python, GemDB Code installs it, as it already did after the engine upgrade
+  above. `gemdb.reinstallPythonOnUpdate` is used again: on by default, and turning it off keeps the
+  current version until you run **GemDB: Reinstall the Python Execution Engine**, which no longer
+  asks either. A value you set before 1.7.0 means what it meant then. Two cases still need you: a
+  class whose base classes the update changes, while instances of it are stored, makes importing
+  its module raise an error that names the `gemdb.schema.rebase(...)` call to run; and instances of
+  a class defined by a class statement inside a function (other than `collections.namedtuple`)
+  keep the old class when the module is rebuilt.
 
 ## [1.9.0] - 2026-10-20
 

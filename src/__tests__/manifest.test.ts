@@ -27,7 +27,12 @@ interface WalkthroughStep {
 interface Manifest {
   capabilities?: { untrustedWorkspaces?: { supported?: unknown } };
   contributes: {
-    configuration: { properties: Record<string, { scope?: string }> };
+    configuration: {
+      properties: Record<
+        string,
+        { scope?: string; default?: unknown; description?: string; deprecationMessage?: string }
+      >;
+    };
     debuggers?: Array<{ type: string; hiddenWhen?: string }>;
     commands: Array<{ command: string; title: string }>;
     views: Record<string, Array<{ id: string; name: string; when?: string; visibility?: string }>>;
@@ -82,6 +87,16 @@ describe('the manifest', () => {
         .map((step) => step.id);
     expect(shownFor(false)).toEqual(['install', 'repl', 'notebook', 'demo', 'stopping']);
     expect(shownFor(true)).toEqual(['installExternal', 'repl', 'notebook', 'demo']);
+  });
+
+  // 1.7.0 deprecated it when installing a newer Grail broke stored data; Grail
+  // now upgrades in place, so it governs updates again. Kept in the manifest
+  // throughout, so a value set before 1.7.0 means again what it meant then.
+  it('uses gemdb.reinstallPythonOnUpdate again, on by default and not deprecated', () => {
+    const setting = manifest.contributes.configuration.properties['gemdb.reinstallPythonOnUpdate'];
+    expect(setting.default).toBe(true);
+    expect(setting.deprecationMessage).toBeUndefined();
+    expect(setting.description).not.toMatch(/no longer used/i);
   });
 
   it('ships the page every walkthrough step shows', () => {

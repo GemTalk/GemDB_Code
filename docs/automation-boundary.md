@@ -133,6 +133,61 @@ sets in any configuration file wins, and the block is removed in favour of
 it. Never on an external database. See
 [`statistics.md`](statistics.md), "Recording statistics".
 
+**Installing a newer Grail into a database that already has Python support**
+(`grailFileInDue` in `lifecycle.ts`), unless `gemdb.reinstallPythonOnUpdate`
+is off. A first install was always automated; an update now is too, from
+every trigger, as the MCP server's is.
+
+From 1.7.0 to 1.9.0 it was asked instead, once per build and only of someone
+who asked for the database, because it was not inert. Measured 2026-10-15 on a
+database populated under 1.6.0's Grail (`beef473`), Brain Freeze included:
+after filing in `9fb5d23`, committed datetimes, dates, timedeltas, Decimals,
+tuples, sets, instances of user classes and a stored `None` no longer passed
+`isinstance` or compared, and Brain Freeze died on its first request.
+`install.gs` recreated every runtime class, and committed objects kept the old
+ones. The setting was ignored then, and kept in the manifest, deprecated.
+
+That reason is gone. Grail upgrades in place: the Rowan load keeps Grail's
+classes, and `install-grail.sh` rebuilds every deployed module into its
+committed instance and classes (`scripts/redeployModules.gs`; Grail #1791,
+Grail's `docs/Persistent_Modules_and_Classes.md` D7). Grail's upgrade test
+writes an application's data under one Grail, installs another over it, and
+checks that every stored object is still an instance of the current class and
+runs its code: dates, datetimes, timedeltas, Decimals, Fractions, tuples, sets,
+`None`, enum members, namedtuples, exceptions and instances of user classes.
+Its nightly runs it from 1.9.0's pin (`c8cbc92`), the Grail every database
+GemDB 1.9.0 created has, and #1867 measured that case at 243 checks, 0 failures.
+The engine upgrade already reinstalled Grail without a second question, which
+the warning contradicted.
+
+What an update still does not carry over, and where it is said instead of in
+a question:
+
+- a class whose bases the update changed while instances of it, or of a class
+  below it, are stored. The redeploy rebuilds such a class when nothing is
+  stored against it; otherwise its module stays stale, the GemDB log names it,
+  and importing it raises with the advice to run `gemdb.schema.rebase`;
+- a class statement inside a function other than `namedtuple`'s, which makes a
+  new class on every rebuild, so instances stored before keep the old class.
+
+Neither is helped by asking before the install: the first is refused with
+its remedy, and the second happens on any rebuild of the module, an edit of
+its source included.
+
+It is persistent, which the rule says to ask about, and is automated anyway
+for the reason the MCP server's install is: it is GemDB's own code in GemDB's
+own database, and the next engine upgrade installs it regardless. So the
+setting governs it again, default on: off, the update waits for **Reinstall
+the Python Execution Engine**, which the status view's row offers and which
+does not ask (the command is the request). A value set before 1.7.0 means
+again what it meant then. The `.gemdb-grail-declined` record 1.7.0–1.9.0
+wrote is ignored, and removed by the next install.
+
+`resumeRunning` still files Grail in only for a first install: after an
+extension update every window activates at once onto the running database, and
+an update waits for its next use rather than racing installs from editors that
+only opened.
+
 ## Asked
 
 **Raising shared memory — always prompts; never automate it.** It needs
@@ -175,9 +230,9 @@ user's only copy of their data, so it is asked even though it is recoverable:
 the script copies the extent to `<extent>.pre-<from>` first and copies it back
 if anything fails, but undoing a *successful* upgrade is by hand. The question
 says where the copy goes and that it stays until the user deletes it. Asked
-only from the triggers that ask about a Python update — someone who asked for
-the database. Auto-start and an agent get a warning with **Upgrade
-Database…**, which runs Start and so asks; a modal nobody asked for would sit
+only from the triggers that are someone asking for the database
+(`ASKS_ABOUT_ENGINE_UPGRADES` in `lifecycle.ts`). Auto-start and an agent get
+a warning with **Upgrade Database…**, which runs Start and so asks; a modal nobody asked for would sit
 unanswered, and the upgrade stops the database for minutes. Python support
 and the MCP server are then installed again without a second question: the
 upgrade removed their compiled methods, and the question already said so.
@@ -231,42 +286,6 @@ collection — asked, once per stretch of idleness.** Commit, Abort… (which
 confirms) or Leave It. Only once the notebook is at least 20 commits behind
 (`STN_SIGNAL_ABORT_CR_BACKLOG`'s default): a dirty notebook that nothing else
 commits past holds nothing back, and a prompt then would be noise.
-
-**Installing a newer Grail into a database that already has Python support —
-asked, once per build, and only by someone who asked for the database**
-(`grailFileInAgreed` in `lifecycle.ts`). It used to be automated, behind
-`gemdb.reinstallPythonOnUpdate` (default on), on the reasoning that Grail is
-GemDB's own code. It is not inert: the install (then `install.gs`, now a Rowan
-load) removes Grail's dictionaries and rebuilds every runtime class, and committed objects keep pointing at the old
-ones. Measured 2026-10-15 on a database populated under 1.6.0's Grail
-(`beef473`), Brain Freeze included: after filing in `9fb5d23`, committed
-datetimes, dates, timedeltas, Decimals, tuples, sets, instances of user classes
-and a stored `None` no longer pass `isinstance` or compare, some comparisons end
-the script with an error `except BaseException` cannot catch, and Brain Freeze
-dies on its first request. Filing the _same_ build in again does exactly the
-same, so this is the reinstall, not any one pin. A fresh database on the new
-build passed every check. Dictionaries, lists, numbers and strings survive.
-
-So the setting is ignored (kept in the manifest, deprecated, so existing values
-are not reported as unknown) and the question is a modal warning. Placement:
-
-- Asked from `ensureRunning` for the triggers that are a person asking for the
-  database (Start, a cell, the Shell, Run or Debug File, the setup commands).
-  Never from auto-start or the first-run pass, which never prompt, and never
-  from an MCP tool call, which a modal would leave hanging. Those start the
-  database on the Grail it already has.
-- "Keep" (or dismissing the modal) is recorded per bundled build beside the
-  database (`.gemdb-grail-declined`), so a notebook's every cell does not ask
-  again; an update shipping a different build asks afresh, and a new database
-  starts without the record.
-- The status view's Python row and **Reinstall the Python Execution Engine**
-  take the update later. That command now carries the same warning, since a
-  reinstall does the same damage.
-- A first install is still automated: there is nothing in the database yet.
-
-Declining is safe because staging happens only on first setup and inside
-`fileInGrail`, so the Grail on disk and the Grail in the database stay the
-same build.
 
 **Stopping a database session — asked, every time** (`gemdb.stopSession`).
 Whatever the session has not committed is lost, so it is a modal with the

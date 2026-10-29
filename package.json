@@ -63,8 +63,7 @@
           "scope": "machine",
           "type": "boolean",
           "default": true,
-          "description": "No longer used: GemDB Code asks before installing a newer Python execution engine into your database.",
-          "deprecationMessage": "No longer used. Installing a newer Python execution engine makes data committed with the current one stop working as its type, so GemDB Code now asks first, whatever this says."
+          "description": "When a GemDB Code update ships a newer Python execution engine, install it into your database the next time the database starts or you run Python. What you have stored keeps working across the update. When off, the database keeps its current one until you run Reinstall the Python Execution Engine."
         },
         "gemdb.maintenance.abortIdleSessionsAfterMinutes": {
           "scope": "machine",
