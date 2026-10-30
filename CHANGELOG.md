@@ -48,17 +48,22 @@ wrong. The bundled Python runtime moves forward too.
   database another administrator runs (`gemdb.externalDatabase.gemstone`) is theirs to upgrade, and
   GemDB Code does not touch it.
 
-- **A newer Python runtime.** 176 commits across 134 pull requests since 1.9.0. More of CPython's
+- **A newer Python runtime.** 255 commits across 201 pull requests since 1.9.0. More of CPython's
   standard library is included: the `email` package (CPython's own, replacing Grail's), `gzip` and
   the `compression` package with the `zlib` they need, `binascii` and `base64`, `cmd`, `sched`,
   `fileinput`, `filecmp`, `rlcompleter`, `shelve`, `urllib.robotparser`, `timeit` and `plistlib`.
   FastAPI's own test suite agrees with CPython, `cffi` works (so `argon2` does, and `pydantic`
   imports again), and numpy's core test modules agree with CPython. `match` statements, f-strings,
   annotations, `compile()` and the `SyntaxError`s CPython raises behave as CPython's do in many more
-  cases, and file names that are not UTF-8, and `bytes` paths, reach the file they name. Installing
-  this Python support over the previous one keeps what you have stored working: modules you
-  deployed are rebuilt in place, so stored instances keep their classes, and stored enum members
-  stay members.
+  cases, and file names that are not UTF-8, and `bytes` paths, reach the file they name. A module
+  whose source declares its encoding (`# -*- coding: latin-1 -*-`) is read in that encoding. An
+  uncaught exception goes through `sys.excepthook`, so a hook you assign is called, and a value you
+  assign to a built-in module's attribute, such as `sys.argv`, is the one every reader sees.
+  Re-running a script you have not changed, in a namespace, no longer writes to the database.
+  Installing this Python support over the previous one keeps what you have stored working: modules
+  you deployed are rebuilt in place, so stored instances keep their classes, including instances
+  of your `float` and `int` subclasses, and stored enum members stay members, including those of
+  `IntEnum`-style enums and enums made with `Enum('Color', 'RED GREEN')`.
 
 ## [1.9.0] - 2026-10-20
 
