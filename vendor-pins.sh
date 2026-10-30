@@ -11,21 +11,37 @@
 # Bumping a pin is a one-line PR to this file; a green CI run on it is the
 # proof the new upstream commit works.
 
-# Grail: main as of 2026-10-28 (29833cd), for the engine move to 4.0.0.a8
-# (GemDB_Code #178). Since the previous pin it carries:
-#   - #1867: scripts/upgrade_engine.sh --in-place, which GemDB runs to upgrade
-#     an a5 database in place, with GemStone's upgradeImage.topaz for a8 bundled
-#     under scripts/upgrade/4.0.0.a8 (a8 ships none); the temporary stone runs
-#     on GemDB's own stone config (UPGRADE_ENGINE_STONE_CONFIG: its key and
-#     10240 MB cap). The install repairs a Grail an engine upgrade has stripped,
-#     and scripts/redeployModules.gs, which install-grail.sh runs last, rebuilds
-#     a deployed class whose bases changed while none of its instances is
-#     stored (EmailMessage, once Grail took CPython's email package).
-#   - #1888: a rebuilt module's defs evaluate their defaults again (werkzeug's
-#     dataclass fields failed to redeploy), and the redeploy reports outcomes.
-#   - #1886: compile() inside an except SyntaxError: handler parses by its own
-#     mode (the brain-freeze notebook's eval-then-exec fallback).
-PINNED_GRAIL_REF=29833cdb3758dcdb50473174672f6f145437e036
+# Grail: main as of 2026-10-30 (06ccec5), for the 1.10.0 release, 67 PRs on
+# from 29833cd -- which brought the engine move to 4.0.0.a8 (GemDB_Code #178):
+# #1867's scripts/upgrade_engine.sh --in-place, which GemDB runs to upgrade an
+# a5 database in place (upgradeImage.topaz for a8 bundled under
+# scripts/upgrade/4.0.0.a8; the temporary stone on GemDB's own stone config),
+# the install's repair of a Grail an engine upgrade stripped, and
+# scripts/redeployModules.gs, which install-grail.sh runs last; #1888's
+# defaults re-evaluated on a rebuild; #1886's compile() inside an
+# except SyntaxError: handler. Since 29833cd it carries:
+#   - #1949, #1957: a rebuild (the redeploy after an install) keeps the class
+#     of stored float and int subclass instances and of int- and float-mixin
+#     enum members, and a functional-API enum (Enum('Color', ...)) keeps its
+#     class and members. One gap, from 1.9.0's Grail only (c8cbc92 kept a
+#     functional mixin enum's members in the session): those members come back
+#     equal, not identical (Grail #1957, "Known gap").
+#   - #1934, #1958: a native module's data attribute that Python assigned
+#     (sys.argv, sys.excepthook, ...) is what Smalltalk reads back too, and
+#     assigning a function to one no longer turns it into a call; an uncaught
+#     exception goes through an assigned sys.excepthook (#1899: the default
+#     hook prints the traceback to sys.stderr).
+#   - #1962, #1963: re-running an unchanged script under a namespace (or a
+#     session-local one declaring __transient__) writes nothing, so it leaves
+#     no dirty session and commits no records.
+#   - #1951, #1932: an imported module's source, and compile() of bytes, are
+#     read in the encoding their PEP 263 declaration names.
+#   - #1905: the CPython shim frees C objects whose count reaches zero.
+#   - CPython conformance: SyntaxErrors (f-strings, tabs, future statements,
+#     missing commas, CRLF source), built-in type and descriptor refusals in
+#     CPython's words, exception copy/pickle, property getter/setter chains,
+#     super() binding, format() of int/float/str subclasses.
+PINNED_GRAIL_REF=06ccec56635f0a419351eef9f32e576de5120f5c
 
 # mcp_server: 0.9.0 (main as of 2026-10-19), 20 commits (9 PRs) on from the
 # previous pin (d836520) -- and, like Grail, NOW A ROWAN PROJECT (#57). Its six
