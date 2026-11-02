@@ -48,7 +48,7 @@ wrong. The bundled Python runtime moves forward too.
   database another administrator runs (`gemdb.externalDatabase.gemstone`) is theirs to upgrade, and
   GemDB Code does not touch it.
 
-- **A newer Python runtime.** 255 commits across 201 pull requests since 1.9.0. More of CPython's
+- **A newer Python runtime.** 287 commits across 230 pull requests since 1.9.0. More of CPython's
   standard library is included: the `email` package (CPython's own, replacing Grail's), `gzip` and
   the `compression` package with the `zlib` they need, `binascii` and `base64`, `cmd`, `sched`,
   `fileinput`, `filecmp`, `rlcompleter`, `shelve`, `urllib.robotparser`, `timeit` and `plistlib`.
@@ -63,7 +63,11 @@ wrong. The bundled Python runtime moves forward too.
   Installing this Python support over the previous one keeps what you have stored working: modules
   you deployed are rebuilt in place, so stored instances keep their classes, including instances
   of your `float` and `int` subclasses, and stored enum members stay members, including those of
-  `IntEnum`-style enums and enums made with `Enum('Color', 'RED GREEN')`.
+  `IntEnum`-style enums and enums made with `Enum('Color', 'RED GREEN')`. A class whose base class
+  changed in this release, such as `email.message.EmailMessage`, is rebuilt on its new base when
+  nothing is stored against it, so modules that import `email` keep working after the upgrade.
+  Class bodies, `exec()`, annotations, generic classes and type aliases (`type X = ...`) and
+  t-strings behave as CPython's do in more cases.
 
 ## [1.9.0] - 2026-10-20
 

@@ -11,7 +11,7 @@
 # Bumping a pin is a one-line PR to this file; a green CI run on it is the
 # proof the new upstream commit works.
 
-# Grail: main as of 2026-10-30 (06ccec5), for the 1.10.0 release, 67 PRs on
+# Grail: main as of 2026-11-02 (c893bce), for the 1.10.0 release, 96 PRs on
 # from 29833cd -- which brought the engine move to 4.0.0.a8 (GemDB_Code #178):
 # #1867's scripts/upgrade_engine.sh --in-place, which GemDB runs to upgrade an
 # a5 database in place (upgradeImage.topaz for a8 bundled under
@@ -41,7 +41,29 @@
 #     missing commas, CRLF source), built-in type and descriptor refusals in
 #     CPython's words, exception copy/pickle, property getter/setter chains,
 #     super() binding, format() of int/float/str subclasses.
-PINNED_GRAIL_REF=06ccec56635f0a419351eef9f32e576de5120f5c
+# Since 06ccec5 (29 PRs) it carries:
+#   - #1987: a module body that fails writes none of its records, so the
+#     install's redeploy can repair a base change nothing is stored against
+#     (1.9.0's email.message.EmailMessage, Message -> MIMEPart) instead of
+#     refusing it -- and every module importing email after it -- and running
+#     out of temporary memory on the repeated failed builds. 06ccec5 failed
+#     the brain-freeze upgrade gate on exactly that.
+#   - #1995: exec'd code writes globals through and keeps comprehension
+#     targets.
+#   - #2000, #2004, #2011: a nested class, a function attribute and an
+#     annotated store run at their own place in the class body; #1998, #2010:
+#     a metaclass that is no class is called with the namespace, and a class
+#     type() builds is treated as a class statement's.
+#   - #1990, #1991, #1976: __annotate__ and __annotations__ follow CPython's
+#     getsets, and a method's annotations see its class namespace.
+#   - #1992-#1997: PEP 695 type parameters and type aliases (class scope,
+#     generic methods, private-name mangling, refusals) as CPython has them.
+#   - #2006, #2007, #2008, #2009: string.templatelib (t-strings), ctypes'
+#     generic types and GenericAlias attribute reads as CPython's.
+#   - #2012: a warning raised in a finalizer hook is blamed on <sys>.
+#   - #1977-#1988: install.sh refuses a product that cannot build methods
+#     through IR (4.0.0.a8 can), and IR codegen groundwork.
+PINNED_GRAIL_REF=c893bcec6de1ff032a8ea6bdec6b058296988382
 
 # mcp_server: 0.9.0 (main as of 2026-10-19), 20 commits (9 PRs) on from the
 # previous pin (d836520) -- and, like Grail, NOW A ROWAN PROJECT (#57). Its six
