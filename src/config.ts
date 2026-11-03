@@ -280,6 +280,16 @@ export function rootPath(): string {
 }
 
 /**
+ * Whether an extension update's newer Grail is installed into a database that
+ * already has one without anyone asking. Ignored from 1.7.0 to 1.9.0, while
+ * that install broke stored data; kept in the manifest throughout, so a value
+ * set before then means what it meant when it was set.
+ */
+export function reinstallPythonOnUpdate(): boolean {
+  return vscode.workspace.getConfiguration('gemdb').get<boolean>('reinstallPythonOnUpdate', true);
+}
+
+/**
  * The port the bundled MCP server listens on, and why it is not 8000.
  *
  * The MCP server's own `run-server.sh` defaults to 8000, which is the right
