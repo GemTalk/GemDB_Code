@@ -29,6 +29,7 @@ vi.mock('../paths', () => ({
   databaseExists: () => isInstalled(),
   databasePath: () => '/db',
   enginePath: () => (isInstalled() ? '/engine' : undefined),
+  extentPath: () => '/db/data/extent0.dbf',
   grailInstalled: () => grailInstalled(),
   grailPath: () => '/grail',
   grailStagedOnDisk: () => isInstalled(),

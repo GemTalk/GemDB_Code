@@ -205,7 +205,7 @@ then asks again, so the start that follows is an event of its own.
 | Property / measure | Values                                                                                                                              |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `trigger`          | see above                                                                                                                           |
-| `outcome`          | `started`, or why not: `setupCancelled`, `setupFailed`, `osConfigDeclined` (the user said no to the shared-memory change), `osConfigFailed` (they said yes, but shared memory is still too low: a wrong sudo password, a cancelled script), `startFailed`, `unsupportedPlatform`, `missingPayload` (the extension package is broken) |
+| `outcome`          | `started`, or why not: `setupCancelled`, `setupFailed`, `osConfigDeclined` (the user said no to the shared-memory change), `osConfigFailed` (they said yes, but shared memory is still too low: a wrong sudo password, a cancelled script), `startFailed`, `upgradeNeeded` (the database needs the in-place engine upgrade, and nobody was there to ask: auto-start, an agent), `upgradeDeclined` (the user said no to it), `upgradeFailed` (it ran and failed, or could not run), `unsupportedPlatform`, `missingPayload` (the extension package is broken) |
 | `filedGrail`       | whether Python support was installed into the database this time: `no`, `firstTime`, `update`                                       |
 | `durationMs`       | how long it took                                                                                                                    |
 

@@ -4,12 +4,17 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { __setSetting } from '../__mocks__/vscode';
 import {
+  DatabaseUpgradeNeededError,
   DatabaseVersionError,
+  ENGINE_UPGRADES,
   IMAGE_RECORD,
   INITIAL_EXTENT,
   assertDatabaseHasRowan,
   assertDatabaseMatchesEngine,
+  compareEngineVersions,
+  judgeRepositoryVersion,
   parseRepositoryVersion,
+  pendingEngineUpgrade,
   repositoryVersion,
 } from '../database';
 import { databasePath, extentPath } from '../paths';
@@ -108,7 +113,7 @@ describe('the guard in front of a database', () => {
     } catch (e) {
       const message = (e as Error).message;
       // Both versions, the path to delete, and a warning: everything the user
-      // needs is in the message, because there is no upgrade to offer.
+      // needs is in the message, because there is no upgrade to offer from 3.7.
       expect(message).toContain('3.7.5');
       expect(message).toContain('4.0.0.a5');
       expect(message).toContain(databasePath());
@@ -116,23 +121,82 @@ describe('the guard in front of a database', () => {
     }
   });
 
-  it('refuses one alpha against another, which is the upgrade users meet', () => {
-    // Not a variation on the test above: 3.7.5 -> 4.0 is the case that is over, and every pin
-    // move since has been alpha to alpha. Measured for Alpha1 -> a2 on 2026-09-16, a2 -> a3 on
-    // 2026-09-24, a3 -> a4 on 2026-09-28 and a4 -> a5 on 2026-10-18: the older extent still
+  it('refuses one alpha against another when there is no measured upgrade', () => {
+    // Every pin move has been alpha to alpha. Measured for Alpha1 -> a2 on 2026-09-16, a2 -> a3
+    // on 2026-09-24, a3 -> a4 on 2026-09-28 and a4 -> a5 on 2026-10-18: the older extent still
     // reports `compatibilityLevel: 855` under the newer engine, so the stone starts and only
-    // the logins fail -- exactly the silent shape this guard exists to convert into a sentence.
+    // the logins fail. a4 -> a8 is not a pair GemDB upgrades (an a4 database has no Rowan), so
+    // it is still refused, with the directory to delete.
     makeExtent();
     engine = fakeEngine(copydbfOutput('4.0.0.a4'));
 
-    expect(() => assertDatabaseMatchesEngine(engine, '4.0.0.a5')).toThrow(DatabaseVersionError);
+    expect(() => assertDatabaseMatchesEngine(engine, '4.0.0.a8')).toThrow(DatabaseVersionError);
+    try {
+      assertDatabaseMatchesEngine(engine, '4.0.0.a8');
+    } catch (e) {
+      const message = (e as Error).message;
+      expect(message).toContain('4.0.0.a4');
+      expect(message).toContain('4.0.0.a8');
+      expect(message).toMatch(/delete/i);
+      // And says which database it could have upgraded.
+      expect(message).toContain('only from GemStone 4.0.0.a5');
+    }
+  });
+
+  it('stops an a5 database under a8 with the way to upgrade it, not to delete it', () => {
+    makeExtent();
+    engine = fakeEngine(copydbfOutput('4.0.0.a5'));
+
+    expect(() => assertDatabaseMatchesEngine(engine, '4.0.0.a8')).toThrow(
+      DatabaseUpgradeNeededError,
+    );
+    try {
+      assertDatabaseMatchesEngine(engine, '4.0.0.a8');
+    } catch (e) {
+      const message = (e as Error).message;
+      expect(message).toContain('4.0.0.a5');
+      expect(message).toContain('4.0.0.a8');
+      expect(message).toMatch(/upgrade it in place/);
+      expect(message).not.toMatch(/delete/i);
+    }
+    expect(pendingEngineUpgrade(engine, '4.0.0.a8')).toEqual({
+      from: '4.0.0.a5',
+      to: '4.0.0.a8',
+    });
+  });
+
+  it('lets an upgradable database through setup, which touches no database', () => {
+    makeExtent();
+    engine = fakeEngine(copydbfOutput('4.0.0.a5'));
+    expect(() =>
+      assertDatabaseMatchesEngine(engine, '4.0.0.a8', { allowUpgrade: true }),
+    ).not.toThrow();
+  });
+
+  it('never lets setup through a database it cannot upgrade', () => {
+    makeExtent();
+    engine = fakeEngine(copydbfOutput('4.0.0.a4'));
+    expect(() => assertDatabaseMatchesEngine(engine, '4.0.0.a8', { allowUpgrade: true })).toThrow(
+      DatabaseVersionError,
+    );
+  });
+
+  it('refuses a database a newer engine wrote, and does not advise deleting it', () => {
+    makeExtent();
+    engine = fakeEngine(copydbfOutput('4.0.0.a8'));
+
+    expect(() => assertDatabaseMatchesEngine(engine, '4.0.0.a5', { allowUpgrade: true })).toThrow(
+      DatabaseVersionError,
+    );
     try {
       assertDatabaseMatchesEngine(engine, '4.0.0.a5');
     } catch (e) {
       const message = (e as Error).message;
-      expect(message).toContain('4.0.0.a4');
-      expect(message).toContain('4.0.0.a5');
+      expect(message).toMatch(/newer/);
+      expect(message).toContain('untouched');
+      expect(message).not.toMatch(/delete/i);
     }
+    expect(pendingEngineUpgrade(engine, '4.0.0.a5')).toBeUndefined();
   });
 
   it('stays out of the way when copydbf cannot answer', () => {
@@ -145,6 +209,50 @@ describe('the guard in front of a database', () => {
     expect(() => assertDatabaseMatchesEngine(engine, '4.0.0.a5')).not.toThrow();
     fs.rmSync(engine, { recursive: true, force: true });
     engine = '';
+  });
+});
+
+describe('ordering engine versions', () => {
+  it('reads both alpha spellings, and puts an alpha before its release', () => {
+    expect(compareEngineVersions('4.0.0.a5', '4.0.0.a8')).toBe(-1);
+    expect(compareEngineVersions('4.0.0.a8', '4.0.0.a5')).toBe(1);
+    expect(compareEngineVersions('4.0.0.a10', '4.0.0.a9')).toBe(1);
+    expect(compareEngineVersions('4.0.0.Alpha1', '4.0.0.a2')).toBe(-1);
+    expect(compareEngineVersions('3.7.5', '4.0.0.a5')).toBe(-1);
+    expect(compareEngineVersions('4.0.0.a8', '4.0.0')).toBe(-1);
+    expect(compareEngineVersions('4.0.0.a8', '4.0.0.a8')).toBe(0);
+  });
+
+  it('answers undefined for a version it cannot read', () => {
+    expect(compareEngineVersions('4.0.0.beta', '4.0.0.a8')).toBeUndefined();
+    expect(compareEngineVersions('', '4.0.0.a8')).toBeUndefined();
+  });
+});
+
+describe('judging the database against the engine', () => {
+  it('upgrades exactly the measured pairs', () => {
+    expect(ENGINE_UPGRADES).toContainEqual({ from: '4.0.0.a5', to: '4.0.0.a8' });
+    expect(judgeRepositoryVersion('4.0.0.a5', '4.0.0.a8')).toEqual({
+      kind: 'upgrade',
+      from: '4.0.0.a5',
+      to: '4.0.0.a8',
+    });
+    // An overridden engine the upgrade has not been run against is not offered it.
+    expect(judgeRepositoryVersion('4.0.0.a5', '4.0.0.a9').kind).toBe('older');
+  });
+
+  it('sorts everything else into match, older, newer or unknown', () => {
+    expect(judgeRepositoryVersion(undefined, '4.0.0.a8').kind).toBe('matches');
+    expect(judgeRepositoryVersion('4.0.0.a8', '4.0.0.a8').kind).toBe('matches');
+    expect(judgeRepositoryVersion('3.7.5', '4.0.0.a8').kind).toBe('older');
+    expect(judgeRepositoryVersion('4.0.0.a9', '4.0.0.a8').kind).toBe('newer');
+    expect(judgeRepositoryVersion('something else', '4.0.0.a8').kind).toBe('unknown');
+  });
+
+  it('takes its pairs from the caller, so a pin move only adds one', () => {
+    const pairs = [{ from: '4.0.0.a8', to: '4.0.0.a9' }];
+    expect(judgeRepositoryVersion('4.0.0.a8', '4.0.0.a9', pairs).kind).toBe('upgrade');
+    expect(judgeRepositoryVersion('4.0.0.a5', '4.0.0.a8', pairs).kind).toBe('older');
   });
 });
 

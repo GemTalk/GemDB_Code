@@ -578,6 +578,9 @@ export const DATABASE_OUTCOME = {
   osConfigDeclined: 'osConfigDeclined',
   osConfigFailed: 'osConfigFailed',
   startFailed: 'startFailed',
+  upgradeNeeded: 'upgradeNeeded',
+  upgradeDeclined: 'upgradeDeclined',
+  upgradeFailed: 'upgradeFailed',
 } as const;
 export type DatabaseOutcome = (typeof DATABASE_OUTCOME)[keyof typeof DATABASE_OUTCOME];
 

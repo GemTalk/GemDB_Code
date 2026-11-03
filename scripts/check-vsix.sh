@@ -90,6 +90,8 @@ REQUIRED=(
   "extension/grail/prebuilt/$PLATFORM_KEY/libcpython_ua.$LIB_EXT|the CPython shim for $PLATFORM_KEY"
   "extension/grail/scripts/grail.tpz|the Grail scripts the installer drives"
   "extension/grail/scripts/install_rowan.gs|the Rowan load the Grail installer runs"
+  "extension/grail/scripts/upgrade_engine.sh|the engine upgrade a start runs on an older database"
+  "extension/grail/scripts/redeployModules.gs|the module rebuild the Grail installer runs last"
   "extension/grail/rowan/specs/Grail.ston|Grail's Rowan load spec"
   "extension/node_modules/koffi/build/koffi/$KOFFI_KEY/koffi.node|the native FFI addon for $TARGET"
   "extension/resources/install-grail.sh|the installer the extension runs"

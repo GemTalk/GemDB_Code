@@ -32,6 +32,7 @@ vi.mock('../database', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../database')>();
   return {
     DatabaseOnNfsError: actual.DatabaseOnNfsError,
+    DatabaseUpgradeNeededError: actual.DatabaseUpgradeNeededError,
     DatabaseVersionError: actual.DatabaseVersionError,
     DiskSpaceError: actual.DiskSpaceError,
     assertDatabaseIsLocal: () => assertDatabaseIsLocal(),
@@ -40,6 +41,7 @@ vi.mock('../database', async (importOriginal) => {
     ensureSpaceLimits: () => {},
     assertDatabaseMatchesEngine: () => {},
     assertDatabaseHasRowan: () => {},
+    pendingEngineUpgrade: () => undefined,
     createDatabase: (enginePath: string, extensionPath?: string) =>
       createDatabase(enginePath, extensionPath),
   };

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The database engine is GemStone 4.0.0.a8.** A database GemStone 4.0.0.a5 wrote is upgraded in
+  place instead of having to be deleted: starting GemDB asks first, copies the database to
+  `db/data/extent0.dbf.pre-4.0.0.a5`, upgrades it with Grail's engine upgrade, and installs Python
+  support and the MCP server again. If the upgrade fails, the copy is put back and GemDB says so
+  rather than starting. A database from before 4.0.0.a5 still has to be recreated, and one a newer
+  engine wrote is refused without the advice to delete it.
+
 ## [1.9.0] - 2026-10-20
 
 The database now starts from GemStone's Rowan image, because Python support and the MCP server now

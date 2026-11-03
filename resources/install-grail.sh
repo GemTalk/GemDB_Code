@@ -198,4 +198,35 @@ else
     echo "         session with something to commit." >&2
 fi
 
+# Rebuild every other deployed module the install made stale, and commit it --
+# last, as Grail's own install.sh does: after gemdb and unicodedata, which the
+# steps above have just deployed under the new GrailRuntimeGeneration, so this
+# finds them current and leaves them alone. Every other module a user's code
+# deployed (an app's, the stdlib ones it imported) is stale after an install,
+# and without this its next import rebuilds it in whichever session imports it
+# first, dirtying that session. It is also where Grail repairs a deployed class
+# whose bases a newer Grail changed while no instance of it is stored -- e.g.
+# EmailMessage (Message -> MIMEPart) once Grail took CPython's email package --
+# which a plain import refuses. Measured on the brain-freeze upgrade gate: after
+# a5 -> a8 the web app's `import email.message` was refused until this ran.
+#
+# A WARNING on failure, as in Grail's install.sh: the modules it could not
+# rebuild stay stale and rebuild (or raise) on their next import, as they would
+# have anyway, so Python support is still installed.
+echo "== Rebuilding the deployed modules"
+# Every `redeployModules:` line goes to the log, not only the summary, so a
+# module that failed or was skipped is named where the user can find it.
+REDEPLOY_OUT=$(LC_ALL=C topaz -lq -C "GEM_TEMPOBJ_CODE_SIZE=300000;GEM_TEMPOBJ_CACHE_SIZE=900000;" \
+     -S scripts/redeployModules.gs < /dev/null 2>&1 || true)
+printf '%s\n' "$REDEPLOY_OUT" | grep -E '^redeployModules:' || true
+if printf '%s\n' "$REDEPLOY_OUT" \
+     | grep -qE '^redeployModules: [0-9]+ rebuilt, [0-9]+ skipped, 0 failed'; then
+    :
+else
+    echo "WARNING: rebuilding the deployed modules failed for some of them. Grail is" >&2
+    echo "         installed; each of those rebuilds on its next import, and leaves" >&2
+    echo "         that session with something to commit. Run" >&2
+    echo "         $GRAIL_DIR/scripts/redeployModules.gs in topaz to see which, and why." >&2
+fi
+
 echo "== Grail installed"
