@@ -213,12 +213,17 @@ The first time the database starts, usually right after setup, GemDB Code instal
 into it. This takes a few minutes and shows its progress in a notification. If the database cannot
 start yet, this happens the first time you open a shell or run a notebook cell instead.
 
-When a GemDB Code update ships newer Python support, GemDB Code prompts you before installing it into
-a database that already has Python support. Data committed with the old version stops working as its
-type afterward (dates and times, decimals, tuples and sets, and instances of your classes), so
-install it into a database that holds nothing you need. If you keep the current version, GemDB Code
-does not prompt you again for that update; **GemDB: Reinstall the Python Execution Engine** installs
-it later.
+When a GemDB Code update ships newer Python support, GemDB Code installs it into your database the
+next time the database starts or you run Python, without prompting you. What you have stored keeps
+working: dates and times, decimals, tuples and sets, enum members, and instances of your own classes
+keep their types, and modules you deployed into the database are rebuilt in place, so stored objects
+keep their classes. Two exceptions remain. If the update changes the base classes of a class you
+have stored instances of, importing its module raises an error that names the class and the
+`gemdb.schema.rebase(...)` call that moves those instances onto the new class. And a class statement
+inside a function (other than `collections.namedtuple`) makes a new class each time its module is
+rebuilt, so instances stored before the update keep the old class. To keep the current version
+until you choose, turn off `gemdb.reinstallPythonOnUpdate`; **GemDB: Reinstall the Python Execution
+Engine** then installs the update when you run it.
 
 #### Changes that need your permission
 
@@ -920,17 +925,31 @@ letting a sync daemon copy a live database out from under the engine corrupts it
 
 ### GemDB Code updates and associated data
 
-Each GemDB Code release is tied to a database engine version. If a new release also moves to a newer
-engine version, the database created by the earlier engine version cannot be opened by the newer
-one. When this happens, GemDB Code shows a message before it starts the database, naming the
-directory to remove. Removing that directory deletes everything stored in the database.
+Each GemDB Code release is tied to a database engine version. A newer engine cannot open a database
+an older one wrote as it stands, so when an update moves to a newer engine version, GemDB Code
+upgrades the database in place, for the engine versions it knows how to upgrade from. Do not delete
+your database when the engine changes.
 
-For this reason, you should not expect to keep access to your data after an update that changes the
-engine version. VS Code updates extensions automatically, so such an update can arrive without you
-choosing it. To decide when GemDB Code updates, clear **Auto Update** on its page in the Extensions
-view.
+The first time you start the database after such an update (**Start GemDB**, a notebook cell, the
+GemDB Shell, or running or debugging a file), GemDB Code asks before it changes anything. If you
+agree, it stops the database, copies it beside itself (for example to
+`~/GemDB/db/data/extent0.dbf.pre-4.0.0.a5`), upgrades it, and then installs Python support and the
+MCP server again. The upgrade itself takes about a minute, and reinstalling Python support a few
+minutes more. The copy needs about as much free disk as the database, plus 1 GB, and GemDB Code
+checks for it first. If the upgrade fails, GemDB Code puts the copy back, says so, and does not start
+the database. The copy is kept until you delete it; once you are happy with the upgraded database,
+delete it to get the space back. If you decline, nothing changes and the database does not start
+until you agree. When the database starts on its own, or for an AI agent, GemDB Code does not
+upgrade it; it shows a warning with an **Upgrade Database…** button instead.
 
-Changing the engine version yourself with the `gemdb.engineVersion` setting has the same effect.
+A database whose engine version GemDB Code cannot upgrade from, such as one created by GemDB Code
+1.8.0 or earlier, still cannot be opened. GemDB Code then shows a message before it starts the
+database, naming the directory to remove. Removing that directory deletes everything stored in the
+database. VS Code updates extensions automatically, so an update can arrive without you choosing
+it. To decide when GemDB Code updates, clear **Auto Update** on its page in the Extensions view.
+
+Changing the engine version yourself with the `gemdb.engineVersion` setting has the same effect: a
+version GemDB Code can upgrade to is offered the upgrade, and any other is refused.
 
 <!-- Restore once there is a supported export path:
 To keep your data, copy out anything you need before you update GemDB Code.
@@ -939,8 +958,8 @@ To keep your data, copy out anything you need before you update GemDB Code.
 ### Settings
 
 The default GemDB Code settings are designed to work on most systems, so most users do not need to
-change them. These include settings for locating where GemDB Code stores files, collecting garbage,
-recording statistics, and setting up the MCP server for AI agents.
+change them. These include settings for locating where GemDB Code stores files, updating Python
+support, collecting garbage, recording statistics, and setting up the MCP server for AI agents.
 
 If you want to review them, open VS Code's Settings (Ctrl+, on Linux, or Cmd+, on macOS) and search
 for `gemdb`, or go to **Extensions** > **GemDB Code** in the list on the left. If you need to
@@ -952,6 +971,7 @@ them to other computers. The following table lists all of the settings and the d
 | -------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------ |
 | `gemdb.rootPath`                                   | `~/GemDB`       | Where GemDB Code keeps everything; must be on a local disk                           |
 | `gemdb.engineVersion`                              | _(empty)_       | Advanced: override the pinned engine version                                         |
+| `gemdb.reinstallPythonOnUpdate`                    | `true`          | Install the Python support a GemDB Code update ships into your database by itself    |
 | `gemdb.maintenance.garbageCollectionIntervalHours` | `24`            | Hours between scheduled garbage collections; `0` collects only when space runs short |
 | `gemdb.maintenance.abortIdleSessionsAfterMinutes`  | `10`            | Minutes before an idle session with no uncommitted changes is refreshed              |
 | `gemdb.statistics.collect`                         | `true`          | Whether the database records its statistics for GemDB Stats                          |
@@ -973,7 +993,8 @@ Before you change the following settings, note these important details:
   stays in the old directory, and the new one starts empty, so stop the database first, then run
   **Set Up GemDB** in the sidebar to set up the new location. Changing it also closes every
   notebook's session.
-- **`gemdb.engineVersion`**: a database created by a different engine version cannot be opened. See
+- **`gemdb.engineVersion`**: a database created by a different engine version cannot be opened
+  unless GemDB Code can upgrade it in place. See
   [GemDB Code updates and associated data](#gemdb-code-updates-and-associated-data) before you
   change it.
 - **`gemdb.statistics.*`**: changes take effect the next time the database starts.
