@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.10.0] - 2026-10-28
+## [1.10.0] - 2026-11-03
 
 The database engine moves to GemStone 4.0.0.a8, and this time **you keep your database**. Do not
 delete `~/GemDB/db`. The first time you start GemDB after updating from 1.9.0, it asks to upgrade
