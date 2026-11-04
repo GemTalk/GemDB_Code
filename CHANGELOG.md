@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`gemdb file.py` writes Python's `sys.stderr` to stderr.** Warnings, tracebacks printed from
+  Python, logging and `print(..., file=sys.stderr)` went to stdout, so `2>` and pipes saw them in
+  the wrong stream. Takes effect with a Grail that includes GemTalk/Grail#2106.
+
 ## [1.10.0] - 2026-11-03
 
 The database engine moves to GemStone 4.0.0.a8, and this time **you keep your database**. Do not
