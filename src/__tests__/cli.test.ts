@@ -83,6 +83,13 @@ describe('writeCliScripts', () => {
     // the #GrailConsole box is what tells Grail to encode. Without it,
     // non-ASCII print() output is UTF-16 code units on the terminal.
     expect(run).toContain("put: (Array with: GsFile stdout with: #'utf8')");
+    // Python's sys.stderr has its own box, #GrailConsoleErr (Grail #2106).
+    // Without it Grail falls back to #GrailConsole, so warnings, tracebacks
+    // and print(file=sys.stderr) all went to stdout under `gemdb file.py`.
+    expect(run).toContain(
+      "SessionTemps current at: #'GrailConsoleErr'\n    put: (Array with: GsFile stderr with: #'utf8')",
+    );
+    expect(run).toContain("removeKey: #'GrailConsoleErr' ifAbsent: []");
     // A file run is linked topaz, so it never reaches session.ts and would
     // otherwise sit in the shared cache as the stock 'TopazL'. The truncation
     // is not optional: 32 characters raises OutOfRange, at login.

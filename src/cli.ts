@@ -315,6 +315,12 @@ ClientForwarder, and asking one anything -- class, respondsTo:, isNil --
 forwards to the client as error 2336, which is not catchable in the gem."
 SessionTemps current at: #'GrailConsole'
     put: (Array with: GsFile stdout with: #'utf8').
+"Python's sys.stderr writes through its own box, same protocol (Grail
+#2106). Without it Grail falls back to #GrailConsole, so warnings,
+tracebacks and print(file=sys.stderr) went to stdout. A Grail older than
+#2106 never reads this key."
+SessionTemps current at: #'GrailConsoleErr'
+    put: (Array with: GsFile stderr with: #'utf8').
 [
     uncaught := [
         target := args at: ofs + 1.
@@ -421,6 +427,7 @@ sys.breakpointhook = _gemdb_breakpoint']]
                     status := 1]]]].
 ] ensure: [
     SessionTemps current removeKey: #'GrailConsole' ifAbsent: [].
+    SessionTemps current removeKey: #'GrailConsoleErr' ifAbsent: [].
     statusFile ifNotNil: [
         | f |
         f := GsFile openWrite: statusFile.
