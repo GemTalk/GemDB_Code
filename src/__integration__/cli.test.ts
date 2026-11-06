@@ -126,6 +126,18 @@ describe.skipIf(!ready || !canMakeFixture())('the gemdb command', () => {
     expect(ran.code).toBe(1);
   });
 
+  it('writes sys.stderr to stderr and print() to stdout, as python3 does', async () => {
+    const ran = await gemdb(
+      '-c',
+      'import sys, logging\nprint("to out")\nprint("to err", file=sys.stderr)\nlogging.warning("warned")',
+    );
+
+    expect(ran.stdout).toBe('to out\n');
+    expect(ran.stderr).toContain('to err\n');
+    expect(ran.stderr).toContain('warned');
+    expect(ran.code).toBe(0);
+  });
+
   it('reports an uncaught exception with its traceback and type, as CPython does', async () => {
     const ran = await gemdb('-c', 'def f():\n    return 1 / 0\nf()');
 
