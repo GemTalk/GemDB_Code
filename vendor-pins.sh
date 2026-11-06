@@ -63,7 +63,33 @@
 #   - #2012: a warning raised in a finalizer hook is blamed on <sys>.
 #   - #1977-#1988: install.sh refuses a product that cannot build methods
 #     through IR (4.0.0.a8 can), and IR codegen groundwork.
-PINNED_GRAIL_REF=c893bcec6de1ff032a8ea6bdec6b058296988382
+# Since c893bce (the 1.10.0 pin), main as of 2026-11-06 (4d57909), 149 PRs.
+# Taken for #2106, which writes sys.stderr to fd 2: GemDB_Code #191 already
+# installs #GrailConsoleErr for gemdb file runs, and it was inert until now.
+# The installer is unchanged across the range -- install.sh,
+# scripts/install_rowan.gs, scripts/upgrade_engine.sh, scripts/upgrade/,
+# scripts/redeployModules.gs and the shim are byte-identical -- except that
+# rowan's postload doit gains two steps: registering io.UnsupportedOperation's
+# kernel exception bases, and #2130's removal of the change stamps a runtime
+# compile left before #2108 (#1971), which kept a class Grail built
+# persistent. Idempotent; on a database 1.10.0 set up it removes those stamps.
+# Otherwise it carries:
+#   - #2106 (#1972): sys.stderr is fd 2, not fd 1. #2129 (#2122): logging's
+#     lastResort and the implicit basicConfig() as CPython has them.
+#   - #2107: after gemdb.modules.relocate(), a module whose file moved records
+#     its new file even when its source is unchanged; #2132: functional enums
+#     keep their members across importlib.reload; #2109: a star import no longer
+#     binds a stray initialize; #2131 (#1973): a module accessor that
+#     computes its value honours a Python assignment.
+#   - calendar (#2060), configparser (#2055), locale (#2044) and keyword
+#     (#2045) are CPython's own; time.struct_time, os.stat_result and
+#     sys.version_info are struct sequences (#2053, #2058); datetime takes any
+#     int for its fields (#2054); io's FileIO, BytesIO and StringIO bind and
+#     refuse as CPython's do (#2031, #2081-#2084, #2094, #2095, #2178).
+#   - CPython conformance: Argument Clinic signatures and refusals, buffer
+#     protocol (PEP 688) and memoryview, descriptors and metaclasses, f-string
+#     and lexer errors, and more of CPython 3.14's test corpus passing.
+PINNED_GRAIL_REF=4d5790905d8211c138bda69581d3485b72c19a70
 
 # mcp_server: 0.9.0 (main as of 2026-10-19), 20 commits (9 PRs) on from the
 # previous pin (d836520) -- and, like Grail, NOW A ROWAN PROJECT (#57). Its six

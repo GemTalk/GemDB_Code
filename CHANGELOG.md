@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A newer Python runtime.** `logging.warning()` and an unconfigured logger print to stderr, as in
+  CPython, where they used to print nothing. `calendar`, `configparser` and `locale` are CPython's
+  own modules, and `datetime`, `time.struct_time`, `os.stat_result` and the `io` file classes
+  behave as CPython's. After `gemdb.modules.relocate()`, a module whose source did not change
+  records its new file, so `importlib.reload` keeps working once the old file is gone. A functional
+  enum (`Enum('Color', 'RED GREEN')`) keeps its members across `importlib.reload`, and
+  `from module import *` no longer adds a stray `initialize` name.
+
+### Fixed
+
+- **`gemdb file.py` writes Python's `sys.stderr` to stderr.** Warnings, tracebacks printed from
+  Python, logging and `print(..., file=sys.stderr)` went to stdout, so `2>` and pipes saw them in
+  the wrong stream.
+
 ## [1.10.0] - 2026-11-06
 
 The database engine moves to GemStone 4.0.0.a8, and this time **you keep your database**. Do not
