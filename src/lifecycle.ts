@@ -77,11 +77,13 @@ import {
 import {
   assertExternalDatabaseUp,
   engineEnvironment,
+  engineThatStarted,
   ensureListener,
   ensureProcesses,
   findStone,
   isListening,
   isRunning,
+  startedByAnotherEngine,
   stopNetldi,
   stopStone,
 } from './processes';
@@ -828,9 +830,6 @@ export function engineUpgradeWorld(
   engine: string,
   from: string,
 ): UpgradeWorld {
-  // A stone the previous engine started answers only to that engine's
-  // stopstone (measured: a8's fails to log in to an a5 stone, error 4044).
-  const previousEngine = enginePath(from);
   return {
     confirm: confirmEngineUpgrade,
     withProgress: (work) =>
@@ -844,18 +843,35 @@ export function engineUpgradeWorld(
     withStoneLock: async (work) => {
       await withStoneLock(work);
     },
-    logout: logoutAll,
+    // Stop's own steps and question. `stopStone` and `stopNetldi` pick the
+    // engine that started each process, which is the previous one here: a8's
+    // stopstone fails to log in to an a5 stone (4044).
+    stopDatabase: () =>
+      runStop({
+        logout: logoutAll,
+        stopMcpServer,
+        stoneUp: () => isRunning(),
+        listenerUp: () => isListening(),
+        stopStone: async (force) => {
+          const stone = findStone();
+          if (startedByAnotherEngine(stone) && !engineThatStarted(stone)) {
+            throw new Error(
+              `the running database was started by GemStone ${stone?.version ?? from}, ` +
+                'which is no longer installed',
+            );
+          }
+          await stopStone(force);
+        },
+        stopNetldi: () => stopNetldi(),
+        // A declined force-stop leaves the database to the windows still using
+        // it. Not put back: this engine's listener cannot serve the previous
+        // engine's stone, and the stone lock this runs under is the one
+        // `ensureListener` would wait on.
+        startNetldi: () => Promise.resolve(),
+        confirmForce,
+        log,
+      }),
     stoneUp: () => isRunning(),
-    listenerUp: () => isListening(),
-    stopStone: async () => {
-      if (!previousEngine && findStone()?.version !== engineVersion()) {
-        throw new Error(
-          `the running database was started by GemStone ${from}, which is no longer installed`,
-        );
-      }
-      await stopStone(false, previousEngine);
-    },
-    stopNetldi: () => stopNetldi(previousEngine),
     runScript: (report) =>
       runUpgradeScript({
         stoneConfig: writeUpgradeStoneConfig(),
@@ -1265,8 +1281,9 @@ async function stopOnce(): Promise<void> {
 async function confirmForce(reason: string): Promise<boolean> {
   const choice = await vscode.window.showWarningMessage(
     `GemDB did not stop:\n\n${reason}\n\n` +
-      'This is usually a session that is still logged in — an open GemDB Shell terminal ' +
-      'counts as one, and so does a notebook in another window.\n\n' +
+      'This is usually a session that is still logged in. Every VS Code window running ' +
+      'GemDB keeps one, even with no notebook open — including a window not reloaded ' +
+      'since GemDB updated — and so does each GemDB Shell and notebook.\n\n' +
       'Stopping anyway disconnects every session. Work that has not been committed is lost.',
     { modal: true },
     'Stop Anyway',

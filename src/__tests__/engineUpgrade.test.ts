@@ -34,14 +34,15 @@ function makeWorld(options: {
   confirm?: boolean;
   noRoom?: boolean;
   stoneUp?: boolean;
-  listenerUp?: boolean;
+  /** The stop fails outright, as a login refused by the stone does. */
   stoneWillNotStop?: boolean;
+  /** The stop settles with the stone still up, as a declined Stop Anyway does. */
+  stopDeclined?: boolean;
   scriptFails?: string;
   /** What copydbf reads after the script, success or failure. */
   versionAfter?: string | undefined;
 }): { calls: string[]; reports: string[]; world: UpgradeWorld } {
   let stoneUp = options.stoneUp ?? false;
-  let listenerUp = options.listenerUp ?? false;
   const calls: string[] = [];
   const reports: string[] = [];
   const world: UpgradeWorld = {
@@ -65,18 +66,11 @@ function makeWorld(options: {
         calls.push('unlock');
       }
     },
-    logout: () => calls.push('logout'),
     stoneUp: () => stoneUp,
-    listenerUp: () => listenerUp,
-    stopStone: () => {
-      calls.push('stopStone');
+    stopDatabase: () => {
+      calls.push('stopDatabase');
       if (options.stoneWillNotStop) return Promise.reject(new Error('login failed'));
-      stoneUp = false;
-      return Promise.resolve();
-    },
-    stopNetldi: () => {
-      calls.push('stopNetldi');
-      listenerUp = false;
+      if (!options.stopDeclined) stoneUp = false;
       return Promise.resolve();
     },
     runScript: (report) => {
@@ -126,7 +120,7 @@ describe('the backup and the progress lines', () => {
 
 describe('upgrading the database', () => {
   it('asks first, and touches nothing when the answer is no', async () => {
-    const { calls, world } = makeWorld({ confirm: false, stoneUp: true, listenerUp: true });
+    const { calls, world } = makeWorld({ confirm: false, stoneUp: true });
     await expect(upgradeEngine(PLAN, world)).resolves.toBe('declined');
     expect(calls).toEqual([`confirm(4.0.0.a5,4.0.0.a8,${BACKUP})`]);
   });
@@ -134,21 +128,19 @@ describe('upgrading the database', () => {
   it('refuses before stopping anything when the disk cannot hold the backup', async () => {
     const { calls, world } = makeWorld({ noRoom: true, stoneUp: true });
     await expect(upgradeEngine(PLAN, world)).rejects.toThrow(DiskSpaceError);
-    expect(calls).not.toContain('stopStone');
+    expect(calls).not.toContain('stopDatabase');
     expect(calls).not.toContain('script');
   });
 
-  it('stops the previous engine’s processes, under the lock, before the script runs', async () => {
-    const { calls, reports, world } = makeWorld({ stoneUp: true, listenerUp: true });
+  it('stops the database, under the lock, before the script runs', async () => {
+    const { calls, reports, world } = makeWorld({ stoneUp: true });
     await expect(upgradeEngine(PLAN, world)).resolves.toBe('upgraded');
     expect(calls).toEqual([
       `confirm(4.0.0.a5,4.0.0.a8,${BACKUP})`,
       'room',
       'progress',
       'lock',
-      'logout',
-      'stopStone',
-      'stopNetldi',
+      'stopDatabase',
       'script',
       'copydbf',
       'unlock',
@@ -172,6 +164,24 @@ describe('upgrading the database', () => {
     expect(calls).not.toContain('script');
     expect(calls).not.toContain('forgetInstalls');
     expect(calls.at(-1)).toBe('unlock');
+  });
+
+  it('changes nothing when the user will not disconnect the sessions in the way', async () => {
+    const { calls, world } = makeWorld({ stoneUp: true, stopDeclined: true });
+
+    const result = upgradeEngine(PLAN, world);
+
+    await expect(result).rejects.toThrow(/nothing was changed/);
+    expect(calls).not.toContain('script');
+    expect(calls).not.toContain('forgetInstalls');
+  });
+
+  it('names other editor windows as what may be holding the database open', async () => {
+    const { world } = makeWorld({ stoneUp: true, stopDeclined: true });
+
+    const result = upgradeEngine(PLAN, world);
+
+    await expect(result).rejects.toThrow(/Every VS Code window running GemDB/);
   });
 
   it('says the database is back as it was when the script restored it', async () => {
