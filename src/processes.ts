@@ -9,6 +9,7 @@ import {
   NETLDI_NAME,
   STONE_NAME,
   STOP_TIMEOUT_SECONDS,
+  engineVersion,
   externalDatabase,
   netldiName,
   rootPath,
@@ -456,6 +457,16 @@ export async function ensureListener(): Promise<boolean> {
         return false;
       }
       if (findNetldi(running)) return false;
+      // A listener from this engine beside a stone another one started would
+      // hand every session a gem that cannot log in to it (4044).
+      const stone = findStone(running);
+      if (startedByAnotherEngine(stone)) {
+        log(
+          `The database was started by GemStone ${stone?.version}; not starting a ` +
+            `GemStone ${engineVersion()} session listener beside it.`,
+        );
+        return false;
+      }
       return startNetldi();
     },
     { satisfied: async () => findNetldi(await listProcessesAsync()) !== undefined },
@@ -608,14 +619,48 @@ export function stopStoneArgs(force: boolean): string[] {
 }
 
 /**
- * Stop GemDB's stone. `gemstone` names the engine to stop it with, when it is
- * not the one GemDB runs now: a stone the previous engine started, before an
- * engine upgrade.
+ * Whether `process` was started by an engine other than the one GemDB runs
+ * now. A prefix counts as the same engine: `gslist` can truncate the version
+ * (see `parseGslist`), and a truncated pin is still the pin.
+ */
+export function startedByAnotherEngine(process: EngineProcess | undefined): boolean {
+  if (!process || externalDatabase()) return false;
+  return !engineVersion().startsWith(process.version);
+}
+
+/**
+ * The engine to stop `process` with: the one that started it.
+ *
+ * Not always the one GemDB runs now. Stones and listeners outlive the editor,
+ * so after an extension update moves the pin, the processes still up are the
+ * previous engine's, and this engine's `stopstone` cannot log in to that stone
+ * (measured: a8's against an a5 stone fails with 4044, "The Gem and Stone
+ * versions are incompatible"). Undefined, meaning GemDB's own engine, for one
+ * it started, for an external database (there is only the one), and when the
+ * previous engine is no longer installed, which is logged: the stop is tried
+ * anyway, and its own error is the one worth showing.
+ */
+export function engineThatStarted(process: EngineProcess | undefined): string | undefined {
+  if (!startedByAnotherEngine(process)) return undefined;
+  const version = process?.version ?? '';
+  const engine = enginePath(version);
+  if (!engine) {
+    log(
+      `The database was started by GemStone ${version}, which is no longer installed; ` +
+        `trying GemStone ${engineVersion()}'s tools instead.`,
+    );
+  }
+  return engine;
+}
+
+/**
+ * Stop GemDB's stone, with the engine that started it ({@link engineThatStarted})
+ * unless `gemstone` names one.
  */
 export async function stopStone(force = false, gemstone?: string): Promise<void> {
   requireOwnDatabase('stop');
   logStep(force ? 'Stopping the database, disconnecting other sessions' : 'Stopping the database');
-  const env = engineEnvironment(gemstone);
+  const env = engineEnvironment(gemstone ?? engineThatStarted(findStone()));
   await runEngineCommand(
     path.join(env.GEMSTONE, 'bin', 'stopstone'),
     stopStoneArgs(force),
@@ -624,9 +669,10 @@ export async function stopStone(force = false, gemstone?: string): Promise<void>
   );
 }
 
+/** Stop GemDB's listener, with the engine that started it, as {@link stopStone}. */
 export async function stopNetldi(gemstone?: string): Promise<void> {
   requireOwnDatabase('stop');
-  const env = engineEnvironment(gemstone);
+  const env = engineEnvironment(gemstone ?? engineThatStarted(findNetldi()));
   await runEngineCommand(
     path.join(env.GEMSTONE, 'bin', 'stopnetldi'),
     [NETLDI_NAME],

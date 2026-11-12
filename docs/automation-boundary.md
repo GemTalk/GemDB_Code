@@ -237,6 +237,16 @@ unanswered, and the upgrade stops the database for minutes. Python support
 and the MCP server are then installed again without a second question: the
 upgrade removed their compiled methods, and the question already said so.
 
+Stopping the previous engine's stone for the upgrade is Stop's own path
+(`runStop`), question included: a stone other sessions are logged in to is
+force-stopped only after **Stop Anyway**, as it would be by Stop. Those
+sessions are usually other VS Code windows, each of which keeps one even with
+no notebook open, and a window not reloaded since the update is still the
+previous GemDB, so nothing closed in this window can release them. The stop
+uses the engine that started each process (`engineThatStarted` in
+`processes.ts`), since the new engine's `stopstone` cannot log in to the old
+stone (4044).
+
 **Choosing another root path when the default is on NFS — asked, once setup
 has refused.** The stone will not open a repository on an NFS mount, and on
 many shared Linux machines `~` is one (#69). Setup checks before downloading

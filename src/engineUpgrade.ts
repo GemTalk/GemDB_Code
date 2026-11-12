@@ -184,12 +184,14 @@ export interface UpgradeWorld {
   assertRoomForBackup(): void;
   /** Run `work` holding the stone lock, so no window starts the stone meanwhile. */
   withStoneLock(work: () => Promise<void>): Promise<void>;
-  /** Log every session out: none may outlive the database they logged in to. */
-  logout(): void;
+  /**
+   * Stop the database the way GemDB: Stop GemDB does (`runStop`): this window's
+   * sessions out, the MCP server, the listener, then the stone, asking before
+   * it disconnects anyone else. Settles with the stone still up when the user
+   * says no.
+   */
+  stopDatabase(): Promise<void>;
   stoneUp(): boolean;
-  listenerUp(): boolean;
-  stopStone(): Promise<void>;
-  stopNetldi(): Promise<void>;
   /** The upgrade itself; `report` gets each progress line. */
   runScript(report: (line: string) => void): Promise<void>;
   /** The engine version that wrote the extent now, if it can be read. */
@@ -230,15 +232,14 @@ export async function upgradeEngine(
     world.withStoneLock(async () => {
       // The previous engine's stone and listener may still be up: they outlive
       // the editor, and an extension update is what brings a new engine. Its
-      // listener would hand every session an old gem, so it goes too.
-      world.logout();
+      // listener would hand every session an old gem, so it goes too. Every
+      // other window holds a session on it, and one not reloaded since the
+      // update is still the previous GemDB, which no notebook or Shell closed
+      // here can release, so a refusal is asked about, as Stop asks.
       let stopError: string | undefined;
+      if (world.stoneUp()) report('Stopping the database…');
       try {
-        if (world.stoneUp()) {
-          report('Stopping the database…');
-          await world.stopStone();
-        }
-        if (world.listenerUp()) await world.stopNetldi();
+        await world.stopDatabase();
       } catch (e) {
         stopError = e instanceof Error ? e.message : String(e);
         world.log(`Stopping the database for the upgrade: ${stopError}`);
@@ -249,8 +250,11 @@ export async function upgradeEngine(
       if (world.stoneUp()) {
         throw new EngineUpgradeError(
           'GemDB could not stop the database to upgrade it, so nothing was changed' +
-            (stopError ? ` (${stopError.split('\n')[0]})` : '') +
-            '. Close the notebooks and GemDB Shells using it, then start GemDB again.',
+            (stopError
+              ? ` (${stopError.split('\n')[0]}). The GemDB output has the details.`
+              : '. Every VS Code window running GemDB keeps a session on it, even with no ' +
+                'notebook open, and so does a GemDB Shell. Reload or close the other ' +
+                'windows, or choose Stop Anyway, then start GemDB again.'),
         );
       }
 

@@ -67,6 +67,7 @@ vi.mock('../lock', async (importOriginal) => {
 });
 
 const { expectedEnginePath } = await import('../paths');
+const { PINNED_ENGINE_VERSION } = await import('../config');
 const { STONE_LOCK_NAME } = await import('../lock');
 const {
   EXTERNAL_SHUTTING_DOWN_MESSAGE,
@@ -79,8 +80,13 @@ const {
 } = await import('../processes');
 const { parseGslist } = await import('../gslist');
 
-function row(status: string, type: 'Stone' | 'Netldi', name: string): string {
-  return `${status.padEnd(12)} 4.0.0.a4  me      79386 51475 Sep 28 19:31 ${type.padEnd(7)} ${name}`;
+function row(
+  status: string,
+  type: 'Stone' | 'Netldi',
+  name: string,
+  version = PINNED_ENGINE_VERSION,
+): string {
+  return `${status.padEnd(12)} ${version.padEnd(9)} me      79386 51475 Sep 28 19:31 ${type.padEnd(7)} ${name}`;
 }
 
 const STONE_UP = row('OK', 'Stone', 'gemdb');
@@ -473,6 +479,13 @@ describe('putting the listener back after a declined force-stop', () => {
 
   it('starts nothing beside a stone that is shutting down', async () => {
     listings = [row('Shutdown', 'Stone', 'gemdb')];
+
+    expect(await ensureListener()).toBe(false);
+    expect(spawned).toEqual([]);
+  });
+
+  it('starts nothing beside a stone another engine started', async () => {
+    listings = [row('OK', 'Stone', 'gemdb', '4.0.0.a5')];
 
     expect(await ensureListener()).toBe(false);
     expect(spawned).toEqual([]);

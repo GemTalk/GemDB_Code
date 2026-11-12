@@ -1,13 +1,21 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { execFileSync } from 'child_process';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { PINNED_ENGINE_VERSION, STONE_NAME } from '../config';
+import { ChildProcess, execFileSync, spawn } from 'child_process';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import * as vscode from 'vscode';
+import { NETLDI_NAME, PINNED_ENGINE_VERSION, STONE_NAME } from '../config';
 import { REPOSITORY_LIMIT_MB, createDatabase, repositoryVersion } from '../database';
 import { EngineUpgradeError, upgradeBackupPath, upgradeEngine } from '../engineUpgrade';
 import { engineUpgradeWorld } from '../lifecycle';
-import { databaseConfPath, extentPath, grailStampPath, mcpStampPath } from '../paths';
+import {
+  databaseConfPath,
+  databaseLogPath,
+  expectedEnginePath,
+  extentPath,
+  grailStampPath,
+  mcpStampPath,
+} from '../paths';
 import { listProcesses } from '../processes';
 import { Fixture, makeFixture } from './fixture';
 
@@ -106,10 +114,96 @@ function makeOldDatabase(): void {
   previousEngine('stopstone', [PREGROW_STONE, 'DataCurator', 'swordfish']);
 }
 
+/**
+ * Start GemDB's own stone and listener on the old database with the previous
+ * engine, as the previous GemDB left them running: they outlive the editor, so
+ * this is what an extension update finds.
+ */
+function startPreviousDatabase(): void {
+  const running = listProcesses();
+  if (!running.some((p) => p.type === 'stone' && p.name === STONE_NAME)) {
+    const conf = databaseConfPath();
+    previousEngine('startstone', [
+      '-z',
+      path.join(conf, 'system.conf'),
+      '-e',
+      path.join(conf, `${STONE_NAME}.conf`),
+      '-l',
+      path.join(databaseLogPath(), `${STONE_NAME}.log`),
+      STONE_NAME,
+    ]);
+  }
+  if (!running.some((p) => p.type === 'netldi' && p.name === NETLDI_NAME)) {
+    previousEngine('startnetldi', [
+      '-a',
+      os.userInfo().username,
+      '-g',
+      '-l',
+      path.join(databaseLogPath(), `${NETLDI_NAME}.log`),
+      NETLDI_NAME,
+    ]);
+  }
+}
+
+/**
+ * A session the previous engine's listener forked, standing for another window
+ * still running the previous GemDB: nothing this window logs out can end it,
+ * so a plain stopstone refuses while it is there. An RPC login, as a window's
+ * is, and not a linked topaz: a linked one holds the extent open itself until
+ * the process exits, which no window's session does. Settles once it is
+ * logged in.
+ */
+function holdPreviousSession(): Promise<ChildProcess> {
+  const gs = previous as string;
+  const port = listProcesses().find((p) => p.type === 'netldi' && p.name === NETLDI_NAME)?.port;
+  const topaz = spawn(path.join(gs, 'bin', 'topaz'), ['-q'], {
+    env: {
+      ...process.env,
+      GEMSTONE: gs,
+      GEMSTONE_GLOBAL_DIR: (fixture as Fixture).root,
+      PATH: `${path.join(gs, 'bin')}:/usr/bin:/bin`,
+    },
+  });
+  held.push(topaz);
+  return new Promise((resolve, reject) => {
+    let output = '';
+    const timer = setTimeout(() => reject(new Error(`no login:\n${output}`)), 60_000);
+    const collect = (data: Buffer): void => {
+      output += data.toString();
+      if (/successful login/i.test(output)) {
+        clearTimeout(timer);
+        resolve(topaz);
+      }
+    };
+    topaz.stdout.on('data', collect);
+    topaz.stderr.on('data', collect);
+    topaz.on('exit', () => reject(new Error(`topaz exited:\n${output}`)));
+    topaz.stdin.write(
+      [
+        'set user DataCurator pass swordfish',
+        `set gemstone ${STONE_NAME}`,
+        `set gemnetid !tcp@localhost#netldi:${port}#task!gemnetobject`,
+        'login',
+        '',
+      ].join('\n'),
+    );
+  });
+}
+
+const held: ChildProcess[] = [];
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  for (const topaz of held.splice(0)) topaz.kill('SIGKILL');
+});
+
 beforeAll(() => {
   if (!ready) return;
   fixture = makeFixture();
   if (!fixture) return;
+  // Where the previous GemDB installed it, beside the pinned one: what lets a
+  // stone it started be stopped with its own stopstone.
+  fs.symlinkSync(previous as string, expectedEnginePath(from));
   // What `upgradeScriptPath` looks for: <extension>/grail/scripts/upgrade_engine.sh.
   extension = fs.mkdtempSync(path.join(os.tmpdir(), 'gemdb-it-ext-'));
   fs.symlinkSync(path.resolve(grail), path.join(extension, 'grail'));
@@ -181,8 +275,40 @@ describe.skipIf(!ready)('upgrading a database an earlier GemDB made', () => {
     fs.rmSync(backup, { force: true });
   }, 600_000);
 
+  it('changes nothing when told not to disconnect a session the previous engine holds', async () => {
+    if (!fixture) return;
+    startPreviousDatabase();
+    await holdPreviousSession();
+    const before = fs.statSync(extentPath()).mtimeMs;
+    const warning = vi.spyOn(vscode.window, 'showWarningMessage');
+    const { world: w } = world(true, from);
+
+    const run = upgradeEngine({ from, to: PINNED_ENGINE_VERSION, extent: extentPath() }, w);
+
+    await expect(run).rejects.toThrow(/nothing was changed.*Every VS Code window/);
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining('GemDB did not stop'),
+      { modal: true },
+      'Stop Anyway',
+    );
+    expect(listProcesses().find((p) => p.type === 'stone')?.version).toBe(from);
+    // Left to the windows still using it, listener included: this engine's
+    // cannot serve that stone.
+    expect(listProcesses().find((p) => p.type === 'netldi')).toBeUndefined();
+    expect(fs.statSync(extentPath()).mtimeMs).toBe(before);
+    expect(fs.existsSync(upgradeBackupPath(extentPath(), from))).toBe(false);
+  }, 600_000);
+
   it('upgrades it in place, keeps the original, and leaves nothing running', async () => {
     if (!fixture) return;
+    // The stone the previous GemDB left running, with another window's
+    // session in it: stopped with the previous engine's own stopstone, once
+    // the user says Stop Anyway.
+    startPreviousDatabase();
+    await holdPreviousSession();
+    const warning = vi
+      .spyOn(vscode.window, 'showWarningMessage')
+      .mockResolvedValue('Stop Anyway' as unknown as vscode.MessageItem);
     fs.mkdirSync(path.dirname(grailStampPath()), { recursive: true });
     fs.writeFileSync(grailStampPath(), 'grail=old\n');
     fs.mkdirSync(path.dirname(mcpStampPath()), { recursive: true });
@@ -194,6 +320,11 @@ describe.skipIf(!ready)('upgrading a database an earlier GemDB made', () => {
     ).resolves.toBe('upgraded');
 
     expect(questions).toHaveLength(1);
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining('Every VS Code window running GemDB'),
+      { modal: true },
+      'Stop Anyway',
+    );
     expect(repositoryVersion((fixture as Fixture).engine)).toBe(PINNED_ENGINE_VERSION);
     expect(fs.statSync(upgradeBackupPath(extentPath(), from)).size).toBe(CAP_BYTES);
     expect(listProcesses()).toEqual([]);

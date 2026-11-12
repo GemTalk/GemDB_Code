@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Upgrading from 1.9.0 no longer fails when another VS Code window is open.** Every window
+  running GemDB keeps a session on the database, even with no notebook open, so the upgrade could
+  not stop it and told you to close notebooks and GemDB Shells you did not have. It now asks, as
+  **Stop GemDB** does, whether to disconnect those sessions. And **Stop GemDB** stops a database the
+  previous engine started with that engine's tools: with the new engine's, it failed with "The Gem
+  and Stone versions are incompatible", and the only way out was reinstalling 1.9.0.
 - **`gemdb file.py` writes Python's `sys.stderr` to stderr.** Warnings, tracebacks printed from
   Python, logging and `print(..., file=sys.stderr)` went to stdout, so `2>` and pipes saw them in
   the wrong stream.

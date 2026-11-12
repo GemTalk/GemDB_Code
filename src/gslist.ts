@@ -47,8 +47,9 @@ export interface EngineProcess {
  * tests, because the pin that hides the truncation today is not the pin
  * forever.
  *
- * Nothing consumes the version field, so accepting whatever the engine prints
- * costs nothing and matching it narrowly costs everything.
+ * Accept whatever the engine prints: matching it narrowly costs everything.
+ * The one consumer, `engineThatStarted`, compares it as a prefix of the pin
+ * for exactly this reason.
  *
  * Rows that are neither a Stone nor a Netldi — the shared page cache gets its
  * own row — do not match and are skipped, as are the header and separator
