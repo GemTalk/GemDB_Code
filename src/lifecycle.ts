@@ -863,10 +863,13 @@ export function engineUpgradeWorld(
           await stopStone(force);
         },
         stopNetldi: () => stopNetldi(),
-        // A declined force-stop leaves the database to the windows still using
-        // it. Not put back: this engine's listener cannot serve the previous
-        // engine's stone, and the stone lock this runs under is the one
-        // `ensureListener` would wait on.
+        // A declined force-stop leaves the stone to the sessions still in it,
+        // but not the listener. This engine's cannot serve the previous
+        // engine's stone, and the previous engine's would be no better: setup
+        // has already staged this release's Grail, built for this engine, at
+        // the path every session the listener forks loads its shim from. The
+        // windows still on the previous GemDB keep the sessions they have;
+        // reloading them is what the failure says to do.
         startNetldi: () => Promise.resolve(),
         confirmForce,
         log,
