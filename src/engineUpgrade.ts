@@ -250,10 +250,11 @@ export async function upgradeEngine(
       if (world.stoneUp()) {
         throw new EngineUpgradeError(
           'GemDB could not stop the database to upgrade it, so nothing was changed' +
-            (stopError ? ` (${stopError.split('\n')[0]})` : '') +
-            '. Every VS Code window running GemDB keeps a session on it, even with no ' +
-            'notebook open, and so does a GemDB Shell. Reload or close the other windows, ' +
-            'or choose Stop Anyway, then start GemDB again.',
+            (stopError
+              ? ` (${stopError.split('\n')[0]}). The GemDB output has the details.`
+              : '. Every VS Code window running GemDB keeps a session on it, even with no ' +
+                'notebook open, and so does a GemDB Shell. Reload or close the other ' +
+                'windows, or choose Stop Anyway, then start GemDB again.'),
         );
       }
 
